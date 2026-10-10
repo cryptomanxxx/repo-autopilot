@@ -9,7 +9,7 @@ export function ciState(checks, statuses) {
   if (states.some(s => !['success', 'neutral', 'skipped'].includes(s))) return 'pending';
   return 'success';
 }
-export function createGitHub({token, fetchImpl = fetch} = {}) {
+export function createGitHub({token, fetchImpl = fetch, pullLimit = 10} = {}) {
   async function get(path) {
     const response = await fetchImpl(`https://api.github.com${path}`, {headers: {Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...(token ? {Authorization: `Bearer ${token}`} : {})}, signal: AbortSignal.timeout(15000)});
     if (!response.ok) throw new Error(response.status === 403 || response.status === 429 ? 'GitHub access denied or rate limit reached. Check token permissions or try later.' : `GitHub request failed (${response.status}).`);
@@ -17,7 +17,7 @@ export function createGitHub({token, fetchImpl = fetch} = {}) {
   }
   return {async snapshot(value) {
     const repo = repositoryName(value), root = `/repos/${repo}`;
-    const [metadata, pulls, runs] = await Promise.all([get(root), get(`${root}/pulls?state=all&sort=updated&direction=desc&per_page=10`), get(`${root}/actions/runs?per_page=15`)]);
+    const [metadata, pulls, runs] = await Promise.all([get(root), get(`${root}/pulls?state=all&sort=updated&direction=desc&per_page=${pullLimit}`), get(`${root}/actions/runs?per_page=15`)]);
     const warnings = [];
     const items = [];
     // Limit concurrency and API cost; detail errors are visible, never treated as approval.
@@ -31,6 +31,6 @@ export function createGitHub({token, fetchImpl = fetch} = {}) {
       } catch (error) {details.detailError = error.message;}
       items.push({number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details});
     }
-    return {repository:metadata.full_name, url:metadata.html_url, fetchedAt:new Date().toISOString(), autonomy:false, scope:'10 most recently updated PRs; 15 recent workflow runs. Review lists are limited to 100 entries. CI is informational, not merge eligibility.', warnings, pulls:items, workflows:runs.workflow_runs.map(r => ({id:r.id, name:r.name, title:r.display_title, status:r.status, conclusion:r.conclusion, branch:r.head_branch, sha:r.head_sha, url:r.html_url, updatedAt:r.updated_at}))};
+    return {repository:metadata.full_name, url:metadata.html_url, fetchedAt:new Date().toISOString(), autonomy:false, scope:`${pullLimit} most recently updated PRs; 15 recent workflow runs. Review lists are limited to 100 entries. CI is informational, not merge eligibility.`, warnings, pulls:items, workflows:runs.workflow_runs.map(r => ({id:r.id, name:r.name, title:r.display_title, status:r.status, conclusion:r.conclusion, branch:r.head_branch, sha:r.head_sha, url:r.html_url, updatedAt:r.updated_at}))};
   }};
 }
