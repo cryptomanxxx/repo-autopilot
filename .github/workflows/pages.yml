@@ -2,16 +2,6 @@ name: Deploy dashboard to GitHub Pages
 on:
   push:
     branches: [main]
-  # Always run trusted default-branch code, including for fork PR events.
-  pull_request_target:
-    types: [opened, synchronize, reopened, closed, ready_for_review, converted_to_draft, edited]
-  issue_comment:
-    types: [created, edited, deleted]
-  workflow_run:
-    workflows: [CI, Dashboard review refresh signal]
-    types: [completed]
-  schedule:
-    - cron: '*/15 * * * *'
   workflow_dispatch:
 permissions:
   contents: read

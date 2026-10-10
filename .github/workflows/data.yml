@@ -1,0 +1,47 @@
+name: Refresh dashboard data
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    types: [opened, synchronize, reopened, closed, ready_for_review, converted_to_draft, edited]
+  issue_comment:
+    types: [created, edited, deleted]
+  workflow_run:
+    workflows: [CI, Dashboard review refresh signal]
+    types: [completed]
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: dashboard-data
+  cancel-in-progress: false
+jobs:
+  refresh:
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: read
+      issues: read
+      actions: read
+      checks: read
+      statuses: read
+    steps:
+      # Event payloads and PR code never select executable code.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run snapshot
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+      - run: node scripts/publish-data.js
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}

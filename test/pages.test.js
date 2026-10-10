@@ -6,7 +6,7 @@ import {createGitHub} from '../src/github.js';
 
 test('Pages build publishes only static assets with project-relative URLs',async()=>{
   execFileSync(process.execPath,['scripts/build-pages.js']);
-  assert.deepEqual((await readdir('dist')).sort(),['app.js','codex.js','github.js','index.html','progress.js','style.css']);
+  assert.deepEqual((await readdir('dist')).sort(),['app.js','codex.js','github.js','index.html','progress.js','saved-data.js','style.css']);
   const html=await readFile('dist/index.html','utf8');
   assert.match(html,/data-mode="static"/);
   assert.match(html,/href="\.\/style.css"/);
