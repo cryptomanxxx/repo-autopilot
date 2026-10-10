@@ -28,7 +28,9 @@ $('repository').addEventListener('submit',async event => {
     $('pulls').replaceChildren();
     for(const pr of data.pulls) {
       const node = card(`#${pr.number} ${pr.title}`,pr.url,[`${pr.state}${pr.draft ? ' · draft' : ''} · CI: ${pr.ci}`,`Head: ${pr.headSha.slice(0,10)} · Opened: ${new Date(pr.openedAt).toLocaleString()}`,pr.mergedAt ? `Merged: ${new Date(pr.mergedAt).toLocaleString()}` : `Updated: ${new Date(pr.updatedAt).toLocaleString()}`]);
-      node.append(el('p',pr.reviews.length ? pr.reviews.map(r=>`${r.author}: ${r.state} (${r.commit?.slice(0,7) || 'no commit'})`).join(' · ') : 'No review submissions in fetched history.'));
+      node.append(el('p',pr.codex.label,`codex-status codex-${pr.codex.state}`));
+      if(pr.codex.commit) node.append(el('p',`Codex reviewed: ${pr.codex.commit}`));
+      node.append(el('p',pr.reviews.length ? pr.reviews.map(r=>`${r.author}: ${r.state} (${r.commit?.slice(0,7) || 'no commit'})`).join(' · ') : 'No formal GitHub review submissions; see Codex status above.'));
       if(pr.detailError) node.append(el('p',`Details unavailable: ${pr.detailError}`,'error'));
       const details = el('details','');details.append(el('summary',`Codex feedback (${pr.codexComments.length})`));
       for(const c of pr.codexComments) {details.append(link('View on GitHub',c.url),el('pre',c.body || '(No comment text)'));}node.append(details);$('pulls').append(node);

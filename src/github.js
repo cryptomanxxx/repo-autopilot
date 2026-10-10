@@ -1,3 +1,4 @@
+import {codexStatus} from './codex.js';
 export function repositoryName(value) {
   const message = 'Enter owner/repository or a GitHub repository URL (https://github.com/owner/repository).';
   if (typeof value !== 'string') throw new Error(message);
@@ -31,12 +32,12 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10} = {}) {
     const items = [];
     // Limit concurrency and API cost; detail errors are visible, never treated as approval.
     for (const pr of pulls) {
-      let details = {ci: 'unknown', reviews: [], codexComments: [], detailError: null};
+      let details = {ci: 'unknown', reviews: [], codexComments: [], detailError: null, codex: {state:'unknown',label:'Codex: details unavailable'}};
       try {
-        const [reviews, comments, inline, checks, status] = await Promise.all([get(`${root}/pulls/${pr.number}/reviews?per_page=100`), get(`${root}/issues/${pr.number}/comments?per_page=100`), get(`${root}/pulls/${pr.number}/comments?per_page=100`), get(`${root}/commits/${pr.head.sha}/check-runs?per_page=100`), get(`${root}/commits/${pr.head.sha}/status?per_page=100`)]);
+        const [reviews, comments, inline, checks, status, reactions] = await Promise.all([get(`${root}/pulls/${pr.number}/reviews?per_page=100`), get(`${root}/issues/${pr.number}/comments?per_page=100`), get(`${root}/pulls/${pr.number}/comments?per_page=100`), get(`${root}/commits/${pr.head.sha}/check-runs?per_page=100`), get(`${root}/commits/${pr.head.sha}/status?per_page=100`), get(`${root}/issues/${pr.number}/reactions?per_page=100`)]);
         const all = [...reviews, ...comments, ...inline];
-        details = {ci: ciState(checks.check_runs, status.statuses), reviews: reviews.map(r => ({author:r.user?.login, state:r.state, commit:r.commit_id, url:r.html_url})), codexComments: all.filter(c => c.user?.login === 'chatgpt-codex-connector[bot]').map(c => ({body:c.body, url:c.html_url, createdAt:c.created_at || c.submitted_at})), detailError:null};
-        if ([reviews, comments, inline, checks.check_runs, status.statuses].some(a => a.length >= 100)) warnings.push(`PR #${pr.number}: detail list may be truncated at 100 entries.`);
+        details = {ci: ciState(checks.check_runs, status.statuses), reviews: reviews.map(r => ({author:r.user?.login, state:r.state, commit:r.commit_id, url:r.html_url})), codexComments: all.filter(c => c.user?.login === 'chatgpt-codex-connector[bot]').map(c => ({body:c.body, url:c.html_url, createdAt:c.created_at || c.submitted_at})), detailError:null, codex:codexStatus(pr.head.sha,{reviews,comments,inline,reactions,truncated:[reviews,comments,inline,reactions].some(a=>a.length>=100)})};
+        if ([reviews, comments, inline, reactions, checks.check_runs, status.statuses].some(a => a.length >= 100)) warnings.push(`PR #${pr.number}: detail list may be truncated at 100 entries.`);
       } catch (error) {details.detailError = error.message;}
       items.push({number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details});
     }
