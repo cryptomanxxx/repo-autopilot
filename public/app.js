@@ -2,7 +2,7 @@ import {createGitHub, repositoryName} from './github.js';
 const $ = id => document.getElementById(id);
 function el(tag, text, className) {const node = document.createElement(tag);node.textContent = text;if(className) node.className = className;return node;}
 function link(text, url) {const node = el('a',text);if(typeof url === 'string' && url.startsWith('https://github.com/')) {node.href=url;node.target='_blank';node.rel='noopener noreferrer';}return node;}
-function card(title, url, lines) {const node = el('article','');node.append(link(title,url));for(const line of lines) node.append(el('p',line));return node;}
+function cell(label,text,className='') {const node=el('span','',`list-cell ${className}`);node.append(el('span',label,'cell-label'),el('span',text));return node;}
 const staticMode = document.documentElement.dataset.mode === 'static';
 const github = createGitHub({pullLimit:5});
 const configuredRepository='cryptomanxxx/repo-autopilot';
@@ -38,21 +38,35 @@ $('repository').addEventListener('submit',async event => {
     }
     $('pulls').replaceChildren();
     for(const pr of data.pulls) {
-      const node = card(`#${pr.number} ${pr.title}`,pr.url,[`${pr.state}${pr.draft ? ' · draft' : ''} · CI: ${pr.ci}`,`Head: ${pr.headSha.slice(0,10)} · Opened: ${new Date(pr.openedAt).toLocaleString()}`,pr.mergedAt ? `Merged: ${new Date(pr.mergedAt).toLocaleString()}` : `Updated: ${new Date(pr.updatedAt).toLocaleString()}`]);
-      node.prepend(el('p',`${pr.readiness.state === 'ready' ? '✅' : pr.readiness.state === 'unknown' ? '❔' : pr.readiness.state === 'merged' ? '✓' : '⏳'} ${pr.readiness.label}`,`readiness readiness-${pr.readiness.state}`));
-      for(const reason of pr.readiness.reasons) node.append(el('p',reason,'muted'));
+      const node=el('details','','pr-row');
+      const summary=el('summary','','pr-summary');
       const progress=pr.progress;
-      node.append(el('p',`${['running','findings','clear'].includes(pr.codex.state) || progress.currentCompleted ? '✅' : '❔'} Codex review acknowledged`));
       const waiting=['running','requested'].includes(pr.codex.state);
-      node.append(el('p',`${waiting ? '🔄' : progress.currentCompleted ? '✅' : '⏳'} Latest code review ${waiting ? 'pending' : progress.currentCompleted ? 'completed' : 'not verified'}`));
-      node.append(el('p',pr.codex.label,`codex-status codex-${pr.codex.state}`));
-      node.append(el('p',`Completed reviews: ${progress.reviewCount === null ? 'unknown' : `at least ${progress.reviewCount}`} · Commits after review: ${progress.updatesAfterReview ?? 'unknown'}`));
-      if(pr.detailError) node.append(el('p',`Details unavailable: ${pr.detailError}`,'error'));
-      node.append(link('View review history on GitHub',pr.url));
-      $('pulls').append(node);
+      const codexText=pr.codex.state === 'clear' ? '✅ Clear' : pr.codex.state === 'findings' ? '⚠ Findings' : waiting ? '🔄 Pending' : progress.currentCompleted ? '✓ Reviewed · unverified' : '❔ Unverified';
+      summary.append(cell('PR',`#${pr.number} ${pr.title}`,'pr-title'),cell('Merge',pr.readiness.label,`readiness-${pr.readiness.state}`),cell('CI',pr.ci,`ci-${pr.ci}`),cell('Codex',codexText,`codex-${pr.codex.state}`),cell('Reviews',progress.reviewCount === null ? '?' : `≥${progress.reviewCount}`),cell('Code changes',String(progress.updatesAfterReview ?? '?')));
+      summary.append(el('span','Details','expand-label'));
+      node.append(summary);
+      const detail=el('div','','pr-detail');
+      for(const reason of pr.readiness.reasons) detail.append(el('p',reason,'muted'));
+      detail.append(el('p',`${['running','findings','clear'].includes(pr.codex.state) || progress.currentCompleted ? '✅' : '❔'} Codex review acknowledged`));
+      detail.append(el('p',`${waiting ? '🔄' : progress.currentCompleted ? '✅' : '⏳'} Latest code review ${waiting ? 'pending' : progress.currentCompleted ? 'completed' : 'not verified'}`));
+      detail.append(el('p',pr.codex.label,`codex-status codex-${pr.codex.state}`));
+      detail.append(el('p',`Completed reviews: ${progress.reviewCount === null ? 'unknown' : `at least ${progress.reviewCount}`} · Commits after review: ${progress.updatesAfterReview ?? 'unknown'}`));
+      detail.append(el('p','Code changes count commits after review; they do not confirm that findings were fixed.','muted'));
+      detail.append(el('p',`Head: ${pr.headSha.slice(0,10)} · Opened: ${new Date(pr.openedAt).toLocaleString()}`));
+      detail.append(el('p',pr.mergedAt ? `Merged: ${new Date(pr.mergedAt).toLocaleString()}` : `Updated: ${new Date(pr.updatedAt).toLocaleString()}`));
+      detail.append(el('p',`${pr.state}${pr.draft ? ' · draft' : ''}`));
+      if(pr.detailError) detail.append(el('p',`Details unavailable: ${pr.detailError}`,'error'));
+      detail.append(link('View PR and review history on GitHub',pr.url));
+      node.append(detail);$('pulls').append(node);
     }
     if(!data.pulls.length) $('pulls').append(el('p','No pull requests found.'));
-    $('workflows').replaceChildren(...data.workflows.map(r=>card(r.title || r.name,r.url,[`${r.name} · ${r.conclusion || r.status}`,`${r.branch} · ${r.sha.slice(0,10)} · ${new Date(r.updatedAt).toLocaleString()}`])));
+    $('workflows').replaceChildren(...data.workflows.map(r=>{
+      const node=el('div','','workflow-row');
+      const title=el('span','','workflow-title');title.append(link(r.title || r.name,r.url));
+      node.append(title,cell('Workflow',r.name),cell('Status',r.conclusion || r.status),cell('Branch',r.branch),cell('Updated',new Date(r.updatedAt).toLocaleString()));
+      return node;
+    }));
     if(!data.workflows.length) $('workflows').append(el('p','No workflow runs found.'));
     $('scope').textContent=[data.scope,...data.warnings].join(' ');$('dashboard').hidden=false;
     const age=Date.now()-Date.parse(data.fetchedAt);
