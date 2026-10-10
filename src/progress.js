@@ -2,11 +2,25 @@ const bot = 'chatgpt-codex-connector[bot]';
 const shaOf = body => (body || '').match(/\*\*Reviewed commit:\*\*\s*`([a-f0-9]{7,40})`/i)?.[1];
 const stamp = value => typeof value === 'number' ? value : Date.parse(value) || 0;
 
-export function reviewProgress(head, {reviews = [], comments = [], commits = [], reactions = [], openedAt, mergedAt, truncated = false} = {}) {
+export function reviewProgress(head, {reviews = [], comments = [], inline = [], commits = [], reactions = [], openedAt, mergedAt, findingsTruncated = false, truncated = false} = {}) {
   const events=[];
   const add=(kind,label,at,commit,url)=>{if(stamp(at)) events.push({kind,label,at:new Date(at).toISOString(),commit,url});};
   add('opened','PR opened',openedAt);
   for(const c of comments) if(c.user?.login !== bot && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '')) add('requested','Codex review requested',c.created_at,undefined,c.html_url);
+  const findingComments=[...comments,...inline].filter(c=>c.user?.login === bot && !c.in_reply_to_id && !(c.body || '').includes('codex-pull-request-review-summary'));
+  const seen=new Set();const findings={p1:0,p2:0,incomplete:findingsTruncated};const batches=new Map();
+  for(const c of findingComments) {
+    const priority=(c.body || '').match(/(?:badge\/|\[)(P[12])(?:-|\])/i)?.[1]?.toLowerCase();
+    if(!priority) continue;
+    const identity=c.id ?? c.html_url;
+    if(identity && seen.has(identity)) continue;
+    if(identity) seen.add(identity);
+    findings[priority]++;
+    const key=c.pull_request_review_id ?? identity ?? c.created_at;
+    const batch=batches.get(key) || {p1:0,p2:0,at:c.created_at,commit:c.original_commit_id || c.commit_id,url:c.html_url};
+    batch[priority]++;batches.set(key,batch);
+  }
+  for(const b of batches.values()) add('findings',`Codex findings: ${b.p1} P1 · ${b.p2} P2`,b.at,b.commit,b.url);
   const completed = [];
   const summaries = [];
   for(const review of reviews.filter(r=>r.user?.login === bot && ['COMMENTED','APPROVED','CHANGES_REQUESTED'].includes(r.state))) {
@@ -46,7 +60,7 @@ export function reviewProgress(head, {reviews = [], comments = [], commits = [],
   const updates=covered.length ? commits.length-1-Math.min(...covered) : null;
   const currentCompleted=rounds.some(r=>head.startsWith(r.commit));
   // GitHub edits its summary in place; older clean rounds may leave no permanent event.
-  return {events,reviewCount:rounds.length,reviewCountIsLowerBound:true,updatesAfterReview:truncated ? null : updates,currentCompleted:!truncated && currentCompleted,truncated};
+  return {events,findings,reviewCount:rounds.length,reviewCountIsLowerBound:true,updatesAfterReview:truncated ? null : updates,currentCompleted:!truncated && currentCompleted,truncated};
 }
 
 export function mergeReadiness(pr, {ci, codex, checksComplete = true, verification} = {}) {

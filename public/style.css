@@ -24,3 +24,6 @@
 @media(max-width:850px){.list-head{display:none}}
 
 @media(min-width:851px){.workflow-row .cell-label{display:none}}
+
+@media(min-width:851px){.pr-summary{grid-template-columns:minmax(160px,3fr) minmax(100px,1.5fr) 75px minmax(110px,1.3fr) 55px 60px 35px 35px;gap:10px}}
+.review-flow .flow-findings:before{background:#ffbf80}
