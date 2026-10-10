@@ -47,6 +47,16 @@ test('owner task generates a reviewable branch and no pull request or merge',asy
   const model=h.calls.find(c=>c.url.startsWith('https://api.groq.com/'));assert.equal(model.body.includes('github-secret'),false);assert.equal(model.body.includes('groq-secret'),false);
   const last=h.calls.filter(c=>c.url.endsWith('/comments')).at(-1);assert.match(JSON.parse(last.body).body,/ready for PR/);assert.match(JSON.parse(last.body).body,/Tests have not run yet/);
 });
+test('notification failure after branch publication retains ready status and compare link',async()=>{
+  const h=harness();let notifications=0;
+  await runAgent({...config,fetchImpl:async(url,options)=>{
+    if(url.endsWith('/comments') && options.method==='POST' && ++notifications===2) return {ok:false,status:503};
+    return h.fetchImpl(url,options);
+  }});
+  assert.equal(h.calls.filter(c=>c.url.endsWith('/git/refs')).length,1);
+  const replies=h.calls.filter(c=>c.url.endsWith('/comments')).map(c=>JSON.parse(c.body).body);
+  assert.match(replies.at(-1),/Agent: ready for PR/);assert.match(replies.at(-1),/Review changes and create PR/);assert.equal(replies.some(body=>body.includes('Agent: failed')),false);
+});
 test('unauthorized tasks never call Groq or create branches',async()=>{
   const h=harness({author:'someone-else'});await runAgent({...config,fetchImpl:h.fetchImpl});assert.equal(h.calls.length,2);
 });

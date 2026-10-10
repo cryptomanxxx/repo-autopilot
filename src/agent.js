@@ -46,6 +46,7 @@ export async function runAgent({repository,issueNumber,token,groqKey,expectedTas
     throw new Error('Task instruction is invalid.');
   }
   await notify('working','Reading repository code and preparing a bounded change. Close this issue to request cancellation.');
+  let publishedCompareUrl=null;
   try {
     const ref=await api(`git/ref/heads/${metadata.default_branch}`);
     const parent=ref.object.sha;
@@ -77,8 +78,14 @@ export async function runAgent({repository,issueNumber,token,groqKey,expectedTas
     await api('git/refs','POST',{ref:`refs/heads/${branch}`,sha:next.sha});
     const url=new URL(`https://github.com/${repo}/compare/${metadata.default_branch}...${branch}`);
     url.searchParams.set('expand','1');url.searchParams.set('title',issue.title.slice(TASK_PREFIX.length, TASK_PREFIX.length+100));url.searchParams.set('body',`Implements #${issueNumber}.\n\n${edits.summary}\n\nAgent-generated changes require CI and Codex review before merging.`);
+    publishedCompareUrl=url.href;
     await notify('ready for PR',`${edits.summary}\n\n[Review changes and create PR](${url})\n\n${edits.files.length} file(s) changed. Tests have not run yet. Creating the PR with your GitHub account triggers CI and Codex review. The agent does not merge changes.`);
   } catch(error) {
+    if(publishedCompareUrl) {
+      // A notification failure cannot undo the successful branch publication.
+      try {await notify('ready for PR',`The code branch was published successfully, but its detailed reply could not be delivered.\n\n[Review changes and create PR](${publishedCompareUrl})\n\nTests have not run yet. Create the PR for CI and Codex review; do not retry the task.`);} catch {console.log(`Branch is ready for review: ${publishedCompareUrl}`);}
+      return;
+    }
     // Do not include remote response bodies, prompts, or secret-bearing exceptions.
     const safe=error instanceof SyntaxError ? 'The model returned invalid JSON.' : /^(GitHub request failed|Groq request failed|Agent |Invalid agent|Default branch changed|Repository tree|Unsupported source)/.test(error.message) ? error.message : 'The task could not be completed. Check the workflow status and create a new task to retry.';
     await notify('failed',safe);throw new Error(safe);
