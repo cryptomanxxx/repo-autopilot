@@ -114,6 +114,7 @@ export async function runAgent({repository,issueNumber,token,groqKey,expectedTas
   if(expectedComment) {
     const current=comments.find(c=>c.id===expectedComment.id);
     if(!current || current.user?.login?.toLowerCase()!==taskUser || current.body!==expectedComment.body || !current.body.startsWith(REPLY_MARKER)) return;
+    if(comments.indexOf(current)<=comments.indexOf(replies.at(-1))) return;
     if(replies.some(c=>c.body.includes(attempt)) || !/\*\*Agent: (needs input|failed)\*\*/.test(replies.at(-1)?.body || '')) return;
   } else if(replies.length) return;
   const notify=(status,text)=>api(`issues/${issueNumber}/comments`,'POST',{body:`${AGENT_MARKER}\n${attempt}\n**Agent: ${status}**\n\n${text}`});

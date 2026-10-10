@@ -167,3 +167,11 @@ test('task snapshots display a pending follow-up as queued',async()=>{
   const tasks=await collectTasks('owner/project',{token:'x',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments?')?[{id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**'},{id:2,user:{login:'owner'},body:REPLY_MARKER+'\nThe second option'}]:[{number:1,state:'open',user:{login:'owner'},title:'Autopilot task: improve spacing',body:TASK_MARKER+'\nImprove spacing'}]})});
   assert.equal(tasks[0].status,'queued');
 });
+
+test('queued GitHub replies older than the latest clarification cannot resume',async()=>{
+  const reply={id:2,user:{login:'owner'},body:REPLY_MARKER+'\nThe second option'};
+  const history=[{id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\nFirst question'},reply,{id:3,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\nA newer question'}];
+  const h=harness();await runAgent({...config,expectedComment:reply,fetchImpl:(url,options)=>url.includes('/comments?')?Promise.resolve({ok:true,json:async()=>history}):h.fetchImpl(url,options)});
+  assert.equal(h.calls.some(c=>c.url.startsWith('https://api.groq.com/')),false);
+  assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),false);
+});
