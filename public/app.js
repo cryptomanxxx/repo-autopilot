@@ -1,4 +1,5 @@
 import {createGitHub, repositoryName} from './github.js';
+import {loadSavedData} from './saved-data.js';
 const $ = id => document.getElementById(id);
 function el(tag, text, className) {const node = document.createElement(tag);node.textContent = text;if(className) node.className = className;return node;}
 function link(text, url) {const node = el('a',text);if(typeof url === 'string' && url.startsWith('https://github.com/')) {node.href=url;node.target='_blank';node.rel='noopener noreferrer';}return node;}
@@ -11,6 +12,7 @@ let latestData=null;
 let loading=false;
 let backgroundRefresh=false;
 let usingSavedSnapshot=false;
+let lastRefresh=0;
 function applyFilters() {
   const choice=$('pr-filter').value;
   for(const row of $('pulls').querySelectorAll('.pr-row')) row.hidden=!(choice === 'all' || row.dataset.state === choice || choice === 'attention' && row.dataset.attention === 'true');
@@ -22,15 +24,15 @@ function updateAge() {
   if(!latestData) return;
   const age=Math.max(0,Math.floor((Date.now()-Date.parse(latestData.fetchedAt))/60000));
   if(!Number.isFinite(age)) {$('data-age').textContent='Data timestamp unavailable';return;}
-  $('data-age').textContent=`Data updated ${age} minute${age === 1 ? '' : 's'} ago · ${usingSavedSnapshot ? 'Page checks saved data every minute' : 'Refresh manually to get latest data'}`;
+  $('data-age').textContent=`Data updated ${age} minute${age === 1 ? '' : 's'} ago · ${usingSavedSnapshot ? latestData.pulls.some(pr=>pr.state === 'open') ? 'Page checks saved data every 20 seconds' : 'Page checks saved data every minute' : 'Refresh manually to get latest data'}`;
 }
 setInterval(()=>{
   updateAge();
-  if(!document.hidden && !loading && usingSavedSnapshot) {
+  if(!document.hidden && !loading && usingSavedSnapshot && Date.now()-lastRefresh >= (latestData?.pulls.some(pr=>pr.state === 'open') ? 20000 : 60000)) {
     try {if(repositoryName($('repo').value).toLowerCase() !== configuredRepository) return;} catch {return;}
-    backgroundRefresh=true;$('repository').requestSubmit();
+    lastRefresh=Date.now();backgroundRefresh=true;$('repository').requestSubmit();
   }
-},60000);
+},20000);
 $('mode-note').textContent = staticMode ? 'Repo Autopilot uses saved GitHub Actions data · No login required. Other public repositories use GitHub’s anonymous API limits.' : 'Local server mode · Credentials stay on the server.';
 const selected = new URLSearchParams(location.search).get('repo');
 $('repo').value = selected || configuredRepository;
@@ -43,10 +45,8 @@ $('repository').addEventListener('submit',async event => {
     let data;
     const savedSnapshot=staticMode && repo.toLowerCase() === configuredRepository;
     if(savedSnapshot) {
-      const response=await fetch('./data/snapshot.json',{cache:'no-store'});
-      if(!response.ok) throw new Error('Saved snapshot is not available yet. Please try again after the GitHub Pages deployment finishes.');
-      data=await response.json();
-      if(data.repository?.toLowerCase() !== configuredRepository) throw new Error('Saved snapshot repository does not match.');
+      data=await loadSavedData(configuredRepository);
+      if(latestData?.repository === data.repository && Date.parse(latestData.fetchedAt)>Date.parse(data.fetchedAt)) data=latestData;
     } else if(staticMode) {
       const cached = snapshots.get(repo);
       if(cached && Date.now()-cached.at < 60000) data = cached.data;
@@ -104,6 +104,6 @@ $('repository').addEventListener('submit',async event => {
     applyFilters();
     $('scope').textContent=[data.scope,...data.warnings].join(' ');$('dashboard').hidden=false;
     const age=Date.now()-Date.parse(data.fetchedAt);
-    $('status').textContent=savedSnapshot ? `Loaded saved GitHub Actions snapshot. Updates after PR, review and CI events, with a scheduled refresh every 15 minutes.${!Number.isFinite(age) || age>30*60*1000 || age < -60000 ? ' This snapshot is over 30 minutes old or its timestamp cannot be verified; check GitHub before merging.' : ''}` : 'Loaded. Submit again to refresh (snapshots cached for 60 seconds).';
+    $('status').textContent=savedSnapshot ? `Loaded saved GitHub Actions snapshot. Data updates independently of Pages after PR, review and CI events; scheduled refresh every 15 minutes.${!Number.isFinite(age) || age>30*60*1000 || age < -60000 ? ' This snapshot is over 30 minutes old or its timestamp cannot be verified; check GitHub before merging.' : ''}` : 'Loaded. Submit again to refresh (snapshots cached for 60 seconds).';
   } catch(error) {$('status').textContent=automatic ? `Refresh failed; showing previous data. ${error.message}` : error.message;if(automatic && latestData) $('dashboard').hidden=false;} finally {button.disabled=false;loading=false;}
 });
