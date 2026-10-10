@@ -13,7 +13,8 @@ $('repository').addEventListener('submit',async event => {
   event.preventDefault();const button = event.target.querySelector('button');button.disabled=true;
   $('status').textContent='Fetching GitHub data…';$('dashboard').hidden=true;
   try {
-    const repo = repositoryName($('repo').value.trim());
+    const repo = repositoryName($('repo').value);
+    $('repo').value = repo;
     let data;
     if(staticMode) {
       const cached = snapshots.get(repo);

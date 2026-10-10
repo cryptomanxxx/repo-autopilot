@@ -1,6 +1,15 @@
 export function repositoryName(value) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(value) || value.split('/')[1] === '..') throw new Error('Enter a repository as owner/name.');
-  return value;
+  const message = 'Enter owner/repository or a GitHub repository URL (https://github.com/owner/repository).';
+  if (typeof value !== 'string') throw new Error(message);
+  let name = value.trim();
+  // Match the original path, before URL parsing could normalize dot segments.
+  if (/^https:\/\//i.test(name)) {
+    const match = name.match(/^https:\/\/github\.com\/([^/?#]+)\/([^/?#]+)\/?(?:[?#].*)?$/i);
+    if (!match) throw new Error(message);
+    name = `${match[1]}/${match[2].replace(/\.git$/, '')}`;
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(name) || ['.', '..'].includes(name.split('/')[1])) throw new Error(message);
+  return name;
 }
 export function ciState(checks, statuses) {
   const states = [...checks.map(c => c.status === 'completed' ? c.conclusion : 'pending'), ...statuses.map(s => s.state)];
