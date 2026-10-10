@@ -1,0 +1,45 @@
+name: Test Groq API key
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/groq-test.yml'
+
+permissions: {}
+
+jobs:
+  authenticate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify Groq authentication
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        shell: python
+        run: |
+          import json
+          import os
+          import sys
+          import urllib.request
+          import urllib.error
+
+          key = os.environ.get("GROQ_API_KEY", "").strip()
+          if not key:
+              sys.exit("GROQ_API_KEY is missing or empty.")
+          request = urllib.request.Request(
+              "https://api.groq.com/openai/v1/models",
+              headers={"Authorization": "Bearer " + key, "Accept": "application/json", "User-Agent": "repo-autopilot-groq-test/0.1"},
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                  sys.exit("Groq returned an unexpected response.")
+          except urllib.error.HTTPError as error:
+              sys.exit("Groq authentication test failed (HTTP " + str(error.code) + ").")
+          except (urllib.error.URLError, TimeoutError, ValueError):
+              sys.exit("Groq connection test failed.")
+          print("Groq API authentication succeeded. No model inference was requested.")
