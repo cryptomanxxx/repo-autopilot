@@ -46,3 +46,12 @@ test('timeline thumb requires completed current-head summary, not just a review'
  const p=reviewProgress(head,{reviews:[review],reactions:[{user:bot,content:'+1',created_at:'2026-10-10T12:04:00Z'}]});
  assert.equal(p.events.some(e=>e.kind==='clear'),false);
 });
+
+test('historical priority counts deduplicate findings and exclude replies, summaries and other authors',()=>{
+ const c={id:1,user:bot,body:'![P2 Badge](https://img.shields.io/badge/P2-yellow) Fix this',created_at:'2026-10-10T12:01:00Z',pull_request_review_id:5};
+ const p=reviewProgress(head,{inline:[c,c,{...c,id:2,body:'[P1] Important'},{...c,id:3,in_reply_to_id:1},{...c,id:4,user:{login:'human'}}],comments:[{...c,id:5,body:'<!-- codex-pull-request-review-summary --> [P1]'}]});
+ assert.deepEqual(p.findings,{p1:1,p2:1,incomplete:false});
+ assert.equal(p.events.filter(e=>e.kind==='findings').length,1);
+ assert.match(p.events[0].label,/1 P1 · 1 P2/);
+ assert.equal(reviewProgress(head,{inline:[c],truncated:true}).findings.incomplete,true);
+});

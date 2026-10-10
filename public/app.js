@@ -62,7 +62,7 @@ $('repository').addEventListener('submit',async event => {
     }
     usingSavedSnapshot=savedSnapshot;latestData=data;updateAge();
     $('pulls').replaceChildren();
-    const headings=el('div','','pr-summary list-head');for(const title of ['PR','Merge','CI','Codex','#Reviews','#Changes']) headings.append(el('span',title));headings.setAttribute('aria-hidden','true');$('pulls').append(headings);
+    const headings=el('div','','pr-summary list-head');for(const title of ['PR','Merge','CI','Codex','#Reviews','#Commits','#P1','#P2']) headings.append(el('span',title));headings.setAttribute('aria-hidden','true');$('pulls').append(headings);
     for(const pr of data.pulls) {
       const node=el('details','','pr-row');
       node.dataset.number=String(pr.number);node.dataset.state=pr.state;node.dataset.attention=String(pr.state === 'open' && pr.readiness.state !== 'ready');node.open=expanded.has(String(pr.number));
@@ -70,7 +70,7 @@ $('repository').addEventListener('submit',async event => {
       const progress=pr.progress;
       const waiting=['running','requested'].includes(pr.codex.state);
       const codexText=pr.codex.state === 'clear' ? '✅ Reviewed · clear' : pr.codex.state === 'findings' ? '⚠ Findings' : waiting ? '🔄 Pending' : progress.currentCompleted ? '✓ Reviewed · unverified' : '❔ Unverified';
-      summary.append(cell('PR',`#${pr.number} ${pr.title}`,'pr-title'),cell('Merge',pr.readiness.label,`readiness-${pr.readiness.state}`),cell('CI',pr.ci === 'success' ? '✅ Passed' : pr.ci === 'failure' ? '❌ Failed' : pr.ci,`ci-${pr.ci}`),cell('Codex',codexText,`codex-${pr.codex.state}`),cell('Reviews',progress.reviewCount === null ? '?' : `≥${progress.reviewCount}`),cell('Code changes',String(progress.updatesAfterReview ?? '?')));
+      summary.append(cell('PR',`#${pr.number} ${pr.title}`,'pr-title'),cell('Merge',pr.readiness.label,`readiness-${pr.readiness.state}`),cell('CI',pr.ci === 'success' ? '✅ Passed' : pr.ci === 'failure' ? '❌ Failed' : pr.ci,`ci-${pr.ci}`),cell('Codex',codexText,`codex-${pr.codex.state}`),cell('Reviews',progress.reviewCount === null ? '?' : `≥${progress.reviewCount}`),cell('Commits',String(progress.updatesAfterReview ?? '?')),cell('P1',progress.findings ? `${progress.findings.incomplete ? '≥' : ''}${progress.findings.p1}` : '?'),cell('P2',progress.findings ? `${progress.findings.incomplete ? '≥' : ''}${progress.findings.p2}` : '?'));
       summary.append(el('span','Details','expand-label'));
       node.append(summary);
       const detail=el('div','','pr-detail');
@@ -82,7 +82,8 @@ $('repository').addEventListener('submit',async event => {
       detail.append(el('p',`${waiting ? '🔄' : progress.currentCompleted ? '✅' : '⏳'} Latest code review ${waiting ? 'pending' : progress.currentCompleted ? 'completed' : 'not verified'}`));
       detail.append(el('p',pr.codex.label,`codex-status codex-${pr.codex.state}`));
       detail.append(el('p',`Completed reviews: ${progress.reviewCount === null ? 'unknown' : `at least ${progress.reviewCount}`} · Commits after review: ${progress.updatesAfterReview ?? 'unknown'}`));
-      detail.append(el('p','Code changes count commits after review; they do not confirm that findings were fixed.','muted'));
+      detail.append(el('p',`Historical Codex findings: ${progress.findings?.p1 ?? '?'} P1 · ${progress.findings?.p2 ?? '?'} P2${progress.findings?.incomplete ? ' (incomplete history)' : ''} · Unresolved review threads: ${pr.unresolvedThreads ?? 'unverified'}`));
+      detail.append(el('p','Commits count commits after review; they do not confirm that findings were fixed.','muted'));
       detail.append(el('p',`Head: ${pr.headSha.slice(0,10)} · Opened: ${new Date(pr.openedAt).toLocaleString()}`));
       detail.append(el('p',pr.mergedAt ? `Merged: ${new Date(pr.mergedAt).toLocaleString()}` : `Updated: ${new Date(pr.updatedAt).toLocaleString()}`));
       detail.append(el('p',`${pr.state}${pr.draft ? ' · draft' : ''}`));

@@ -15,7 +15,7 @@ export async function publishSnapshot({repository,token,fetchImpl=fetch,output=n
   const snapshot=await createGitHub({token,fetchImpl,pullLimit:5}).snapshot(repo);
   // Explicit public projection prevents future server-only fields leaking to Pages.
   const data={repository:snapshot.repository,url:snapshot.url,fetchedAt:snapshot.fetchedAt,autonomy:false,scope:snapshot.scope,warnings:snapshot.warnings,
-    pulls:snapshot.pulls.map(p=>({number:p.number,title:p.title,url:p.url,state:p.state,draft:p.draft,headSha:p.headSha,openedAt:p.openedAt,updatedAt:p.updatedAt,mergedAt:p.mergedAt,ci:p.ci,codex:p.codex,progress:p.progress,readiness:p.readiness,detailError:p.detailError})),workflows:snapshot.workflows};
+    pulls:snapshot.pulls.map(p=>({number:p.number,title:p.title,url:p.url,state:p.state,draft:p.draft,headSha:p.headSha,openedAt:p.openedAt,updatedAt:p.updatedAt,mergedAt:p.mergedAt,ci:p.ci,codex:p.codex,progress:p.progress,readiness:p.readiness,unresolvedThreads:p.unresolvedThreads,detailError:p.detailError})),workflows:snapshot.workflows};
   await mkdir(output,{recursive:true});
   await verifyPublic();
   await writeFile(new URL('snapshot.json',output),JSON.stringify(data));
