@@ -21,7 +21,7 @@ export function validateEdits(result,files,existingPaths=Object.keys(files)) {
 
 export async function runAgent({repository,issueNumber,token,groqKey,expectedTask,authorizedUser,fetchImpl=fetch}) {
   const repo=repositoryName(repository),owner=repo.split('/')[0];
-  const taskUser=authorizedUser || owner;
+  const taskUser=(authorizedUser || owner).toLowerCase();
   if(!Number.isSafeInteger(issueNumber) || issueNumber<1 || !token || !groqKey) throw new Error('Agent configuration is missing.');
   async function api(path,method='GET',body) {
     const response=await fetchImpl(`https://api.github.com/repos/${repo}${path ? '/'+path : ''}`,{method,headers:{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:body ? JSON.stringify(body) : undefined,signal:AbortSignal.timeout(20000)});
@@ -31,7 +31,7 @@ export async function runAgent({repository,issueNumber,token,groqKey,expectedTas
   const metadata=await api('');
   if(metadata.private !== false) throw new Error('Agent currently supports public repositories only.');
   const issue=await api(`issues/${issueNumber}`);
-  if(issue.pull_request || issue.state !== 'open' || issue.user?.login !== taskUser || !issue.title?.startsWith(TASK_PREFIX) || !issue.body?.startsWith(TASK_MARKER)) return;
+  if(issue.pull_request || issue.state !== 'open' || issue.user?.login?.toLowerCase() !== taskUser || !issue.title?.startsWith(TASK_PREFIX) || !issue.body?.startsWith(TASK_MARKER)) return;
   if(!expectedTask || issue.body !== expectedTask.body || issue.title !== expectedTask.title) return;
   const comments=await api(`issues/${issueNumber}/comments?per_page=100`);
   if(comments.some(c=>c.user?.login==='github-actions[bot]' && c.body?.startsWith(AGENT_MARKER))) return;

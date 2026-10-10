@@ -51,7 +51,7 @@ test('unauthorized tasks never call Groq or create branches',async()=>{
   const h=harness({author:'someone-else'});await runAgent({...config,fetchImpl:h.fetchImpl});assert.equal(h.calls.length,2);
 });
 test('configured task user can authorize tasks without matching the repository owner',async()=>{
-  const h=harness({author:'maintainer'});await runAgent({...config,authorizedUser:'maintainer',fetchImpl:h.fetchImpl});assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),true);
+  const h=harness({author:'maintainer'});await runAgent({...config,authorizedUser:'Maintainer',fetchImpl:h.fetchImpl});assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),true);
 });
 test('task edited after the authorized event does not start the agent',async()=>{
   const h=harness();await runAgent({...config,expectedTask:{...config.expectedTask,body:'different task'},fetchImpl:h.fetchImpl});assert.equal(h.calls.length,2);
@@ -70,6 +70,6 @@ test('task URL preserves instructions as encoded text and needs GitHub confirmat
 });
 test('task history includes only owner tasks and marked agent replies',async()=>{
   const task={number:1,title:'Autopilot task: spacing',body:TASK_MARKER+'\nFix spacing',user:{login:'owner'},html_url:'https://github.com/owner/project/issues/1',state:'open'};
-  const tasks=await collectTasks('owner/project',{token:'secret',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments') ? [{user:{login:'intruder'},body:AGENT_MARKER+'\n**Agent: ready for PR**'},{user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: working**\nReading code'}] : [task,{...task,user:{login:'other'}}]})});
+  const tasks=await collectTasks('owner/project',{token:'secret',authorizedUser:'Owner',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments') ? [{user:{login:'intruder'},body:AGENT_MARKER+'\n**Agent: ready for PR**'},{user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: working**\nReading code'}] : [task,{...task,user:{login:'other'}}]})});
   assert.equal(tasks.length,1);assert.equal(tasks[0].status,'working');assert.equal(tasks[0].messages.length,2);
 });
