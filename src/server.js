@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {createGitHub, repositoryName} from './github.js';
 const github = createGitHub({token:process.env.GITHUB_TOKEN});
-const assets = {'/':['index.html','text/html'], '/app.js':['app.js','text/javascript'], '/style.css':['style.css','text/css'], '/github.js':['../src/github.js','text/javascript'], '/codex.js':['../src/codex.js','text/javascript']};
+const assets = {'/':['index.html','text/html'], '/app.js':['app.js','text/javascript'], '/style.css':['style.css','text/css'], '/github.js':['../src/github.js','text/javascript'], '/codex.js':['../src/codex.js','text/javascript'], '/progress.js':['../src/progress.js','text/javascript']};
 const cache = new Map();
 const host = '127.0.0.1', port = Number(process.env.PORT || 3000);
 http.createServer(async (req,res) => {
