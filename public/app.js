@@ -9,6 +9,8 @@ const configuredRepository='cryptomanxxx/repo-autopilot';
 const snapshots = new Map();
 let latestData=null;
 let loading=false;
+let backgroundRefresh=false;
+let usingSavedSnapshot=false;
 function applyFilters() {
   const choice=$('pr-filter').value;
   for(const row of $('pulls').querySelectorAll('.pr-row')) row.hidden=!(choice === 'all' || row.dataset.state === choice || choice === 'attention' && row.dataset.attention === 'true');
@@ -20,18 +22,21 @@ function updateAge() {
   if(!latestData) return;
   const age=Math.max(0,Math.floor((Date.now()-Date.parse(latestData.fetchedAt))/60000));
   if(!Number.isFinite(age)) {$('data-age').textContent='Data timestamp unavailable';return;}
-  $('data-age').textContent=`Data updated ${age} minute${age === 1 ? '' : 's'} ago · Page checks saved data every minute`;
+  $('data-age').textContent=`Data updated ${age} minute${age === 1 ? '' : 's'} ago · ${usingSavedSnapshot ? 'Page checks saved data every minute' : 'Refresh manually to get latest data'}`;
 }
 setInterval(()=>{
   updateAge();
-  if(!document.hidden && !loading && latestData?.repository?.toLowerCase() === configuredRepository && staticMode) $('repository').requestSubmit();
+  if(!document.hidden && !loading && usingSavedSnapshot) {
+    try {if(repositoryName($('repo').value).toLowerCase() !== configuredRepository) return;} catch {return;}
+    backgroundRefresh=true;$('repository').requestSubmit();
+  }
 },60000);
 $('mode-note').textContent = staticMode ? 'Repo Autopilot uses saved GitHub Actions data · No login required. Other public repositories use GitHub’s anonymous API limits.' : 'Local server mode · Credentials stay on the server.';
 const selected = new URLSearchParams(location.search).get('repo');
 $('repo').value = selected || configuredRepository;
 $('repository').addEventListener('submit',async event => {
-  event.preventDefault();if(loading) return;loading=true;const expanded=new Set([...$('pulls').querySelectorAll('details[open]')].map(n=>n.dataset.number));const button = event.target.querySelector('button');button.disabled=true;
-  $('status').textContent='Fetching GitHub data…';$('dashboard').hidden=true;
+  event.preventDefault();if(loading) return;loading=true;const automatic=backgroundRefresh;backgroundRefresh=false;const expanded=new Set([...$('pulls').querySelectorAll('details[open]')].map(n=>n.dataset.number));const button = event.target.querySelector('button');button.disabled=true;
+  $('status').textContent=automatic ? 'Checking saved data…' : 'Fetching GitHub data…';if(!automatic) $('dashboard').hidden=true;
   try {
     const repo = repositoryName($('repo').value);
     $('repo').value = repo;
@@ -55,7 +60,7 @@ $('repository').addEventListener('submit',async event => {
     if(savedSnapshot && (!Number.isFinite(snapshotAge) || snapshotAge>30*60*1000 || snapshotAge < -60000)) {
       data={...data,pulls:data.pulls.map(pr=>pr.readiness.state === 'ready' ? {...pr,readiness:{state:'unknown',label:'Cannot verify merge readiness',reasons:['Saved snapshot is stale; check current GitHub status']}} : pr)};
     }
-    latestData=data;updateAge();
+    usingSavedSnapshot=savedSnapshot;latestData=data;updateAge();
     $('pulls').replaceChildren();
     const headings=el('div','','pr-summary list-head');for(const title of ['PR','Merge','CI','Codex','#Reviews','#Changes']) headings.append(el('span',title));headings.setAttribute('aria-hidden','true');$('pulls').append(headings);
     for(const pr of data.pulls) {
@@ -88,7 +93,7 @@ $('repository').addEventListener('submit',async event => {
     if(!data.pulls.length) $('pulls').append(el('p','No pull requests found.'));
     $('workflows').replaceChildren(...data.workflows.map(r=>{
       const node=el('div','','workflow-row');
-      node.dataset.category=r.name === 'CI' ? 'ci' : /deploy|pages/i.test(r.name) ? 'deployment' : 'other';
+      node.dataset.category=/deploy|pages/i.test(r.name) ? 'deployment' : /(?:\bci\b|test|build|lint|continuous integration|check)/i.test(r.name) ? 'ci' : 'other';
       const title=el('span','','workflow-title');title.append(link(r.title || r.name,r.url));
       node.append(title,cell('Workflow',r.name),cell('Status',r.conclusion || r.status),cell('Branch',r.branch),cell('Updated',new Date(r.updatedAt).toLocaleString()));
       return node;
@@ -99,5 +104,5 @@ $('repository').addEventListener('submit',async event => {
     $('scope').textContent=[data.scope,...data.warnings].join(' ');$('dashboard').hidden=false;
     const age=Date.now()-Date.parse(data.fetchedAt);
     $('status').textContent=savedSnapshot ? `Loaded saved GitHub Actions snapshot. Updates after PR, review and CI events, with a scheduled refresh every 15 minutes.${!Number.isFinite(age) || age>30*60*1000 || age < -60000 ? ' This snapshot is over 30 minutes old or its timestamp cannot be verified; check GitHub before merging.' : ''}` : 'Loaded. Submit again to refresh (snapshots cached for 60 seconds).';
-  } catch(error) {$('status').textContent=error.message;} finally {button.disabled=false;loading=false;}
+  } catch(error) {$('status').textContent=automatic ? `Refresh failed; showing previous data. ${error.message}` : error.message;if(automatic && latestData) $('dashboard').hidden=false;} finally {button.disabled=false;loading=false;}
 });

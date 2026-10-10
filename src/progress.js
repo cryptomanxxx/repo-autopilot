@@ -37,7 +37,7 @@ export function reviewProgress(head, {reviews = [], comments = [], commits = [],
     const at=c.commit?.committer?.date;
     if(stamp(at)>stamp(openedAt)) add('changed','Code changed',at,c.sha,c.html_url);
   }
-  const currentRounds=rounds.filter(r=>head.startsWith(r.commit));
+  const currentRounds=summaries.filter(r=>head.startsWith(r.commit));
   const lastCompleted=Math.max(0,...currentRounds.map(r=>r.at));
   if(!truncated && lastCompleted) for(const r of reactions.filter(r=>r.user?.login === bot && r.content === '+1' && stamp(r.created_at)>=lastCompleted)) add('clear','Codex 👍',r.created_at,head);
   add('merged','PR merged',mergedAt);
