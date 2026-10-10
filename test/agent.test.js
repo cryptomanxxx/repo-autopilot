@@ -45,6 +45,7 @@ test('owner task generates a reviewable branch and no pull request or merge',asy
   const ref=h.calls.find(c=>c.url.endsWith('/git/refs'));assert.deepEqual(JSON.parse(ref.body),{ref:'refs/heads/autopilot/task-1',sha:'commit'});
   assert.equal(h.calls.some(c=>c.url.includes('/pulls')),false);
   const model=h.calls.find(c=>c.url.startsWith('https://api.groq.com/'));assert.equal(model.body.includes('github-secret'),false);assert.equal(model.body.includes('groq-secret'),false);
+  assert.equal(JSON.parse(model.body).model,'openai/gpt-oss-120b');assert.equal(JSON.parse(model.body).reasoning_effort,'low');
   const last=h.calls.filter(c=>c.url.endsWith('/comments')).at(-1);assert.match(JSON.parse(last.body).body,/ready for PR/);assert.match(JSON.parse(last.body).body,/Tests have not run yet/);
 });
 test('notification failure after branch publication retains ready status and compare link',async()=>{
