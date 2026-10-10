@@ -27,3 +27,13 @@
 
 @media(min-width:851px){.pr-summary{grid-template-columns:minmax(160px,3fr) minmax(100px,1.5fr) 75px minmax(110px,1.3fr) 55px 60px 35px 35px;gap:10px}}
 .review-flow .flow-findings:before{background:#ffbf80}
+
+/* Shared minimum widths keep headers and values aligned without collisions. */
+@media(min-width:851px){
+  #pulls{overflow-x:auto}
+  .pr-summary{min-width:1000px;grid-template-columns:minmax(160px,2.5fr) minmax(110px,1.4fr) 75px minmax(125px,1.4fr) 78px 82px 35px 35px;gap:14px;padding-right:70px}
+  .list-head span{white-space:nowrap}
+}
+.review-flow li:last-child:before{background:#d5a6ff;box-shadow:0 0 0 4px #392c55;width:12px;height:12px;left:-7px}
+.review-flow li:last-child strong:after{content:'Latest';display:inline-block;margin-left:10px;padding:2px 7px;border-radius:9px;background:#392c55;color:#ead8ff;font-size:10px;font-weight:600}
+
