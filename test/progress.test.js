@@ -53,7 +53,7 @@ test('historical priority counts deduplicate findings and exclude replies, summa
  assert.deepEqual(p.findings,{p1:1,p2:1,incomplete:false});
  assert.equal(p.events.filter(e=>e.kind==='findings').length,1);
  assert.match(p.events[0].label,/1 P1 · 1 P2/);
- assert.equal(reviewProgress(head,{inline:[c],truncated:true}).findings.incomplete,true);
+ assert.equal(reviewProgress(head,{inline:[c],findingsTruncated:true}).findings.incomplete,true);
 });
 
 test('incomplete inline findings do not invalidate complete review and commit histories',()=>{
@@ -62,4 +62,11 @@ test('incomplete inline findings do not invalidate complete review and commit hi
  assert.equal(p.currentCompleted,true);
  assert.equal(p.updatesAfterReview,0);
  assert.equal(p.truncated,false);
+});
+
+test('incomplete commits or reviews do not make complete finding counts lower bounds',()=>{
+ const p=reviewProgress(head,{truncated:true,findingsTruncated:false});
+ assert.equal(p.findings.incomplete,false);
+ assert.equal(p.truncated,true);
+ assert.equal(p.updatesAfterReview,null);
 });

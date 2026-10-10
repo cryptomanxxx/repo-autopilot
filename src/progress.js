@@ -8,7 +8,7 @@ export function reviewProgress(head, {reviews = [], comments = [], inline = [], 
   add('opened','PR opened',openedAt);
   for(const c of comments) if(c.user?.login !== bot && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '')) add('requested','Codex review requested',c.created_at,undefined,c.html_url);
   const findingComments=[...comments,...inline].filter(c=>c.user?.login === bot && !c.in_reply_to_id && !(c.body || '').includes('codex-pull-request-review-summary'));
-  const seen=new Set();const findings={p1:0,p2:0,incomplete:truncated || findingsTruncated};const batches=new Map();
+  const seen=new Set();const findings={p1:0,p2:0,incomplete:findingsTruncated};const batches=new Map();
   for(const c of findingComments) {
     const priority=(c.body || '').match(/(?:badge\/|\[)(P[12])(?:-|\])/i)?.[1]?.toLowerCase();
     if(!priority) continue;
