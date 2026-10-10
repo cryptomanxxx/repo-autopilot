@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {allowedAgentPath,validateEdits,agentMessages,applyAgentChanges,runAgent,TASK_MARKER,AGENT_MARKER,REPLY_MARKER} from '../src/agent.js';
+import {allowedAgentPath,validateEdits,taskInstruction,pendingTaskReply,agentMessages,applyAgentChanges,runAgent,TASK_MARKER,AGENT_MARKER,REPLY_MARKER} from '../src/agent.js';
 import {taskUrl} from '../public/task-ui.js';
 import {collectTasks} from '../src/tasks.js';
 
@@ -139,4 +139,31 @@ test('an owner reply resumes a waiting task once, with its own branch',async()=>
     const h2=harness();await runAgent({...config,expectedComment:reply,fetchImpl:(url,options)=>url.includes('/comments?')?Promise.resolve({ok:true,json:async()=>history}):h2.fetchImpl(url,options)});
     assert.equal(h2.calls.some(c=>c.url.startsWith('https://api.groq.com/')),false);
   }
+});
+
+test('continuations retain the question and earlier reply context without exceeding the model budget',()=>{
+  const issue={body:TASK_MARKER+'\nChange the workflow title'};
+  const comments=[{id:1,user:{login:'owner'},body:REPLY_MARKER+'\nI mean workflow runs'}, {id:2,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\nWhich option: 1. Run ID, or 2. Run number?'},{id:3,user:{login:'owner'},body:REPLY_MARKER+'\nThe second option'}];
+  const instruction=taskInstruction(issue,comments,'owner',3);
+  assert.match(instruction,/Run number/);assert.match(instruction,/The second option/);assert.match(instruction,/I mean workflow runs/);
+  assert.ok(instruction.indexOf('Which option')<instruction.indexOf('The second option'));
+  for(const char of ['日','"','\\']) {
+    const long={body:TASK_MARKER+'\n'+char.repeat(3500)};
+    const history=[{id:2,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\n'+char.repeat(3000)},{id:3,user:{login:'owner'},body:REPLY_MARKER+'\n'+char.repeat(3500)}];
+    const bounded=taskInstruction(long,history,'owner',3);
+    assert.ok(Buffer.byteLength(JSON.stringify(agentMessages(bounded,{'public/app.js':'source'})),'utf8')<=6000);
+    assert.ok(Buffer.byteLength(JSON.stringify(agentMessages(taskInstruction(long,[],'owner'),{})),'utf8')<=6000);
+  }
+});
+test('pending owner replies count only after the latest agent status',()=>{
+  const waiting={id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**'};
+  const reply={id:2,user:{login:'owner'},body:REPLY_MARKER+'\nSecond option'};
+  assert.equal(pendingTaskReply([waiting,reply],'OWNER'),true);
+  assert.equal(pendingTaskReply([reply,waiting],'owner'),false);
+  assert.equal(pendingTaskReply([waiting,{...reply,user:{login:'other'}}],'owner'),false);
+});
+
+test('task snapshots display a pending follow-up as queued',async()=>{
+  const tasks=await collectTasks('owner/project',{token:'x',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments?')?[{id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**'},{id:2,user:{login:'owner'},body:REPLY_MARKER+'\nThe second option'}]:[{number:1,state:'open',user:{login:'owner'},title:'Autopilot task: improve spacing',body:TASK_MARKER+'\nImprove spacing'}]})});
+  assert.equal(tasks[0].status,'queued');
 });

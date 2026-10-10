@@ -1,4 +1,4 @@
-import {TASK_PREFIX,TASK_MARKER,REPLY_MARKER,readTaskComments} from './agent.js';
+import {TASK_PREFIX,TASK_MARKER,REPLY_MARKER,pendingTaskReply,readTaskComments} from './agent.js';
 import {repositoryName} from './github.js';
 
 export function validateScreenshot(image) {
@@ -42,6 +42,7 @@ export function createChat({repository,authorizedUser,token,groqKey,fetchImpl=fe
       if(number) {issue=await task(number);if(issue.state!=='open') throw new Error('This task is closed.');
         const comments=await readTaskComments(api,number);
         const latest=comments.filter(c=>c.user?.login==='github-actions[bot]'&&c.body?.startsWith('<!-- repo-autopilot-agent -->')).at(-1);
+        if(pendingTaskReply(comments,owner)) throw new Error('Wait for the agent: an earlier reply is still queued.');
         if(!/\*\*Agent: (needs input|failed)\*\*/.test(latest?.body||'')) throw new Error('Wait for the agent, or review its completed branch before starting another task.');
       }
       const description=image?await describeScreenshot(image,{groqKey,fetchImpl}):null;

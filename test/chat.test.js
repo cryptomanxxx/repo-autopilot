@@ -65,3 +65,10 @@ test('follow-up messages remain in the same authorized task',async()=>{
   assert.equal((await chat.send({number:21,text:'Look at src/github.js'})).number,21);
   const posted=calls.find(c=>c.method==='POST');assert.match(posted.url,/issues\/21\/comments$/);assert.match(JSON.parse(posted.body).body,/repo-autopilot-reply/);
 });
+
+test('queued replies block another send before any image processing or comment write',async()=>{
+  const calls=[];
+  const chat=createChat({repository:'owner/repo',token:'token',fetchImpl:async(url,options)=>{calls.push({url,...options});return {ok:true,json:async()=>url.endsWith('/repos/owner/repo')?{private:false}:url.includes('/comments?')?[{id:1,user:{login:'github-actions[bot]'},body:'<!-- repo-autopilot-agent -->\n**Agent: needs input**'},{id:2,user:{login:'owner'},body:'<!-- repo-autopilot-reply -->\nFirst reply'}]:{number:21,state:'open',user:{login:'owner'},title:'Autopilot task: x',body:TASK_MARKER+'\nx'}};}});
+  await assert.rejects(chat.send({number:21,text:'Another reply'}),/still queued/);
+  assert.equal(calls.some(c=>c.method==='POST'),false);
+});
