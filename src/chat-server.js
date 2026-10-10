@@ -1,5 +1,5 @@
 import http from 'node:http';
-import {randomBytes} from 'node:crypto';
+import {randomBytes,createCipheriv,createDecipheriv} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import {createChat} from './chat.js';
@@ -11,7 +11,9 @@ export function createChatServer({origin,repository,authorizedUser,clientId,clie
   const base=new URL(origin),repo=repositoryName(repository),owner=(authorizedUser||repo.split('/')[0]).toLowerCase();
   if(base.pathname!=='/'||base.search||base.hash||base.username||base.password||!(base.protocol==='https:'||(base.protocol==='http:'&&['localhost','127.0.0.1'].includes(base.hostname)))) throw new Error('Configure a public HTTPS CHAT_ORIGIN, or localhost for development.');
   if(!clientId||!clientSecret) throw new Error('Configure GitHub OAuth credentials.');
-  const secure=base.protocol==='https:',sessions=new Map(),states=new Map();
+  const secure=base.protocol==='https:',sessions=new Map(),taskLocks=new Set(),stateKey=randomBytes(32);
+  const encodeState=value=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',stateKey,iv);const encrypted=Buffer.concat([cipher.update(JSON.stringify(value),'utf8'),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),encrypted]).toString('base64url');};
+  const decodeState=value=>{try {if(typeof value!=='string'||value.length>1024) return null;const bytes=Buffer.from(value,'base64url');const cipher=createDecipheriv('aes-256-gcm',stateKey,bytes.subarray(0,12));cipher.setAuthTag(bytes.subarray(12,28));const data=JSON.parse(Buffer.concat([cipher.update(bytes.subarray(28)),cipher.final()]).toString('utf8'));return data.expires>now()?data:null;} catch {return null;}};
   const cookie=(name,value,path='/')=>`${name}=${value}; Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${value?28800:0}${secure?'; Secure':''}`;
   const cookies=req=>Object.fromEntries((req.headers.cookie||'').split(';').map(s=>s.trim().split('=')));
   const prune=map=>{for(const [id,item] of map) if(item.expires<=now()) map.delete(id);};
@@ -28,20 +30,19 @@ export function createChatServer({origin,repository,authorizedUser,clientId,clie
     let session;
     try {
       const url=new URL(req.url,base);
-      prune(states);prune(sessions);
+      prune(sessions);
       session=sessions.get(cookies(req).autopilot_session);
       if(req.method==='GET'&&url.pathname==='/auth/login') {
-        if(states.size>=100) return json(res,429,{error:'Please try again later.'});
-        const state=random(),browser=random(),verifier=random();
+        const browser=random(),verifier=random();
+        const state=encodeState({browser,verifier,expires:now()+600000});
         const {createHash}=await import('node:crypto');
-        states.set(state,{browser,verifier,expires:now()+600000});
         res.setHeader('Set-Cookie',cookie('autopilot_login',browser,'/auth'));
         const target=new URL('https://github.com/login/oauth/authorize');
         for(const [k,v] of Object.entries({client_id:clientId,redirect_uri:base.origin+'/auth/callback',scope:'public_repo',state,code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256'})) target.searchParams.set(k,v);
         return redirect(res,target.href);
       }
       if(req.method==='GET'&&url.pathname==='/auth/callback') {
-        const state=url.searchParams.get('state'),pending=states.get(state);states.delete(state);
+        const pending=decodeState(url.searchParams.get('state'));
         if(!pending||pending.browser!==cookies(req).autopilot_login||!url.searchParams.get('code')) return json(res,403,{error:'Login expired or did not match this browser. Sign in again.'});
         const token=await remote('https://github.com/login/oauth/access_token',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json'},body:JSON.stringify({client_id:clientId,client_secret:clientSecret,code:url.searchParams.get('code'),redirect_uri:base.origin+'/auth/callback',code_verifier:pending.verifier})});
         if(!token.access_token||token.error) throw new Error('GitHub authentication failed.');
@@ -67,7 +68,11 @@ export function createChatServer({origin,repository,authorizedUser,clientId,clie
           let size=0;const chunks=[];
           for await(const chunk of req) {size+=chunk.length;if(size>2900000) throw new Error('Message is too large. Use an image smaller than 2 MB.');chunks.push(chunk);}
           const payload=JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          return json(res,200,await chat.send(payload));
+          const taskNumber=payload.number;
+          if(taskNumber!==undefined&&taskNumber!==null&&(!Number.isSafeInteger(taskNumber)||taskNumber<1)) throw new Error('Invalid task number.');
+          if(taskNumber&&taskLocks.has(taskNumber)) throw new Error('Wait for the agent: another session is sending to this task.');
+          if(taskNumber) taskLocks.add(taskNumber);
+          try {return json(res,200,await chat.send(payload));} finally {if(taskNumber) taskLocks.delete(taskNumber);}
         } finally {session.busy=false;}
       }
       const assets={'/':['chat.html','text/html'],'/chat.js':['chat.js','text/javascript'],'/style.css':['style.css','text/css']};

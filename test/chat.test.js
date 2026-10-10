@@ -72,3 +72,44 @@ test('queued replies block another send before any image processing or comment w
   await assert.rejects(chat.send({number:21,text:'Another reply'}),/still queued/);
   assert.equal(calls.some(c=>c.method==='POST'),false);
 });
+
+test('OAuth states do not consume a global login quota and expire safely',async t=>{
+  let time=1000000,remoteCalls=0;
+  const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'secret',now:()=>time,fetchImpl:async url=>{remoteCalls++;return {ok:true,json:async()=>url.endsWith('/access_token')?{access_token:'token'}:{login:'owner'}};}});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const base='http://127.0.0.1:'+server.address().port;
+  let login;
+  for(let i=0;i<110;i++) {login=await fetch(base+'/auth/login',{redirect:'manual'});assert.equal(login.status,303);}
+  const target=new URL(login.headers.get('location')),state=target.searchParams.get('state'),cookie=login.headers.getSetCookie()[0].split(';')[0];
+  const bad=await fetch(base+'/auth/callback?code=x&state='+state.slice(0,-3)+'xxx',{headers:{Cookie:cookie},redirect:'manual'});assert.equal(bad.status,403);assert.equal(remoteCalls,0);
+  const ok=await fetch(base+'/auth/callback?code=x&state='+state,{headers:{Cookie:cookie},redirect:'manual'});assert.equal(ok.status,303);assert.equal(remoteCalls,2);
+  time+=600001;
+  const expired=await fetch(base+'/auth/callback?code=x&state='+state,{headers:{Cookie:cookie},redirect:'manual'});assert.equal(expired.status,403);assert.equal(remoteCalls,2);
+});
+
+test('task writes are locked across separate authenticated sessions',async t=>{
+  let release,arrived,historyReads=0;const gate=new Promise(resolve=>release=resolve),started=new Promise(resolve=>arrived=resolve);
+  const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'secret',fetchImpl:async(url,options)=>{
+    let data;
+    if(url.endsWith('/access_token')) data={access_token:'token'};
+    else if(url.endsWith('/user')) data={login:'owner'};
+    else if(url.endsWith('/repos/owner/repo')) data={private:false};
+    else if(url.includes('/comments?')) {historyReads++;arrived();await gate;data=[{id:1,user:{login:'github-actions[bot]'},body:'<!-- repo-autopilot-agent -->\n**Agent: needs input**'}];}
+    else if(options.method==='POST') data={id:2};
+    else data={number:21,state:'open',user:{login:'owner'},title:'Autopilot task: x',body:TASK_MARKER+'\nx',html_url:'https://github.com/owner/repo/issues/21'};
+    return {ok:true,json:async()=>data};
+  }});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const base='http://127.0.0.1:'+server.address().port;
+  async function login() {
+    const start=await fetch(base+'/auth/login',{redirect:'manual'}),target=new URL(start.headers.get('location'));
+    const callback=await fetch(base+'/auth/callback?code=x&state='+target.searchParams.get('state'),{headers:{Cookie:start.headers.getSetCookie()[0].split(';')[0]},redirect:'manual'});
+    const cookie=callback.headers.getSetCookie().find(c=>c.startsWith('autopilot_session=')).split(';')[0];
+    const session=await (await fetch(base+'/api/session',{headers:{Cookie:cookie}})).json();return {cookie,csrf:session.csrf};
+  }
+  const [a,b]=await Promise.all([login(),login()]);
+  const send=session=>fetch(base+'/api/send',{method:'POST',headers:{Cookie:session.cookie,Origin:'https://chat.example','Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify({number:21,text:'The second option'})});
+  const first=send(a);await started;
+  try {const second=await send(b);assert.equal(second.status,400);assert.match((await second.json()).error,/another session/);assert.equal(historyReads,1);} finally {release();}
+  assert.equal((await first).status,200);
+});

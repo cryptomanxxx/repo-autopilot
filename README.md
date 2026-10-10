@@ -106,7 +106,7 @@ Deploy the supplied Dockerfile on a host with HTTPS, or run `npm run chat` with 
 | `GROQ_API_KEY` | Server-side key for screenshot interpretation. The Actions coding worker still uses its repository secret. |
 | `HOST`, `PORT` | Listener settings; Docker defaults to `0.0.0.0:3001`. |
 
-Create a GitHub OAuth app with callback `<CHAT_ORIGIN>/auth/callback`. The app requests `public_repo` and admits only the configured owner login. OAuth tokens stay in server memory; the browser receives an opaque HttpOnly session cookie. OAuth uses browser-bound state and PKCE. Writes require an exact origin and session CSRF token. Sessions expire after eight hours and are lost on restart; run one server instance. Do not put OAuth secrets or API keys in a Pages variable or browser code.
+Create a GitHub OAuth app with callback `<CHAT_ORIGIN>/auth/callback`. The app requests `public_repo` and admits only the configured owner login. OAuth tokens stay in server memory; the browser receives an opaque HttpOnly session cookie. OAuth uses browser-bound encrypted stateless state and PKCE; unauthenticated login requests do not fill a global state map. Follow-up writes are locked per task across all sessions in the server process. Writes require an exact origin and session CSRF token. Sessions expire after eight hours and are lost on restart; run one server instance. Do not put OAuth secrets or API keys in a Pages variable or browser code.
 
 Once the server is running, set the repository Actions variable `AUTOPILOT_CHAT_URL` to its HTTPS chat URL and run the Pages workflow. Only this public URL is inserted into the static build. The dashboard keeps the GitHub confirmation route until this variable is configured.
 
