@@ -78,7 +78,7 @@ Historical P1/P2 counts use top-level Codex finding comments with explicit prior
 
 ## Actions agent tasks
 
-The hosted Repo Autopilot view includes a task box and the latest five owner tasks found among the 30 most recently updated issues. Write an instruction and choose **Continue on GitHub**. GitHub opens a prefilled public issue; submit it as the repository owner to start the agent. The browser stores no credentials. Your task and agent responses are public. The owner-only worker runs trusted default-branch code with `GROQ_API_KEY` from Actions secrets and uses Groq's `llama-3.3-70b-versatile`. Model API usage and limits apply.
+The hosted Repo Autopilot view includes a task box and the latest five owner tasks found among the 30 most recently updated issues. Write an instruction and choose **Continue on GitHub**. GitHub opens a prefilled public issue; submit it as the repository owner to start the agent. The browser stores no credentials. Your task and agent responses are public. The owner-only worker runs trusted default-branch code with `GROQ_API_KEY` from Actions secrets and uses Groq's `openai/gpt-oss-120b`. Model API usage and limits apply.
 
 The worker performs one bounded attempt, reads source through GitHub REST, validates up to eight replacement files, and creates `autopilot/task-N`. Allowed edits are JS/CSS/HTML/Markdown in src, public and test, plus README. Agent infrastructure, hidden files, workflows, dependencies and secrets are excluded. Generated code is never executed in the secret-bearing worker. This first version handles small tasks with the supplied source context; it may ask for more information rather than change code. It does not yet automatically iterate over Codex feedback.
 
