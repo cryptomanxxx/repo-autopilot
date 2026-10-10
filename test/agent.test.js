@@ -12,6 +12,11 @@ test('agent rejects infrastructure, hidden paths, duplicate edits and oversized 
   assert.throws(()=>validateEdits({summary:'x',files:[{path:'public/app.js',content:'x'.repeat(60001)}]},{}));
   assert.deepEqual(validateEdits({summary:'x',files:[{path:'public/app.js',content:'new',sha:'injected'}]},{}).files,[{path:'public/app.js',content:'new'}]);
 });
+test('existing files omitted from context cannot be replaced but new files are allowed',()=>{
+  const result={summary:'change',files:[{path:'public/omitted.js',content:'invented replacement'}]};
+  assert.throws(()=>validateEdits(result,{'public/app.js':'source'},['public/app.js','public/omitted.js']),/unread file/);
+  assert.equal(validateEdits(result,{'public/app.js':'source'},['public/app.js']).files.length,1);
+});
 
 function harness({author='owner',closed=false,edits=[{path:'public/app.js',content:'new source'}]}={}) {
   const calls=[];let reads=0;
@@ -44,6 +49,9 @@ test('owner task generates a reviewable branch and no pull request or merge',asy
 });
 test('unauthorized tasks never call Groq or create branches',async()=>{
   const h=harness({author:'someone-else'});await runAgent({...config,fetchImpl:h.fetchImpl});assert.equal(h.calls.length,2);
+});
+test('configured task user can authorize tasks without matching the repository owner',async()=>{
+  const h=harness({author:'maintainer'});await runAgent({...config,authorizedUser:'maintainer',fetchImpl:h.fetchImpl});assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),true);
 });
 test('task edited after the authorized event does not start the agent',async()=>{
   const h=harness();await runAgent({...config,expectedTask:{...config.expectedTask,body:'different task'},fetchImpl:h.fetchImpl});assert.equal(h.calls.length,2);

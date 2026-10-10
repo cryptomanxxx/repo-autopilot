@@ -1,6 +1,6 @@
 import {TASK_PREFIX,TASK_MARKER,AGENT_MARKER} from './agent.js';
-export async function collectTasks(repository,{token,fetchImpl=fetch}) {
-  const owner=repository.split('/')[0];
+export async function collectTasks(repository,{token,authorizedUser,fetchImpl=fetch}) {
+  const owner=authorizedUser || repository.split('/')[0];
   const get=async path=>{
     const r=await fetchImpl(`https://api.github.com/repos/${repository}/${path}`,{headers:{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json'},signal:AbortSignal.timeout(15000)});
     if(!r.ok) throw new Error('Task history unavailable.');return r.json();

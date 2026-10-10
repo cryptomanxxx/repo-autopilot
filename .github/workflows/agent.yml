@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   task:
-    if: github.event.issue.user.login == github.repository_owner && github.actor == github.repository_owner && startsWith(github.event.issue.title, 'Autopilot task: ') && startsWith(github.event.issue.body, '<!-- repo-autopilot-task -->')
+    if: github.event.issue.user.login == (vars.AUTOPILOT_TASK_USER || github.repository_owner) && github.actor == (vars.AUTOPILOT_TASK_USER || github.repository_owner) && startsWith(github.event.issue.title, 'Autopilot task: ') && startsWith(github.event.issue.body, '<!-- repo-autopilot-task -->')
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
@@ -26,5 +26,6 @@ jobs:
       - run: node scripts/run-agent.js
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          AUTOPILOT_TASK_USER: ${{ vars.AUTOPILOT_TASK_USER || github.repository_owner }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GITHUB_REPOSITORY: ${{ github.repository }}
