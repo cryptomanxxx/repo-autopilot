@@ -7,7 +7,7 @@ export async function publishData({repository,token,content,fetchImpl=fetch}) {
   const snapshot=JSON.parse(content);
   if(snapshot.repository?.toLowerCase() !== repo.toLowerCase()) throw new Error('Snapshot repository mismatch.');
   async function request(path,method='GET',body,allowMissing=false) {
-    const response=await fetchImpl(`https://api.github.com/repos/${repo}/${path}`,{method,headers:{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:body ? JSON.stringify(body) : undefined,signal:AbortSignal.timeout(15000)});
+    const response=await fetchImpl(`https://api.github.com/repos/${repo}${path ? '/'+path : ''}`,{method,headers:{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:body ? JSON.stringify(body) : undefined,signal:AbortSignal.timeout(15000)});
     if(allowMissing && response.status === 404) return null;
     if(!response.ok) throw new Error(`Data publishing failed (HTTP ${response.status}).`);
     return response.json();

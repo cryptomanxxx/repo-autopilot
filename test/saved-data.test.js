@@ -19,6 +19,7 @@ test('data publishing writes only the snapshot to a separate branch',async()=>{
     calls.push({url,...options});const data=responses.shift();return {ok:data !== null,status:data === null ? 404 : 200,json:async()=>data};
   }});
   const tree=JSON.parse(calls[4].body);assert.equal(tree.tree.length,1);assert.equal(tree.tree[0].path,'data/snapshot.json');
+  assert.equal(calls[0].url,'https://api.github.com/repos/example/project');
   assert.deepEqual(JSON.parse(calls[6].body),{ref:'refs/heads/dashboard-data',sha:'commit'});
   assert.equal(calls.some(c=>c.body?.includes('test-secret')),false);
 });
