@@ -8,7 +8,11 @@ concurrency:
   cancel-in-progress: false
 jobs:
   task:
-    if: github.event.issue.user.login == (vars.AUTOPILOT_TASK_USER || github.repository_owner) && github.actor == (vars.AUTOPILOT_TASK_USER || github.repository_owner) && startsWith(github.event.issue.title, 'Autopilot task: ') && startsWith(github.event.issue.body, '<!-- repo-autopilot-task -->')
+    if: >-
+      github.event.issue.user.login == (vars.AUTOPILOT_TASK_USER || github.repository_owner) &&
+      github.actor == (vars.AUTOPILOT_TASK_USER || github.repository_owner) &&
+      startsWith(github.event.issue.title, 'Autopilot task: ') &&
+      startsWith(github.event.issue.body, '<!-- repo-autopilot-task -->')
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:
