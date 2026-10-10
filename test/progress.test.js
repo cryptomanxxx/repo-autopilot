@@ -29,3 +29,20 @@ test('reports blockers and terminal PR states',()=>{
  assert.equal(mergeReadiness({...pr,merged:true},verified).state,'merged');
  assert.equal(mergeReadiness({state:'closed'},verified).state,'closed');
 });
+
+test('activity flow orders observed requests, reviews, changes, clear and merge without inventing fixes',()=>{
+ const comments=[{user:{login:'human'},body:'@codex review',created_at:'2026-10-10T12:01:00Z'}];
+ const reviews=[{...review,submitted_at:'2026-10-10T12:02:00Z'}];
+ const commits=[{sha:'bbbbbbb',commit:{committer:{date:'2026-10-10T12:03:00Z'}}}];
+ comments.push({user:bot,body:'<!-- codex-pull-request-review-summary -->\n| Code Review | Completed <relative-time datetime="2026-10-10T12:02:00Z">done</relative-time> | `abcdef1` |'});
+ const p=reviewProgress(head,{openedAt:'2026-10-10T12:00:00Z',mergedAt:'2026-10-10T12:05:00Z',comments,reviews,commits,reactions:[{user:bot,content:'+1',created_at:'2026-10-10T12:04:00Z'}]});
+ assert.deepEqual(p.events.map(e=>e.kind),['opened','requested','reviewed','changed','clear','merged']);
+ assert.equal(p.events.some(e=>/fixed|agent/i.test(e.label)),false);
+ const stale=reviewProgress('ccccccc',{reviews,reactions:[{user:bot,content:'+1',created_at:'2026-10-10T12:04:00Z'}]});
+ assert.equal(stale.events.some(e=>e.kind==='clear'),false);
+});
+
+test('timeline thumb requires completed current-head summary, not just a review',()=>{
+ const p=reviewProgress(head,{reviews:[review],reactions:[{user:bot,content:'+1',created_at:'2026-10-10T12:04:00Z'}]});
+ assert.equal(p.events.some(e=>e.kind==='clear'),false);
+});

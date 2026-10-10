@@ -1,8 +1,12 @@
 const bot = 'chatgpt-codex-connector[bot]';
 const shaOf = body => (body || '').match(/\*\*Reviewed commit:\*\*\s*`([a-f0-9]{7,40})`/i)?.[1];
-const stamp = value => Date.parse(value) || 0;
+const stamp = value => typeof value === 'number' ? value : Date.parse(value) || 0;
 
-export function reviewProgress(head, {reviews = [], comments = [], commits = [], truncated = false} = {}) {
+export function reviewProgress(head, {reviews = [], comments = [], commits = [], reactions = [], openedAt, mergedAt, truncated = false} = {}) {
+  const events=[];
+  const add=(kind,label,at,commit,url)=>{if(stamp(at)) events.push({kind,label,at:new Date(at).toISOString(),commit,url});};
+  add('opened','PR opened',openedAt);
+  for(const c of comments) if(c.user?.login !== bot && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '')) add('requested','Codex review requested',c.created_at,undefined,c.html_url);
   const completed = [];
   const summaries = [];
   for(const review of reviews.filter(r=>r.user?.login === bot && ['COMMENTED','APPROVED','CHANGES_REQUESTED'].includes(r.state))) {
@@ -18,6 +22,7 @@ export function reviewProgress(head, {reviews = [], comments = [], commits = [],
       if(!commit) continue;
       const event={commit,at:stamp(row.match(/datetime="([^"]+)"/)?.[1]),url:comment.html_url};
       if(/Completed/.test(row)) summaries.push(event);
+      else if(/Running/.test(row)) add('running','Codex review running',row.match(/datetime="([^"]+)"/)?.[1],commit,comment.html_url);
     }
   }
   // A submitted review and its outcome comment may describe the same run.
@@ -27,11 +32,21 @@ export function reviewProgress(head, {reviews = [], comments = [], commits = [],
   for(const event of [...completed,...summaries]) {
     if(!rounds.some(r=>sameCommit(r,event) && Math.abs(r.at-event.at)<=10000)) rounds.push(event);
   }
+  for(const r of rounds) if(r.at) add('reviewed','Codex review completed',r.at,r.commit,r.url);
+  for(const c of commits) {
+    const at=c.commit?.committer?.date;
+    if(stamp(at)>stamp(openedAt)) add('changed','Code changed',at,c.sha,c.html_url);
+  }
+  const currentRounds=summaries.filter(r=>head.startsWith(r.commit));
+  const lastCompleted=Math.max(0,...currentRounds.map(r=>r.at));
+  if(!truncated && lastCompleted) for(const r of reactions.filter(r=>r.user?.login === bot && r.content === '+1' && stamp(r.created_at)>=lastCompleted)) add('clear','Codex 👍',r.created_at,head);
+  add('merged','PR merged',mergedAt);
+  events.sort((a,b)=>stamp(a.at)-stamp(b.at));
   const covered=commits.map((c,index)=>rounds.some(r=>c.sha.startsWith(r.commit)) ? index : -1).filter(i=>i>=0);
   const updates=covered.length ? commits.length-1-Math.min(...covered) : null;
   const currentCompleted=rounds.some(r=>head.startsWith(r.commit));
   // GitHub edits its summary in place; older clean rounds may leave no permanent event.
-  return {reviewCount:rounds.length,reviewCountIsLowerBound:true,updatesAfterReview:truncated ? null : updates,currentCompleted:!truncated && currentCompleted,truncated};
+  return {events,reviewCount:rounds.length,reviewCountIsLowerBound:true,updatesAfterReview:truncated ? null : updates,currentCompleted:!truncated && currentCompleted,truncated};
 }
 
 export function mergeReadiness(pr, {ci, codex, checksComplete = true, verification} = {}) {

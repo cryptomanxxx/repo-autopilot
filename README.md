@@ -67,3 +67,9 @@ Review counts are **lower bounds**: GitHub edits Codex summaries in place, so so
 Readiness distinguishes merged, closed, known blockers and unverified state. Anonymous live lookups can identify drafts, conflicts, CI failures and Codex findings, but cannot fully verify resolved threads and protected-branch requirements. It therefore does **not** show green merge readiness from CI alone.
 
 The authenticated Actions snapshot and local token-backed mode additionally ask GitHub GraphQL for current-head merge state, review decision and conversation resolution. Ready requires current Codex clearance, complete successful CI, conflict-free merging, GitHub CLEAN state, no missing approvals or requested changes, and all conversations resolved. Truncated thread results or API errors stay unverified. This is a snapshot, never permission to bypass GitHub rules or an automatic merge action. The token must support the GraphQL read operations; otherwise readiness stays unknown.
+
+## Activity flow and filters
+
+PR rows expand to a chronological activity flow: PR opened, explicit Codex review requests, observed running/completed reviews, subsequent commits, current-commit Codex thumbs-up and merge. This is observed history, not proof that an agent fixed a finding. Commit timestamps may precede their push, summaries are edited in place, and older/truncated events may be missing. No missing steps are invented.
+
+Filter PRs by open, needs attention, merged or all, and workflows by CI, deployment or all. On wide screens, shared column headings reduce repetition. The hosted Repo Autopilot view rereads saved data every minute while visible, preserves expanded rows, and shows data age. It does not stream GitHub events in real time: Actions publication and scheduled refresh delays still apply. Other repositories retain manual anonymous lookup.
