@@ -5,7 +5,7 @@ export function repositoryName(value) {
 export function ciState(checks, statuses) {
   const states = [...checks.map(c => c.status === 'completed' ? c.conclusion : 'pending'), ...statuses.map(s => s.state)];
   if (!states.length) return 'unknown';
-  if (states.some(s => ['failure', 'error', 'cancelled', 'timed_out', 'action_required', 'startup_failure'].includes(s))) return 'failure';
+  if (states.some(s => ['failure', 'error', 'cancelled', 'timed_out', 'action_required', 'startup_failure', 'stale'].includes(s))) return 'failure';
   if (states.some(s => !['success', 'neutral', 'skipped'].includes(s))) return 'pending';
   return 'success';
 }
