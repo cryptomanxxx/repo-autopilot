@@ -35,3 +35,11 @@ test('authenticated merge verification cannot approve a changed head or truncate
   assert.equal(result.pulls[0].readiness.state,variant==='clean'?'ready':'unknown');
  }
 });
+
+test('dashboard refresh signal cannot substitute for real CI',()=>{
+ const signal={name:'repo-autopilot-review-refresh-signal',status:'completed',conclusion:'success'};
+ assert.equal(ciState([signal],[]),'unknown');
+ assert.equal(ciState([signal,{name:'test',status:'in_progress'}],[]),'pending');
+ assert.equal(ciState([signal,{name:'test',status:'completed',conclusion:'failure'}],[]),'failure');
+ assert.equal(ciState([signal,{name:'test',status:'completed',conclusion:'success'}],[]),'success');
+});
