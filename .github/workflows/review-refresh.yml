@@ -8,7 +8,7 @@ on:
     types: [created, edited, deleted]
 permissions: {}
 jobs:
-  signal:
+  repo-autopilot-review-refresh-signal:
     runs-on: ubuntu-latest
     steps:
       - run: 'true'
