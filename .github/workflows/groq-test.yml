@@ -2,7 +2,8 @@ name: Test Groq API key
 
 on:
   workflow_dispatch:
-  pull_request:
+  push:
+    branches: [main]
     paths:
       - '.github/workflows/groq-test.yml'
 
@@ -10,7 +11,7 @@ permissions: {}
 
 jobs:
   authenticate:
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == github.repository_owner)
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
