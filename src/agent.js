@@ -18,6 +18,7 @@ export function allowedAgentPath(path) {
 }
 export function pendingTaskReply(comments,owner) {
   const latest=comments.findLastIndex(c=>c.user?.login==='github-actions[bot]' && c.body?.startsWith(AGENT_MARKER));
+  if(latest<0 || !/\*\*Agent: (needs input|failed)\*\*/.test(comments[latest].body)) return false;
   return comments.slice(latest+1).some(c=>c.user?.login?.toLowerCase()===owner.toLowerCase() && c.body?.startsWith(REPLY_MARKER));
 }
 function boundedText(text,budget) {

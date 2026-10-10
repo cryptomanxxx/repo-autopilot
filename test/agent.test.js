@@ -175,3 +175,12 @@ test('queued GitHub replies older than the latest clarification cannot resume',a
   assert.equal(h.calls.some(c=>c.url.startsWith('https://api.groq.com/')),false);
   assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),false);
 });
+
+test('ineligible replies preserve working and ready status in snapshots',async()=>{
+  for(const status of ['working','ready for PR']) {
+    const history=[{id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: '+status+'**'},{id:2,user:{login:'owner'},body:REPLY_MARKER+'\nExtra reply'}];
+    assert.equal(pendingTaskReply(history,'owner'),false);
+    const tasks=await collectTasks('owner/project',{token:'x',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments?')?history:[{number:1,state:'open',user:{login:'owner'},title:'Autopilot task: x',body:TASK_MARKER+'\nx'}]})});
+    assert.equal(tasks[0].status,status);
+  }
+});

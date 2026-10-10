@@ -34,7 +34,7 @@ export function createChat({repository,authorizedUser,token,groqKey,fetchImpl=fe
     return issue;
   };
   return {
-    async messages(number){await verify();const issue=await task(number);return {issue,comments:await readTaskComments(api,number)};},
+    async messages(number){await verify();const issue=await task(number);const comments=await readTaskComments(api,number);return {issue,comments:comments.filter(c=>(c.user?.login==='github-actions[bot]' && c.body?.startsWith('<!-- repo-autopilot-agent -->')) || (c.user?.login?.toLowerCase()===owner && c.body?.startsWith(REPLY_MARKER)))};},
     async send({text,image,number}) {
       if(typeof text!=='string'||!text.trim()||text.length>1500) throw new Error('Write between 1 and 1500 characters.');
       validateScreenshot(image);await verify();

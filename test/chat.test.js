@@ -113,3 +113,16 @@ test('task writes are locked across separate authenticated sessions',async t=>{
   try {const second=await send(b);assert.equal(second.status,400);assert.match((await second.json()).error,/another session/);assert.equal(historyReads,1);} finally {release();}
   assert.equal((await first).status,200);
 });
+
+test('chat transcript excludes foreign authors and incorrectly marked owner or bot comments',async()=>{
+  const history=[
+    {id:1,user:{login:'github-actions[bot]'},body:'<!-- repo-autopilot-agent -->\n**Agent: needs input**'},
+    {id:2,user:{login:'OWNER'},body:'<!-- repo-autopilot-reply -->\nMy reply'},
+    {id:3,user:{login:'other'},body:'<!-- repo-autopilot-reply -->\nFake owner'},
+    {id:4,user:{login:'other'},body:'<!-- repo-autopilot-agent -->\nFake agent'},
+    {id:5,user:{login:'owner'},body:'<!-- repo-autopilot-agent -->\nWrong marker'},
+    {id:6,user:{login:'github-actions[bot]'},body:'<!-- repo-autopilot-reply -->\nWrong marker'}
+  ];
+  const chat=createChat({repository:'owner/repo',token:'x',fetchImpl:async url=>({ok:true,json:async()=>url.endsWith('/repos/owner/repo')?{private:false}:url.includes('/comments?')?history:{number:21,state:'open',user:{login:'owner'},title:'Autopilot task: x',body:TASK_MARKER+'\nx'}})});
+  assert.deepEqual((await chat.messages(21)).comments.map(c=>c.id),[1,2]);
+});
