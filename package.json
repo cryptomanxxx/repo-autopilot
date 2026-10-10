@@ -9,8 +9,9 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "test": "node --test",
-    "check": "node --check src/server.js && node --check src/github.js && node --check public/app.js && node --check scripts/build-pages.js && node --check src/codex.js && node --check src/progress.js && node --check scripts/snapshot-pages.js && node --check scripts/publish-data.js && node --check public/saved-data.js && node --check src/agent.js && node --check src/tasks.js && node --check scripts/run-agent.js && node --check public/task-ui.js",
+    "check": "node --check src/server.js && node --check src/github.js && node --check public/app.js && node --check scripts/build-pages.js && node --check src/codex.js && node --check src/progress.js && node --check scripts/snapshot-pages.js && node --check scripts/publish-data.js && node --check public/saved-data.js && node --check src/agent.js && node --check src/tasks.js && node --check scripts/run-agent.js && node --check public/task-ui.js && node --check src/chat.js && node --check src/chat-server.js && node --check public/chat.js",
     "build": "node scripts/build-pages.js",
-    "snapshot": "node scripts/snapshot-pages.js"
+    "snapshot": "node scripts/snapshot-pages.js",
+    "chat": "node --env-file-if-exists=.env src/chat-server.js"
   }
 }

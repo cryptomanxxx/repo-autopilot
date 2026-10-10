@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {allowedAgentPath,validateEdits,agentMessages,applyAgentChanges,runAgent,TASK_MARKER,AGENT_MARKER} from '../src/agent.js';
+import {allowedAgentPath,validateEdits,agentMessages,applyAgentChanges,runAgent,TASK_MARKER,AGENT_MARKER,REPLY_MARKER} from '../src/agent.js';
 import {taskUrl} from '../public/task-ui.js';
 import {collectTasks} from '../src/tasks.js';
 
@@ -117,5 +117,26 @@ test('truncated generation and oversized request never publish a branch',async()
     const h=harness();
     await assert.rejects(runAgent({...config,fetchImpl:(url,options)=>url.startsWith('https://api.groq.com/') ? Promise.resolve(response) : h.fetchImpl(url,options)}),/budget|account limit/);
     assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),false);
+  }
+});
+
+test('code search finds relevant code beyond file headers within the request budget',()=>{
+  const source='// unrelated\n'.repeat(300)+'const runs = data.workflow_runs.map(r => ({title:r.display_title, id:r.id}));';
+  const messages=agentMessages('GitHub Actions workflow körning behöver nummer',{'src/github.js':source});
+  assert.match(messages[1].content,/workflow_runs/);
+  assert.ok(Buffer.byteLength(JSON.stringify(messages))<=6000);
+});
+test('an owner reply resumes a waiting task once, with its own branch',async()=>{
+  const reply={id:123,user:{login:'owner'},body:REPLY_MARKER+'\nPlease change public/app.js'};
+  const bot={user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\nMore details needed'};
+  const h=harness();
+  const fetchImpl=(url,options)=>url.includes('/comments?')?Promise.resolve({ok:true,json:async()=>[bot,reply]}):url.endsWith('/issues/comments/123')?Promise.resolve({ok:true,json:async()=>reply}):h.fetchImpl(url,options);
+  await runAgent({...config,expectedComment:reply,fetchImpl});
+  assert.match(h.calls.find(c=>c.url.endsWith('/git/refs')).body,/task-1-reply-123/);
+  assert.match(h.calls.find(c=>c.url.startsWith('https://api.groq.com/')).body,/Please change/);
+  assert.match(JSON.parse(h.calls.filter(c=>c.url.endsWith('/comments')).at(-1).body).body,/attempt:123/);
+  for(const history of [[{...bot,body:bot.body+'\n<!-- repo-autopilot-attempt:123 -->'},reply],[bot,{...reply,user:{login:'other'}}],[{...bot,body:AGENT_MARKER+'\n**Agent: working**'},reply]]) {
+    const h2=harness();await runAgent({...config,expectedComment:reply,fetchImpl:(url,options)=>url.includes('/comments?')?Promise.resolve({ok:true,json:async()=>history}):h2.fetchImpl(url,options)});
+    assert.equal(h2.calls.some(c=>c.url.startsWith('https://api.groq.com/')),false);
   }
 });
