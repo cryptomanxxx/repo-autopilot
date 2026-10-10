@@ -30,7 +30,7 @@ jobs:
               sys.exit("GROQ_API_KEY is missing or empty.")
           request = urllib.request.Request(
               "https://api.groq.com/openai/v1/models",
-              headers={"Authorization": "Bearer " + key, "Accept": "application/json"},
+              headers={"Authorization": "Bearer " + key, "Accept": "application/json", "User-Agent": "repo-autopilot-groq-test/0.1"},
           )
           try:
               with urllib.request.urlopen(request, timeout=30) as response:
