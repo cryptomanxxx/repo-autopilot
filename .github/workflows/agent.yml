@@ -2,6 +2,8 @@ name: Autopilot task agent
 on:
   issues:
     types: [opened]
+  issue_comment:
+    types: [created]
 permissions: {}
 concurrency:
   group: autopilot-task-${{ github.event.issue.number }}
@@ -12,7 +14,9 @@ jobs:
       github.event.issue.user.login == (vars.AUTOPILOT_TASK_USER || github.repository_owner) &&
       github.actor == (vars.AUTOPILOT_TASK_USER || github.repository_owner) &&
       startsWith(github.event.issue.title, 'Autopilot task: ') &&
-      startsWith(github.event.issue.body, '<!-- repo-autopilot-task -->')
+      startsWith(github.event.issue.body, '<!-- repo-autopilot-task -->') &&
+      !github.event.issue.pull_request &&
+      (github.event_name == 'issues' || startsWith(github.event.comment.body, '<!-- repo-autopilot-reply -->'))
     runs-on: ubuntu-latest
     timeout-minutes: 8
     permissions:

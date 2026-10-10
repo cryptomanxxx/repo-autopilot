@@ -29,6 +29,8 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run build
+        env:
+          AUTOPILOT_CHAT_URL: ${{ vars.AUTOPILOT_CHAT_URL }}
       - run: npm run snapshot
         env:
           AUTOPILOT_TASK_USER: ${{ vars.AUTOPILOT_TASK_USER || github.repository_owner }}

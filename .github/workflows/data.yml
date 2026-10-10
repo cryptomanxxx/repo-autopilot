@@ -23,7 +23,7 @@ jobs:
     if: >-
       ((github.event_name != 'workflow_run' ||
         github.event.workflow_run.name != 'Autopilot task agent' ||
-        (github.event.workflow_run.event == 'issues' &&
+        ((github.event.workflow_run.event == 'issues' || github.event.workflow_run.event == 'issue_comment') &&
          github.event.workflow_run.actor.login == (vars.AUTOPILOT_TASK_USER || github.repository_owner))) &&
       ((github.event_name != 'issues' && github.event_name != 'issue_comment') ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||

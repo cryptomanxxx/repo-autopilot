@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {allowedAgentPath,validateEdits,agentMessages,applyAgentChanges,runAgent,TASK_MARKER,AGENT_MARKER} from '../src/agent.js';
+import {allowedAgentPath,validateEdits,taskInstruction,pendingTaskReply,agentMessages,applyAgentChanges,runAgent,TASK_MARKER,AGENT_MARKER,REPLY_MARKER} from '../src/agent.js';
 import {taskUrl} from '../public/task-ui.js';
 import {collectTasks} from '../src/tasks.js';
 
@@ -117,5 +117,70 @@ test('truncated generation and oversized request never publish a branch',async()
     const h=harness();
     await assert.rejects(runAgent({...config,fetchImpl:(url,options)=>url.startsWith('https://api.groq.com/') ? Promise.resolve(response) : h.fetchImpl(url,options)}),/budget|account limit/);
     assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),false);
+  }
+});
+
+test('code search finds relevant code beyond file headers within the request budget',()=>{
+  const source='// unrelated\n'.repeat(300)+'const runs = data.workflow_runs.map(r => ({title:r.display_title, id:r.id}));';
+  const messages=agentMessages('GitHub Actions workflow körning behöver nummer',{'src/github.js':source});
+  assert.match(messages[1].content,/workflow_runs/);
+  assert.ok(Buffer.byteLength(JSON.stringify(messages))<=6000);
+});
+test('an owner reply resumes a waiting task once, with its own branch',async()=>{
+  const reply={id:123,user:{login:'owner'},body:REPLY_MARKER+'\nPlease change public/app.js'};
+  const bot={user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\nMore details needed'};
+  const h=harness();
+  const fetchImpl=(url,options)=>url.includes('/comments?')?Promise.resolve({ok:true,json:async()=>[bot,reply]}):url.endsWith('/issues/comments/123')?Promise.resolve({ok:true,json:async()=>reply}):h.fetchImpl(url,options);
+  await runAgent({...config,expectedComment:reply,fetchImpl});
+  assert.match(h.calls.find(c=>c.url.endsWith('/git/refs')).body,/task-1-reply-123/);
+  assert.match(h.calls.find(c=>c.url.startsWith('https://api.groq.com/')).body,/Please change/);
+  assert.match(JSON.parse(h.calls.filter(c=>c.url.endsWith('/comments')).at(-1).body).body,/attempt:123/);
+  for(const history of [[{...bot,body:bot.body+'\n<!-- repo-autopilot-attempt:123 -->'},reply],[bot,{...reply,user:{login:'other'}}],[{...bot,body:AGENT_MARKER+'\n**Agent: working**'},reply]]) {
+    const h2=harness();await runAgent({...config,expectedComment:reply,fetchImpl:(url,options)=>url.includes('/comments?')?Promise.resolve({ok:true,json:async()=>history}):h2.fetchImpl(url,options)});
+    assert.equal(h2.calls.some(c=>c.url.startsWith('https://api.groq.com/')),false);
+  }
+});
+
+test('continuations retain the question and earlier reply context without exceeding the model budget',()=>{
+  const issue={body:TASK_MARKER+'\nChange the workflow title'};
+  const comments=[{id:1,user:{login:'owner'},body:REPLY_MARKER+'\nI mean workflow runs'}, {id:2,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\nWhich option: 1. Run ID, or 2. Run number?'},{id:3,user:{login:'owner'},body:REPLY_MARKER+'\nThe second option'}];
+  const instruction=taskInstruction(issue,comments,'owner',3);
+  assert.match(instruction,/Run number/);assert.match(instruction,/The second option/);assert.match(instruction,/I mean workflow runs/);
+  assert.ok(instruction.indexOf('Which option')<instruction.indexOf('The second option'));
+  for(const char of ['日','"','\\']) {
+    const long={body:TASK_MARKER+'\n'+char.repeat(3500)};
+    const history=[{id:2,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\n'+char.repeat(3000)},{id:3,user:{login:'owner'},body:REPLY_MARKER+'\n'+char.repeat(3500)}];
+    const bounded=taskInstruction(long,history,'owner',3);
+    assert.ok(Buffer.byteLength(JSON.stringify(agentMessages(bounded,{'public/app.js':'source'})),'utf8')<=6000);
+    assert.ok(Buffer.byteLength(JSON.stringify(agentMessages(taskInstruction(long,[],'owner'),{})),'utf8')<=6000);
+  }
+});
+test('pending owner replies count only after the latest agent status',()=>{
+  const waiting={id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**'};
+  const reply={id:2,user:{login:'owner'},body:REPLY_MARKER+'\nSecond option'};
+  assert.equal(pendingTaskReply([waiting,reply],'OWNER'),true);
+  assert.equal(pendingTaskReply([reply,waiting],'owner'),false);
+  assert.equal(pendingTaskReply([waiting,{...reply,user:{login:'other'}}],'owner'),false);
+});
+
+test('task snapshots display a pending follow-up as queued',async()=>{
+  const tasks=await collectTasks('owner/project',{token:'x',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments?')?[{id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**'},{id:2,user:{login:'owner'},body:REPLY_MARKER+'\nThe second option'}]:[{number:1,state:'open',user:{login:'owner'},title:'Autopilot task: improve spacing',body:TASK_MARKER+'\nImprove spacing'}]})});
+  assert.equal(tasks[0].status,'queued');
+});
+
+test('queued GitHub replies older than the latest clarification cannot resume',async()=>{
+  const reply={id:2,user:{login:'owner'},body:REPLY_MARKER+'\nThe second option'};
+  const history=[{id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\nFirst question'},reply,{id:3,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: needs input**\nA newer question'}];
+  const h=harness();await runAgent({...config,expectedComment:reply,fetchImpl:(url,options)=>url.includes('/comments?')?Promise.resolve({ok:true,json:async()=>history}):h.fetchImpl(url,options)});
+  assert.equal(h.calls.some(c=>c.url.startsWith('https://api.groq.com/')),false);
+  assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),false);
+});
+
+test('ineligible replies preserve working and ready status in snapshots',async()=>{
+  for(const status of ['working','ready for PR']) {
+    const history=[{id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: '+status+'**'},{id:2,user:{login:'owner'},body:REPLY_MARKER+'\nExtra reply'}];
+    assert.equal(pendingTaskReply(history,'owner'),false);
+    const tasks=await collectTasks('owner/project',{token:'x',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments?')?history:[{number:1,state:'open',user:{login:'owner'},title:'Autopilot task: x',body:TASK_MARKER+'\nx'}]})});
+    assert.equal(tasks[0].status,status);
   }
 });

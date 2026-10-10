@@ -40,3 +40,8 @@
 .review-flow li:last-child strong:after{content:'Latest';display:inline-block;margin-left:10px;padding:2px 7px;border-radius:9px;background:#392c55;color:#ead8ff;font-size:10px;font-weight:600}
 
 textarea{display:block;width:100%;resize:vertical;background:#0b1220;color:inherit;border:1px solid #435975;border-radius:8px;padding:12px;font:inherit}#agent-panel{margin:24px 0}.task-row{padding:14px 16px}.task-row+.task-row{border-top:1px solid #2a3c55}.task-message{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}.task-link{display:inline-block;margin:4px 18px 4px 0;font-size:13px}
+
+.chat-messages { margin: 1rem 0; max-height: 55vh; overflow-y: auto; }
+#chat-form { display: grid; gap: .7rem; }
+#preview { max-width: 100%; max-height: 24rem; object-fit: contain; }
+#conversation { max-width: 100%; }
