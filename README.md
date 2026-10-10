@@ -6,7 +6,7 @@ An open-source GitHub dashboard and future development orchestrator for any repo
 
 [Open the dashboard](https://cryptomanxxx.github.io/repo-autopilot/) — this address becomes available after the Pages workflow is merged, Pages is enabled, and deployment succeeds.
 
-The hosted dashboard works with **public repositories** directly through GitHub's API. It requires no Vercel server, login, GitHub token or paid AI API. Enter any `owner/repository`; the hosted mode fetches 5 recent PRs and 15 workflow runs. GitHub's anonymous API limit still applies (normally 60 requests/hour per IP); loading 5 PRs uses up to 28 requests. Refreshes within 60 seconds reuse the browser's in-memory snapshot. Partial detail failures are shown explicitly. Private repos remain supported only by the local server mode below.
+The hosted dashboard works with **public repositories** directly through GitHub's API. It requires no Vercel server, login, GitHub token or paid AI API. Enter any `owner/repository` or full `https://github.com/owner/repository` URL; the hosted mode fetches 5 recent PRs and 15 workflow runs. GitHub's anonymous API limit still applies (normally 60 requests/hour per IP); loading 5 PRs uses up to 28 requests. Refreshes within 60 seconds reuse the browser's in-memory snapshot. Partial detail failures are shown explicitly. Private repos remain supported only by the local server mode below.
 
 ### Enable publishing
 
@@ -36,7 +36,7 @@ cp .env.example .env
 npm start
 ```
 
-Open http://127.0.0.1:3000 and enter `owner/repository`. Public repositories can be read without a token, subject to GitHub's anonymous rate limit. Private repositories require a token with read access to the selected repositories and Metadata, Pull requests, Issues, Actions, Checks and Commit statuses. Credentials remain on the server; the browser receives only dashboard data. Snapshots are cached for 60 seconds with at most 20 repository entries.
+Open http://127.0.0.1:3000 and enter `owner/repository` or a full GitHub repository URL. Public repositories can be read without a token, subject to GitHub's anonymous rate limit. Private repositories require a token with read access to the selected repositories and Metadata, Pull requests, Issues, Actions, Checks and Commit statuses. Credentials remain on the server; the browser receives only dashboard data. Snapshots are cached for 60 seconds with at most 20 repository entries.
 
 The server binds to loopback and is intended for local development. Do not expose this token-backed server publicly: multi-user authentication, repository authorization, rate limiting and production hosting have not been implemented.
 
