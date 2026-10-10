@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "test": "node --test",
-    "check": "node --check src/server.js && node --check src/github.js && node --check public/app.js && node --check scripts/build-pages.js",
+    "check": "node --check src/server.js && node --check src/github.js && node --check public/app.js && node --check scripts/build-pages.js && node --check src/codex.js",
     "build": "node scripts/build-pages.js"
   }
 }

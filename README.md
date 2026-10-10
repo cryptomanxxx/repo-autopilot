@@ -6,7 +6,7 @@ An open-source GitHub dashboard and future development orchestrator for any repo
 
 [Open the dashboard](https://cryptomanxxx.github.io/repo-autopilot/) — this address becomes available after the Pages workflow is merged, Pages is enabled, and deployment succeeds.
 
-The hosted dashboard works with **public repositories** directly through GitHub's API. It requires no Vercel server, login, GitHub token or paid AI API. Enter any `owner/repository` or full `https://github.com/owner/repository` URL; the hosted mode fetches 5 recent PRs and 15 workflow runs. GitHub's anonymous API limit still applies (normally 60 requests/hour per IP); loading 5 PRs uses up to 28 requests. Refreshes within 60 seconds reuse the browser's in-memory snapshot. Partial detail failures are shown explicitly. Private repos remain supported only by the local server mode below.
+The hosted dashboard works with **public repositories** directly through GitHub's API. It requires no Vercel server, login, GitHub token or paid AI API. Enter any `owner/repository` or full `https://github.com/owner/repository` URL; the hosted mode fetches 5 recent PRs and 15 workflow runs. GitHub's anonymous API limit still applies (normally 60 requests/hour per IP); loading 5 PRs uses up to 33 requests. Refreshes within 60 seconds reuse the browser's in-memory snapshot. Partial detail failures are shown explicitly. Private repos remain supported only by the local server mode below.
 
 ### Enable publishing
 
@@ -24,7 +24,7 @@ python -m http.server 8080 --directory dist
 
 View the 10 most recently updated pull requests, opened/merged timestamps, review submissions with their commit SHA, Codex comment text, head-commit check/status results, and 15 recent GitHub Actions runs. Links open the corresponding GitHub discussion or workflow. Empty states and API errors are shown explicitly.
 
-Autonomy is **off**. This release does not edit code, request reviews, run agents, or merge PRs. A successful CI indicator is informational: it does not establish branch protection, resolved conversations, current review approval, or merge eligibility. Review histories and comments are limited to 100 entries per endpoint, with truncation warnings. Codex thumbs-up reactions are not yet collected and must not be inferred from missing comments.
+Autonomy is **off**. This release does not edit code, request reviews, run agents, or merge PRs. A successful CI indicator is informational: it does not establish branch protection, resolved conversations, current review approval, or merge eligibility. Review histories and comments are limited to 100 entries per endpoint, with truncation warnings. Codex status includes PR reactions, review summaries and comments. A thumbs-up is shown as current only when paired with a completed Code Review summary for the PR head commit and a reaction timestamp at or after completion. Current-commit findings and explicit no-findings comments are supported; older or unlinked activity is labeled unverified. A newer review request invalidates the earlier status. Incomplete histories never establish a clear result. These are informational signals, not formal GitHub approvals or merge authorization.
 
 ## Run
 
