@@ -2,6 +2,16 @@ import {repositoryName} from './github.js';
 export const TASK_PREFIX='Autopilot task: ';
 export const TASK_MARKER='<!-- repo-autopilot-task -->';
 export const AGENT_MARKER='<!-- repo-autopilot-agent -->';
+export async function readTaskComments(get,number) {
+  const comments=[];
+  for(let page=1;page<=10;page++) {
+    const batch=await get(`issues/${number}/comments?per_page=100&page=${page}`);
+    if(!Array.isArray(batch)) throw new Error('Task comment history is unavailable.');
+    comments.push(...batch);
+    if(batch.length<100) return comments;
+  }
+  throw new Error('Task comment history exceeds the verification limit.');
+}
 export function allowedAgentPath(path) {
   return typeof path === 'string' && !path.includes('..') && !path.includes('\\') && !path.split('/').some(part=>part.startsWith('.')) && (path === 'README.md' || /^(src|public|test)\/[a-zA-Z0-9_./-]+\.(js|css|html|md)$/.test(path)) && path !== 'src/agent.js' && path !== 'src/tasks.js';
 }
@@ -33,7 +43,7 @@ export async function runAgent({repository,issueNumber,token,groqKey,expectedTas
   const issue=await api(`issues/${issueNumber}`);
   if(issue.pull_request || issue.state !== 'open' || issue.user?.login?.toLowerCase() !== taskUser || !issue.title?.startsWith(TASK_PREFIX) || !issue.body?.startsWith(TASK_MARKER)) return;
   if(!expectedTask || issue.body !== expectedTask.body || issue.title !== expectedTask.title) return;
-  const comments=await api(`issues/${issueNumber}/comments?per_page=100`);
+  const comments=await readTaskComments(api,issueNumber);
   if(comments.some(c=>c.user?.login==='github-actions[bot]' && c.body?.startsWith(AGENT_MARKER))) return;
   const notify=(status,text)=>api(`issues/${issueNumber}/comments`,'POST',{body:`${AGENT_MARKER}\n**Agent: ${status}**\n\n${text}`});
   if(!groqKey?.trim()) {

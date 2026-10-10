@@ -91,3 +91,10 @@ test('task history includes only owner tasks and marked agent replies',async()=>
   const tasks=await collectTasks('owner/project',{token:'secret',authorizedUser:'Owner',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments') ? [{user:{login:'intruder'},body:AGENT_MARKER+'\n**Agent: ready for PR**'},{user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: working**\nReading code'}] : [task,{...task,user:{login:'other'}}]})});
   assert.equal(tasks.length,1);assert.equal(tasks[0].status,'working');assert.equal(tasks[0].messages.length,2);
 });
+test('task history finds the latest marked reply after the first 100 comments',async()=>{
+  const task={number:1,title:'Autopilot task: spacing',body:TASK_MARKER+'\nFix spacing',user:{login:'owner'},html_url:'https://github.com/owner/project/issues/1',state:'open'};
+  const first=[{user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: working**'},...Array.from({length:99},()=>({user:{login:'other'},body:'ordinary comment'}))];
+  const last=[{user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: ready for PR**\n[Review changes and create PR](https://github.com/owner/project/compare/main...autopilot/task-1)'}];
+  const tasks=await collectTasks('owner/project',{token:'secret',fetchImpl:async url=>({ok:true,json:async()=>!url.includes('/comments?') ? [task] : url.includes('page=2') ? last : first})});
+  assert.equal(tasks[0].status,'ready for PR');assert.match(tasks[0].compareUrl,/autopilot\/task-1/);
+});
