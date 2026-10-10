@@ -1,5 +1,6 @@
 import {createGitHub, repositoryName} from './github.js';
 import {loadSavedData} from './saved-data.js';
+import {taskUrl,renderTasks} from './task-ui.js';
 const $ = id => document.getElementById(id);
 function el(tag, text, className) {const node = document.createElement(tag);node.textContent = text;if(className) node.className = className;return node;}
 function link(text, url) {const node = el('a',text);if(typeof url === 'string' && url.startsWith('https://github.com/')) {node.href=url;node.target='_blank';node.rel='noopener noreferrer';}return node;}
@@ -13,6 +14,14 @@ let loading=false;
 let backgroundRefresh=false;
 let usingSavedSnapshot=false;
 let lastRefresh=0;
+const activeWork=()=>latestData?.pulls.some(pr=>pr.state === 'open') || latestData?.tasks?.some(task=>['queued','working'].includes(task.status));
+$('agent-task').addEventListener('submit',event=>{
+  event.preventDefault();
+  if(!usingSavedSnapshot) return;
+  const text=$('task-text').value.trim();if(!text) return;
+  try {window.open(taskUrl(configuredRepository,text),'_blank','noopener,noreferrer');} catch(error) {$('task-status').textContent=error.message;return;}
+  $('task-status').textContent='Confirm the task on GitHub to start the agent. Its reply will appear below after saved data refreshes.';
+});
 function applyFilters() {
   const choice=$('pr-filter').value;
   for(const row of $('pulls').querySelectorAll('.pr-row')) row.hidden=!(choice === 'all' || row.dataset.state === choice || choice === 'attention' && row.dataset.attention === 'true');
@@ -24,11 +33,11 @@ function updateAge() {
   if(!latestData) return;
   const age=Math.max(0,Math.floor((Date.now()-Date.parse(latestData.fetchedAt))/60000));
   if(!Number.isFinite(age)) {$('data-age').textContent='Data timestamp unavailable';return;}
-  $('data-age').textContent=`Data updated ${age} minute${age === 1 ? '' : 's'} ago · ${usingSavedSnapshot ? latestData.pulls.some(pr=>pr.state === 'open') ? 'Page checks saved data every 20 seconds' : 'Page checks saved data every minute' : 'Refresh manually to get latest data'}`;
+  $('data-age').textContent=`Data updated ${age} minute${age === 1 ? '' : 's'} ago · ${usingSavedSnapshot ? activeWork() ? 'Page checks saved data every 20 seconds' : 'Page checks saved data every minute' : 'Refresh manually to get latest data'}`;
 }
 setInterval(()=>{
   updateAge();
-  if(!document.hidden && !loading && usingSavedSnapshot && Date.now()-lastRefresh >= (latestData?.pulls.some(pr=>pr.state === 'open') ? 20000 : 60000)) {
+  if(!document.hidden && !loading && usingSavedSnapshot && Date.now()-lastRefresh >= (activeWork() ? 20000 : 60000)) {
     try {if(repositoryName($('repo').value).toLowerCase() !== configuredRepository) return;} catch {return;}
     lastRefresh=Date.now();backgroundRefresh=true;$('repository').requestSubmit();
   }
@@ -61,6 +70,7 @@ $('repository').addEventListener('submit',async event => {
       data={...data,pulls:data.pulls.map(pr=>pr.readiness.state === 'ready' ? {...pr,readiness:{state:'unknown',label:'Cannot verify merge readiness',reasons:['Saved snapshot is stale; check current GitHub status']}} : pr)};
     }
     usingSavedSnapshot=savedSnapshot;latestData=data;updateAge();
+    $('agent-panel').hidden=!savedSnapshot;renderTasks($('tasks'),data.tasks);
     $('pulls').replaceChildren();
     const headings=el('div','','pr-summary list-head');for(const title of ['PR','Merge','CI','Codex','#Reviews','#Commits','#P1','#P2']) headings.append(el('span',title));headings.setAttribute('aria-hidden','true');$('pulls').append(headings);
     for(const pr of data.pulls) {

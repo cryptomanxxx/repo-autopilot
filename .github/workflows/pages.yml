@@ -31,6 +31,7 @@ jobs:
       - run: npm run build
       - run: npm run snapshot
         env:
+          AUTOPILOT_TASK_USER: ${{ vars.AUTOPILOT_TASK_USER || github.repository_owner }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
       - uses: actions/upload-pages-artifact@v3
