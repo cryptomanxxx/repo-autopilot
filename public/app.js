@@ -28,12 +28,17 @@ $('repository').addEventListener('submit',async event => {
     $('pulls').replaceChildren();
     for(const pr of data.pulls) {
       const node = card(`#${pr.number} ${pr.title}`,pr.url,[`${pr.state}${pr.draft ? ' · draft' : ''} · CI: ${pr.ci}`,`Head: ${pr.headSha.slice(0,10)} · Opened: ${new Date(pr.openedAt).toLocaleString()}`,pr.mergedAt ? `Merged: ${new Date(pr.mergedAt).toLocaleString()}` : `Updated: ${new Date(pr.updatedAt).toLocaleString()}`]);
+      node.prepend(el('p',`${pr.readiness.state === 'ready' ? '✅' : pr.readiness.state === 'unknown' ? '❔' : pr.readiness.state === 'merged' ? '✓' : '⏳'} ${pr.readiness.label}`,`readiness readiness-${pr.readiness.state}`));
+      for(const reason of pr.readiness.reasons) node.append(el('p',reason,'muted'));
+      const progress=pr.progress;
+      node.append(el('p',`${['running','findings','clear'].includes(pr.codex.state) || progress.currentCompleted ? '✅' : '❔'} Codex review acknowledged`));
+      const waiting=['running','requested'].includes(pr.codex.state);
+      node.append(el('p',`${waiting ? '🔄' : progress.currentCompleted ? '✅' : '⏳'} Latest code review ${waiting ? 'pending' : progress.currentCompleted ? 'completed' : 'not verified'}`));
       node.append(el('p',pr.codex.label,`codex-status codex-${pr.codex.state}`));
-      if(pr.codex.commit) node.append(el('p',`Codex reviewed: ${pr.codex.commit}`));
-      node.append(el('p',pr.reviews.length ? pr.reviews.map(r=>`${r.author}: ${r.state} (${r.commit?.slice(0,7) || 'no commit'})`).join(' · ') : 'No formal GitHub review submissions; see Codex status above.'));
+      node.append(el('p',`Completed reviews: ${progress.reviewCount === null ? 'unknown' : `at least ${progress.reviewCount}`} · Commits after review: ${progress.updatesAfterReview ?? 'unknown'}`));
       if(pr.detailError) node.append(el('p',`Details unavailable: ${pr.detailError}`,'error'));
-      const details = el('details','');details.append(el('summary',`Codex feedback (${pr.codexComments.length})`));
-      for(const c of pr.codexComments) {details.append(link('View on GitHub',c.url),el('pre',c.body || '(No comment text)'));}node.append(details);$('pulls').append(node);
+      node.append(link('View review history on GitHub',pr.url));
+      $('pulls').append(node);
     }
     if(!data.pulls.length) $('pulls').append(el('p','No pull requests found.'));
     $('workflows').replaceChildren(...data.workflows.map(r=>card(r.title || r.name,r.url,[`${r.name} · ${r.conclusion || r.status}`,`${r.branch} · ${r.sha.slice(0,10)} · ${new Date(r.updatedAt).toLocaleString()}`])));

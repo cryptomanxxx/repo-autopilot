@@ -6,7 +6,7 @@ An open-source GitHub dashboard and future development orchestrator for any repo
 
 [Open the dashboard](https://cryptomanxxx.github.io/repo-autopilot/) — this address becomes available after the Pages workflow is merged, Pages is enabled, and deployment succeeds.
 
-The hosted dashboard works with **public repositories** directly through GitHub's API. It requires no Vercel server, login, GitHub token or paid AI API. Enter any `owner/repository` or full `https://github.com/owner/repository` URL; the hosted mode fetches 5 recent PRs and 15 workflow runs. GitHub's anonymous API limit still applies (normally 60 requests/hour per IP); loading 5 PRs uses up to 33 requests. Refreshes within 60 seconds reuse the browser's in-memory snapshot. Partial detail failures are shown explicitly. Private repos remain supported only by the local server mode below.
+The hosted dashboard works with **public repositories** directly through GitHub's API. It requires no Vercel server, login, GitHub token or paid AI API. Enter any `owner/repository` or full `https://github.com/owner/repository` URL; the hosted mode fetches 5 recent PRs and 15 workflow runs. GitHub's anonymous API limit still applies (normally 60 requests/hour per IP); loading 5 PRs uses up to 43 REST requests (with five open PRs). Refreshes within 60 seconds reuse the browser's in-memory snapshot. Partial detail failures are shown explicitly. Private repos remain supported only by the local server mode below.
 
 ### Enable publishing
 
@@ -54,3 +54,14 @@ npm test
 5. Optional merge policy enforcing current-head review approval, required checks, branch rules and resolved feedback.
 
 ChatGPT UI integration and background work are separate components: a dashboard presents state; an external worker continues tasks when the chat is closed. Future code-agent use may require paid API access or other compute; no subscription coverage or free hosting is assumed.
+
+
+## PR progress and merge readiness
+
+PR cards show review acknowledgement, completion for the latest code, Codex outcome, completed review rounds, commits after review and merge readiness. Confirmation summaries and raw technical feedback are hidden; use the GitHub history link for details.
+
+Review counts are **lower bounds**: GitHub edits Codex summaries in place, so some older clean rounds cannot be recovered. Review submissions, outcome comments and summaries for the same commit within 10 seconds are deduplicated. Commits after review counts subsequent commits in the PR after the earliest reviewed commit found in its history; it does not prove that feedback was fixed. Missing/truncated histories show unknown update counts.
+
+Readiness distinguishes merged, closed, known blockers and unverified state. The public Pages dashboard can identify drafts, conflicts, CI failures and Codex findings, but cannot fully verify resolved threads and protected-branch requirements anonymously. It therefore does **not** show green merge readiness from CI alone.
+
+The local token-backed mode additionally asks GitHub GraphQL for current-head merge state, review decision and conversation resolution. Ready requires current Codex clearance, complete successful CI, conflict-free merging, GitHub CLEAN state, no missing approvals or requested changes, and all conversations resolved. Truncated thread results or API errors stay unverified. This is a snapshot, never permission to bypass GitHub rules or an automatic merge action. The token must support the GraphQL read operations; otherwise readiness stays unknown.
