@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {allowedAgentPath,validateEdits,runAgent,TASK_MARKER,AGENT_MARKER} from '../src/agent.js';
+import {allowedAgentPath,validateEdits,agentMessages,applyAgentChanges,runAgent,TASK_MARKER,AGENT_MARKER} from '../src/agent.js';
 import {taskUrl} from '../public/task-ui.js';
 import {collectTasks} from '../src/tasks.js';
 
@@ -22,7 +22,7 @@ function harness({author='owner',closed=false,edits=[{path:'public/app.js',conte
   const calls=[];let reads=0;
   const fetchImpl=async(url,options)=>{
     calls.push({url,...options});let data;
-    if(url.startsWith('https://api.groq.com/')) data={choices:[{message:{content:JSON.stringify({summary:'Changed spacing',files:edits})}}]};
+    if(url.startsWith('https://api.groq.com/')) data={choices:[{message:{content:JSON.stringify({summary:'Changed spacing',changes:edits.map(f=>({path:f.path,before:'old source',after:f.content}))})}}]};
     else if(url.endsWith('/repos/owner/project')) data={private:false,default_branch:'main'};
     else if(url.endsWith('/issues/1')) {reads++;data={state:closed && reads>1 ? 'closed' : 'open',user:{login:author},title:'Autopilot task: improve spacing',body:TASK_MARKER+'\nImprove spacing'};}
     else if(url.includes('/comments?')) data=[];
@@ -45,7 +45,7 @@ test('owner task generates a reviewable branch and no pull request or merge',asy
   const ref=h.calls.find(c=>c.url.endsWith('/git/refs'));assert.deepEqual(JSON.parse(ref.body),{ref:'refs/heads/autopilot/task-1',sha:'commit'});
   assert.equal(h.calls.some(c=>c.url.includes('/pulls')),false);
   const model=h.calls.find(c=>c.url.startsWith('https://api.groq.com/'));assert.equal(model.body.includes('github-secret'),false);assert.equal(model.body.includes('groq-secret'),false);
-  assert.equal(JSON.parse(model.body).model,'openai/gpt-oss-120b');assert.equal(JSON.parse(model.body).reasoning_effort,'low');
+  assert.equal(JSON.parse(model.body).model,'openai/gpt-oss-120b');assert.equal(JSON.parse(model.body).reasoning_effort,'low');assert.equal(JSON.parse(model.body).max_completion_tokens,1500);
   const last=h.calls.filter(c=>c.url.endsWith('/comments')).at(-1);assert.match(JSON.parse(last.body).body,/ready for PR/);assert.match(JSON.parse(last.body).body,/Tests have not run yet/);
 });
 test('notification failure after branch publication retains ready status and compare link',async()=>{
@@ -98,4 +98,24 @@ test('task history finds the latest marked reply after the first 100 comments',a
   const last=[{user:{login:'github-actions[bot]'},body:AGENT_MARKER+'\n**Agent: ready for PR**\n[Review changes and create PR](https://github.com/owner/project/compare/main...autopilot/task-1)'}];
   const tasks=await collectTasks('owner/project',{token:'secret',fetchImpl:async url=>({ok:true,json:async()=>!url.includes('/comments?') ? [task] : url.includes('page=2') ? last : first})});
   assert.equal(tasks[0].status,'ready for PR');assert.match(tasks[0].compareUrl,/autopilot\/task-1/);
+});
+
+test('model request stays below free-tier budget with Unicode and large source',()=>{
+  const messages=agentMessages('Refresh workflow number',{'public/app.js':('const workflow="日本語";\n').repeat(5000),'src/github.js':'x'.repeat(30000)});
+  assert.ok(Buffer.byteLength(JSON.stringify(messages),'utf8')<=6000);
+  assert.throws(()=>agentMessages('日'.repeat(6000),{}),/budget/);
+});
+test('exact replacements preserve unread source and reject ambiguous matches',()=>{
+  const files={'public/app.js':'prefix\nold\nsuffix'};
+  assert.equal(applyAgentChanges({summary:'x',changes:[{path:'public/app.js',before:'old',after:'new'}]},files).files[0].content,'prefix\nnew\nsuffix');
+  for(const before of ['','missing','old']) assert.throws(()=>applyAgentChanges({changes:[{path:'public/app.js',before,after:'new'}]},{'public/app.js':'old old'}));
+  assert.throws(()=>applyAgentChanges({changes:[{path:'public/unread.js',before:'x',after:'y'}]},files),/unsupported/);
+});
+
+test('truncated generation and oversized request never publish a branch',async()=>{
+  for(const response of [{ok:true,json:async()=>({choices:[{finish_reason:'length',message:{content:'{}'}}]})},{ok:false,status:413}]) {
+    const h=harness();
+    await assert.rejects(runAgent({...config,fetchImpl:(url,options)=>url.startsWith('https://api.groq.com/') ? Promise.resolve(response) : h.fetchImpl(url,options)}),/budget|account limit/);
+    assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),false);
+  }
 });
