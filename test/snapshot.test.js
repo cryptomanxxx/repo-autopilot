@@ -42,3 +42,25 @@ test('collection failure does not overwrite a previously saved snapshot',async()
   assert.equal(await readFile(`${dir}/snapshot.json`,'utf8'),'previous snapshot');
  } finally {await rm(dir,{recursive:true,force:true});}
 });
+
+test('visibility changes during collection prevent publication and preserve previous data',async()=>{
+ const dir=await mkdtemp(`${tmpdir()}/autopilot-visibility-`);
+ const {writeFile}=await import('node:fs/promises');
+ try {
+  for(const finalResult of [{ok:true,json:async()=>({private:true})},{ok:false,status:403}]) {
+   await writeFile(`${dir}/snapshot.json`,'previous public snapshot');
+   let metadataCalls=0;
+   const fetchImpl=async(url)=>{
+    if(url.endsWith('/repos/a/b')) {
+     metadataCalls++;
+     if(metadataCalls===3) return finalResult;
+     return {ok:true,json:async()=>({private:false,full_name:'a/b'})};
+    }
+    return {ok:true,json:async()=>url.includes('/actions/runs')?{workflow_runs:[]}:[]};
+   };
+   await assert.rejects(publishSnapshot({repository:'a/b',token:'test',fetchImpl,output:pathToFileURL(`${dir}/`)}));
+   assert.equal(metadataCalls,3);
+   assert.equal(await readFile(`${dir}/snapshot.json`,'utf8'),'previous public snapshot');
+  }
+ } finally {await rm(dir,{recursive:true,force:true});}
+});
