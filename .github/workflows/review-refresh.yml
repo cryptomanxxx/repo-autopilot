@@ -1,0 +1,14 @@
+# Review events use PR refs. Signal a default-branch workflow_run so Pages
+# deployment does not depend on permission to deploy from a PR branch.
+name: Dashboard review refresh signal
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+permissions: {}
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    steps:
+      - run: 'true'
