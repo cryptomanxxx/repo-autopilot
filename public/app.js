@@ -1,13 +1,28 @@
+import {createGitHub, repositoryName} from './github.js';
 const $ = id => document.getElementById(id);
 function el(tag, text, className) {const node = document.createElement(tag);node.textContent = text;if(className) node.className = className;return node;}
 function link(text, url) {const node = el('a',text);if(typeof url === 'string' && url.startsWith('https://github.com/')) {node.href=url;node.target='_blank';node.rel='noopener noreferrer';}return node;}
 function card(title, url, lines) {const node = el('article','');node.append(link(title,url));for(const line of lines) node.append(el('p',line));return node;}
+const staticMode = document.documentElement.dataset.mode === 'static';
+const github = createGitHub({pullLimit:5});
+const snapshots = new Map();
+$('mode-note').textContent = staticMode ? 'Public repositories only · No login or token required · GitHub anonymous API limits apply. Fetches 5 recent PRs to reduce API usage.' : 'Local server mode · Credentials stay on the server.';
+const selected = new URLSearchParams(location.search).get('repo');
+if(selected) $('repo').value = selected;
 $('repository').addEventListener('submit',async event => {
   event.preventDefault();const button = event.target.querySelector('button');button.disabled=true;
   $('status').textContent='Fetching GitHub data…';$('dashboard').hidden=true;
   try {
-    const response = await fetch(`/api/dashboard?repo=${encodeURIComponent($('repo').value.trim())}`);
-    const data = await response.json();if(!response.ok) throw new Error(data.error || 'Unable to load dashboard.');
+    const repo = repositoryName($('repo').value.trim());
+    let data;
+    if(staticMode) {
+      const cached = snapshots.get(repo);
+      if(cached && Date.now()-cached.at < 60000) data = cached.data;
+      else {data = await github.snapshot(repo);if(snapshots.size >= 20) snapshots.delete(snapshots.keys().next().value);snapshots.set(repo,{at:Date.now(),data});}
+    } else {
+      const response = await fetch(`./api/dashboard?repo=${encodeURIComponent(repo)}`);
+      data = await response.json();if(!response.ok) throw new Error(data.error || 'Unable to load dashboard.');
+    }
     $('summary').replaceChildren(el('strong',data.repository),el('span',`Snapshot: ${new Date(data.fetchedAt).toLocaleString()}`),el('span',`${data.pulls.filter(p=>p.state==='open').length} open in recent PRs`));
     $('pulls').replaceChildren();
     for(const pr of data.pulls) {

@@ -2,6 +2,24 @@
 
 An open-source GitHub dashboard and future development orchestrator for any repository. MIT licensed, with no Debatt-AI-specific configuration.
 
+## Web dashboard (GitHub Pages)
+
+[Open the dashboard](https://cryptomanxxx.github.io/repo-autopilot/) — this address becomes available after the Pages workflow is merged, Pages is enabled, and deployment succeeds.
+
+The hosted dashboard works with **public repositories** directly through GitHub's API. It requires no Vercel server, login, GitHub token or paid AI API. Enter any `owner/repository`; the hosted mode fetches 5 recent PRs and 15 workflow runs. GitHub's anonymous API limit still applies (normally 60 requests/hour per IP); loading 5 PRs uses up to 28 requests. Refreshes within 60 seconds reuse the browser's in-memory snapshot. Partial detail failures are shown explicitly. Private repos remain supported only by the local server mode below.
+
+### Enable publishing
+
+In **Settings → Pages → Build and deployment → Source**, select **GitHub Actions**. After merging the Pages workflow into `main`, check **Actions → Deploy dashboard to GitHub Pages**. If needed, use **Run workflow**. The completed deployment reports the exact URL. Put that URL into **About → Edit → Website**.
+
+The deployment uploads only the static files in `dist/`; no `.env`, token or server is published. Assets use relative paths so the dashboard works under the `/repo-autopilot/` project path. This static dashboard does not host MCP or autonomous workers.
+
+```sh
+npm run build
+# For a local static preview:
+python -m http.server 8080 --directory dist
+```
+
 ## v0.1: real GitHub dashboard
 
 View the 10 most recently updated pull requests, opened/merged timestamps, review submissions with their commit SHA, Codex comment text, head-commit check/status results, and 15 recent GitHub Actions runs. Links open the corresponding GitHub discussion or workflow. Empty states and API errors are shown explicitly.

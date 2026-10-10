@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {createGitHub, repositoryName} from './github.js';
 const github = createGitHub({token:process.env.GITHUB_TOKEN});
-const assets = {'/':['index.html','text/html'], '/app.js':['app.js','text/javascript'], '/style.css':['style.css','text/css']};
+const assets = {'/':['index.html','text/html'], '/app.js':['app.js','text/javascript'], '/style.css':['style.css','text/css'], '/github.js':['../src/github.js','text/javascript']};
 const cache = new Map();
 const host = '127.0.0.1', port = Number(process.env.PORT || 3000);
 http.createServer(async (req,res) => {
@@ -28,7 +28,8 @@ http.createServer(async (req,res) => {
     }
     const asset = assets[url.pathname];
     if (!asset) {res.writeHead(404);return res.end('Not found');}
-    const body = await readFile(fileURLToPath(new URL(`../public/${asset[0]}`, import.meta.url)));
+    let body = await readFile(fileURLToPath(new URL(`../public/${asset[0]}`, import.meta.url)));
+    if(url.pathname === '/') body = body.toString().replace('data-mode="static"','data-mode="server"');
     res.writeHead(200, {'Content-Type':asset[1]});res.end(body);
   } catch(error) {res.writeHead(400, {'Content-Type':'application/json'});res.end(JSON.stringify({error:error.message}));}
 }).listen(port,host,() => console.log(`Repo Autopilot: http://${host}:${port}`));
