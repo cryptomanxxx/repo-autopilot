@@ -55,3 +55,11 @@ test('historical priority counts deduplicate findings and exclude replies, summa
  assert.match(p.events[0].label,/1 P1 · 1 P2/);
  assert.equal(reviewProgress(head,{inline:[c],truncated:true}).findings.incomplete,true);
 });
+
+test('incomplete inline findings do not invalidate complete review and commit histories',()=>{
+ const p=reviewProgress(head,{reviews:[review],commits:[{sha:head}],findingsTruncated:true});
+ assert.equal(p.findings.incomplete,true);
+ assert.equal(p.currentCompleted,true);
+ assert.equal(p.updatesAfterReview,0);
+ assert.equal(p.truncated,false);
+});
