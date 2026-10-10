@@ -50,6 +50,14 @@ test('owner task generates a reviewable branch and no pull request or merge',asy
 test('unauthorized tasks never call Groq or create branches',async()=>{
   const h=harness({author:'someone-else'});await runAgent({...config,fetchImpl:h.fetchImpl});assert.equal(h.calls.length,2);
 });
+test('missing Groq key reports failure on authorized tasks without model calls',async()=>{
+  for(const groqKey of [undefined,'','  ']) {
+    const h=harness();await assert.rejects(runAgent({...config,groqKey,fetchImpl:h.fetchImpl}),/not configured/);
+    const comment=h.calls.find(c=>c.url.endsWith('/comments'));assert.match(JSON.parse(comment.body).body,/Agent: failed/);
+    assert.equal(h.calls.some(c=>c.url.startsWith('https://api.groq.com/')),false);
+  }
+  const h=harness({author:'other'});await runAgent({...config,groqKey:undefined,fetchImpl:h.fetchImpl});assert.equal(h.calls.length,2);
+});
 test('configured task user can authorize tasks without matching the repository owner',async()=>{
   const h=harness({author:'maintainer'});await runAgent({...config,authorizedUser:'Maintainer',fetchImpl:h.fetchImpl});assert.equal(h.calls.some(c=>c.url.endsWith('/git/refs')),true);
 });

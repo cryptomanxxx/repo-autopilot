@@ -22,7 +22,7 @@ export function validateEdits(result,files,existingPaths=Object.keys(files)) {
 export async function runAgent({repository,issueNumber,token,groqKey,expectedTask,authorizedUser,fetchImpl=fetch}) {
   const repo=repositoryName(repository),owner=repo.split('/')[0];
   const taskUser=(authorizedUser || owner).toLowerCase();
-  if(!Number.isSafeInteger(issueNumber) || issueNumber<1 || !token || !groqKey) throw new Error('Agent configuration is missing.');
+  if(!Number.isSafeInteger(issueNumber) || issueNumber<1 || !token) throw new Error('Agent configuration is missing.');
   async function api(path,method='GET',body) {
     const response=await fetchImpl(`https://api.github.com/repos/${repo}${path ? '/'+path : ''}`,{method,headers:{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:body ? JSON.stringify(body) : undefined,signal:AbortSignal.timeout(20000)});
     if(!response.ok) throw new Error(`GitHub request failed (HTTP ${response.status}).`);
@@ -35,9 +35,16 @@ export async function runAgent({repository,issueNumber,token,groqKey,expectedTas
   if(!expectedTask || issue.body !== expectedTask.body || issue.title !== expectedTask.title) return;
   const comments=await api(`issues/${issueNumber}/comments?per_page=100`);
   if(comments.some(c=>c.user?.login==='github-actions[bot]' && c.body?.startsWith(AGENT_MARKER))) return;
-  const instruction=issue.body.slice(TASK_MARKER.length).trim();
-  if(!instruction || instruction.length>6000) throw new Error('Task must contain between 1 and 6000 characters.');
   const notify=(status,text)=>api(`issues/${issueNumber}/comments`,'POST',{body:`${AGENT_MARKER}\n**Agent: ${status}**\n\n${text}`});
+  if(!groqKey?.trim()) {
+    await notify('failed','GROQ_API_KEY is missing or empty. Configure the repository Actions secret and create a new task to retry.');
+    throw new Error('Groq API key is not configured.');
+  }
+  const instruction=issue.body.slice(TASK_MARKER.length).trim();
+  if(!instruction || instruction.length>6000) {
+    await notify('failed','Task must contain between 1 and 6000 characters. Create a new task with a shorter instruction.');
+    throw new Error('Task instruction is invalid.');
+  }
   await notify('working','Reading repository code and preparing a bounded change. Close this issue to request cancellation.');
   try {
     const ref=await api(`git/ref/heads/${metadata.default_branch}`);
