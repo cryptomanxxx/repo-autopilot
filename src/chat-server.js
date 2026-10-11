@@ -10,7 +10,7 @@ const random=()=>randomBytes(32).toString('hex');
 export function createChatServer({origin,repository,authorizedUser,clientId,clientSecret,groqKey,fetchImpl=fetch,now=Date.now}) {
   const base=new URL(origin),repo=repositoryName(repository),owner=(authorizedUser||repo.split('/')[0]).toLowerCase();
   if(base.pathname!=='/'||base.search||base.hash||base.username||base.password||!(base.protocol==='https:'||(base.protocol==='http:'&&['localhost','127.0.0.1'].includes(base.hostname)))) throw new Error('Configure a public HTTPS CHAT_ORIGIN, or localhost for development.');
-  if(!clientId||!clientSecret) throw new Error('Configure GitHub OAuth credentials.');
+  if(!clientId||!clientSecret) throw new Error('Configure the GitHub App client ID and client secret.');
   const secure=base.protocol==='https:',sessions=new Map(),taskLocks=new Set(),stateKey=randomBytes(32);
   const encodeState=value=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',stateKey,iv);const encrypted=Buffer.concat([cipher.update(JSON.stringify(value),'utf8'),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),encrypted]).toString('base64url');};
   const decodeState=value=>{try {if(typeof value!=='string'||value.length>1024) return null;const bytes=Buffer.from(value,'base64url');const cipher=createDecipheriv('aes-256-gcm',stateKey,bytes.subarray(0,12));cipher.setAuthTag(bytes.subarray(12,28));const data=JSON.parse(Buffer.concat([cipher.update(bytes.subarray(28)),cipher.final()]).toString('utf8'));return data.expires>now()?data:null;} catch {return null;}};
@@ -38,7 +38,7 @@ export function createChatServer({origin,repository,authorizedUser,clientId,clie
         const {createHash}=await import('node:crypto');
         res.setHeader('Set-Cookie',cookie('autopilot_login',browser,'/auth'));
         const target=new URL('https://github.com/login/oauth/authorize');
-        for(const [k,v] of Object.entries({client_id:clientId,redirect_uri:base.origin+'/auth/callback',scope:'public_repo',state,code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256'})) target.searchParams.set(k,v);
+        for(const [k,v] of Object.entries({client_id:clientId,redirect_uri:base.origin+'/auth/callback',state,code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256'})) target.searchParams.set(k,v);
         return redirect(res,target.href);
       }
       if(req.method==='GET'&&url.pathname==='/auth/callback') {
@@ -46,10 +46,14 @@ export function createChatServer({origin,repository,authorizedUser,clientId,clie
         if(!pending||pending.browser!==cookies(req).autopilot_login||!url.searchParams.get('code')) return json(res,403,{error:'Login expired or did not match this browser. Sign in again.'});
         const token=await remote('https://github.com/login/oauth/access_token',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json'},body:JSON.stringify({client_id:clientId,client_secret:clientSecret,code:url.searchParams.get('code'),redirect_uri:base.origin+'/auth/callback',code_verifier:pending.verifier})});
         if(!token.access_token||token.error) throw new Error('GitHub authentication failed.');
+        // GitHub App user tokens carry no OAuth scopes: they can only act where the app is installed, with the
+        // app's permissions. A non-empty scope means an OAuth app was configured, which could reach every repository.
+        if(token.scope) return json(res,403,{error:'GitHub App credentials are required. Configure the GitHub App client ID and secret, not an OAuth app.'});
         const user=await remote('https://api.github.com/user',{headers:{Authorization:`Bearer ${token.access_token}`,Accept:'application/vnd.github+json','User-Agent':'repo-autopilot-chat/0.1'}});
         if(user.login?.toLowerCase()!==owner) return json(res,403,{error:'Sign in with the configured repository owner account.'});
         if(sessions.size>=100) return json(res,429,{error:'Please try again later.'});
-        const id=random();sessions.set(id,{token:token.access_token,csrf:random(),login:user.login,expires:now()+28800000,lastSend:0,busy:false});
+        const tokenLifetime=Number.isFinite(token.expires_in)&&token.expires_in>0?token.expires_in*1000:28800000;
+        const id=random();sessions.set(id,{token:token.access_token,csrf:random(),login:user.login,expires:now()+Math.min(28800000,tokenLifetime),lastSend:0,busy:false});
         res.setHeader('Set-Cookie',[cookie('autopilot_session',id),cookie('autopilot_login','','/auth')]);return redirect(res,'/');
       }
       if(req.method==='GET'&&url.pathname==='/api/session') return json(res,200,session?{login:session.login,csrf:session.csrf,repository:repo}:{login:null,repository:repo});
