@@ -105,8 +105,8 @@ $('repository').addEventListener('submit',async event => {
     $('workflows').replaceChildren(...data.workflows.map(r=>{
       const node=el('div','','workflow-row');
       node.dataset.category=/deploy|pages/i.test(r.name) ? 'deployment' : /(?:\bci\b|test|build|lint|continuous integration|check)/i.test(r.name) ? 'ci' : 'other';
-      const title=el('span','','workflow-title');title.append(link(r.title || r.name,r.url));
-      node.append(title,cell('Workflow',r.name),cell('Status',r.conclusion || r.status),cell('Branch',r.branch),cell('Updated',new Date(r.updatedAt).toLocaleString()));
+      const title=el('span','','workflow-title');title.append(link(`${r.runNumber ? '#'+r.runNumber+' ' : ''}${r.title || r.name}`,r.url));
+      node.append(title,cell('Workflow',r.name),cell('Status',r.current ? 'Publishing this data' : r.conclusion || r.status),cell('Branch',r.branch),cell('Updated',new Date(r.updatedAt).toLocaleString()));
       return node;
     }));
     const workflowHead=el('div','','workflow-row list-head');for(const title of ['Run','Workflow','Status','Branch','Updated']) workflowHead.append(el('span',title));workflowHead.setAttribute('aria-hidden','true');$('workflows').prepend(workflowHead);

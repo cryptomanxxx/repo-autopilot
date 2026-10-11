@@ -13,17 +13,20 @@ test('public snapshot uses authentication but publishes neither secrets nor raw 
    let data=[];
    if(url.endsWith('/repos/a/b')) data={private:false,visibility:'public',full_name:'a/b'};
    else if(url.includes('/pulls?')) data=[{number:1,state:'closed',head:{sha:'abcdef1'},title:'Test PR'}];
-   else if(url.includes('/actions/runs')) data={workflow_runs:[]};
+   else if(url.includes('/actions/runs')) data={workflow_runs:[{id:7,run_number:5,name:'Refresh dashboard data',status:'in_progress',conclusion:null},{id:8,run_number:4,name:'CI',status:'completed',conclusion:'success'}]};
    else if(url.includes('/check-runs')) data={check_runs:[]};
    else if(url.includes('/status?')) data={statuses:[]};
    else if(url.includes('/issues/1/comments')) data=[{user:{login:'chatgpt-codex-connector[bot]'},body:'raw-comment-never-publish'}];
    return {ok:true,json:async()=>data};
   };
-  await publishSnapshot({repository:'a/b',token:'secret-never-publish',fetchImpl,output:pathToFileURL(`${dir}/`)});
+  await publishSnapshot({repository:'a/b',token:'secret-never-publish',currentRunId:'7',fetchImpl,output:pathToFileURL(`${dir}/`)});
   const text=await readFile(`${dir}/snapshot.json`,'utf8');
   assert.equal(text.includes('secret-never-publish'),false);
   assert.equal(text.includes('raw-comment-never-publish'),false);
   assert.equal(JSON.parse(text).pulls[0].readiness.state,'closed');
+  const [current,other]=JSON.parse(text).workflows;
+  assert.deepEqual([current.runNumber,current.status,current.current],[5,'publishing',true]);
+  assert.deepEqual([other.runNumber,other.conclusion,other.current],[4,'success',undefined]);
  } finally {await rm(dir,{recursive:true,force:true});}
 });
 test('missing token, private visibility and collection errors fail closed',async()=>{
