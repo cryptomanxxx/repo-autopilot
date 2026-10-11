@@ -17,19 +17,21 @@ const SCAN_CHARS=20000,MAX_WORDS=30;
 export const WORKER_SOURCES=['src/agent.js','src/codex.js','src/github.js','src/progress.js'];
 export const editablePath=path=>allowedAgentPath(path)&&!WORKER_SOURCES.includes(path);
 
+// Manifests and build or test-runner configuration: they change what CI installs and runs.
+const BUILD_FILE=/\.(config|workspace)\.|\.conf\.js$|^(setup|conftest|noxfile|conf|manage)\.py$|(requirements|constraints)[^/]*\.txt$|^(cmakelists\.txt|(gulpfile|gruntfile)\.[^.]+|webpack\..*\.js)$/i;
 // Other repositories: source, style, page and documentation files outside hidden folders, installed or
 // generated code. Workflows, manifests, lockfiles, environment files and build configuration stay read-only.
 export function generalEditablePath(path) {
   if(typeof path!=='string'||path.length>300||path.includes('\\')||!SOURCE_FILE.test(path)) return false;
   const parts=path.split('/');
-  return parts.every(p=>p&&p!=='..'&&p!=='.'&&!p.startsWith('.')&&!SKIPPED_DIRS.has(p))&&!/\.config\.[^/]+$/.test(path)&&!/^(requirements[^/]*\.txt|setup\.py)$/.test(parts.at(-1));
+  return parts.every(p=>p&&p!=='..'&&p!=='.'&&!p.startsWith('.')&&!SKIPPED_DIRS.has(p))&&!BUILD_FILE.test(parts.at(-1))&&!parts.slice(0,-1).some(p=>p.toLowerCase()==='requirements');
 }
 
 // The edit rules for a repository: the app's own repository keeps the stricter list that protects the
 // agent's code; any other repository uses the general one.
 export function editPolicy(repository,home) {
   if(repository.toLowerCase()===home.toLowerCase()) return {allowed:editablePath,rule:`Only these paths may be edited: README.md and .js, .css, .html or .md files under src/, public/ or test/. Never edit the agent itself (worker/, ${WORKER_SOURCES.join(', ')}), workflows, dependencies or credentials.`};
-  return {allowed:generalEditablePath,rule:'Only source, style, page and documentation files may be edited (for example .js, .ts, .tsx, .css, .html, .md, .py), never files in hidden folders such as .github, never package manifests (package.json, requirements.txt, setup.py), lockfiles, environment files, build output or build configuration (*.config.*).'};
+  return {allowed:generalEditablePath,rule:'Only source, style, page and documentation files may be edited (for example .js, .ts, .tsx, .css, .html, .md, .py), never files in hidden folders such as .github, never package manifests (package.json, requirements.txt, setup.py), lockfiles, environment files, build output, or build and test-runner configuration (*.config.*, conftest.py, webpack files).'};
 }
 
 const SYSTEM_PROMPT=`You are the coding agent for a GitHub repository, talking with its owner in a chat.

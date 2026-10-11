@@ -499,7 +499,7 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
 test('other repositories use the general edit rules; the app\'s own repository keeps the strict ones',()=>{
   for(const path of ['src/App.tsx','app/page.tsx','lib/util.ts','styles/main.scss','docs/guide.md','server/main.py','index.html','components/Card.vue'])
     assert.equal(generalEditablePath(path),true,path);
-  for(const path of ['.github/workflows/ci.yml','.env','src/.env.local','package.json','package-lock.json','tsconfig.json','vite.config.ts','next.config.mjs','requirements.txt','api/requirements-dev.txt','setup.py','node_modules/x/index.js','dist/app.js','src/../x.ts','/abs.ts','a//b.ts','deploy.sh','src\\a.ts','src/data.json',42])
+  for(const path of ['.github/workflows/ci.yml','.env','src/.env.local','package.json','package-lock.json','tsconfig.json','vite.config.ts','next.config.mjs','requirements.txt','api/requirements-dev.txt','setup.py','node_modules/x/index.js','dist/app.js','src/../x.ts','/abs.ts','a//b.ts','deploy.sh','src\\a.ts','src/data.json','dev-requirements.txt','requirements/base.txt','constraints.txt','CMakeLists.txt','tests/conftest.py','noxfile.py','docs/conf.py','gulpfile.js','Gruntfile.js','karma.conf.js','webpack.prod.js','vitest.workspace.ts','Vite.Config.ts','vite.config.prod.ts',42])
     assert.equal(generalEditablePath(path),false,String(path));
   assert.equal(editPolicy('Owner/Repo','owner/repo').allowed('src/App.tsx'),false,'the home repository keeps its strict list');
   assert.equal(editPolicy('owner/other','owner/repo').allowed('src/App.tsx'),true);
@@ -517,12 +517,19 @@ test('store adds the repository column to conversations saved before repository 
   store.saveExchange({conversation:'b'.repeat(32),title:'New',repository:'Owner/Other',user:{content:'q'},assistant:{content:'a'}});
   assert.deepEqual(store.listConversations('owner/other').map(c=>c.title),['New'],'repository names compare without case');
   assert.deepEqual({...store.getConversationInfo('b'.repeat(32))},{title:'New',repository:'Owner/Other'});
-  store.setCache('overview:owner/repo',1,60000);store.setCache('pull:owner/repo:5:x',1,60000);store.setCache('pull:owner/repo:6:x',1,60000);store.setCache('pull:owner/repo2:5:x',1,60000);
+  const sha='c'.repeat(40);
+  store.setCache('overview:owner/repo',1,60000);store.setCache('pull:owner/repo2:5:x',1,60000);store.setCache('pull:owner/repo:50:x',1,60000);
+  for(const number of [5,6]) store.setDashboardCache(`pull:owner/repo:${number}:x`,{number},60000,{repository:'Owner/Repo',version:0,pull:{number,sha:number===6?sha:'d'.repeat(40)}});
   assert.equal(store.invalidate('Owner/Repo',{overview:true,pulls:[5]}),1);
-  assert.deepEqual(store.rows('SELECT key FROM cache ORDER BY key').map(r=>r.key),['pull:owner/repo2:5:x','pull:owner/repo:6:x']);
-  assert.equal(store.invalidate('owner/repo',{pulls:'all'}),2);
-  assert.deepEqual(store.rows('SELECT key FROM cache').map(r=>r.key),['pull:owner/repo2:5:x'],'another repository with a longer name keeps its cache');
+  assert.deepEqual(store.rows('SELECT key FROM cache ORDER BY key').map(r=>r.key),['pull:owner/repo2:5:x','pull:owner/repo:50:x','pull:owner/repo:6:x'],'only PR 5 of this repository is dropped');
+  assert.equal(store.invalidate('owner/repo',{sha:'e'.repeat(40)}),null,'a commit of no loaded pull request changes nothing');
+  assert.equal(store.invalidate('owner/repo',{sha}),2,'a check on a pull request\'s head commit drops that pull request');
+  assert.deepEqual(store.rows('SELECT key FROM cache ORDER BY key').map(r=>r.key),['pull:owner/repo2:5:x','pull:owner/repo:50:x']);
   assert.equal(store.getVersion('OWNER/REPO'),2);assert.equal(store.getVersion('owner/other'),0);
+  store.setDashboardCache('pull:owner/repo:7:x',{},60000,{repository:'owner/repo',version:1});
+  assert.equal(store.getCache('pull:owner/repo:7:x'),null,'data loaded before a webhook event is not cached');
+  store.setDashboardCache('pull:owner/repo:7:x',{},60000,{repository:'owner/repo',version:2});
+  assert.deepEqual(store.getCache('pull:owner/repo:7:x'),{});
 });
 
 test('the repository list shows where the app is installed and limits every API call to it',async()=>{
@@ -605,6 +612,7 @@ test('webhook events verified with the secret drop affected cache entries and mo
   assert.equal(accepted.status,204);
   assert.deepEqual(store.rows('SELECT key FROM cache ORDER BY key').map(r=>r.key),['pull:owner/repo:6:x']);
   assert.equal((await handle(hook({zen:'hi',repository:{full_name:'owner/repo'}},{event:'ping'}),env,{fetchImpl})).status,204);
+  assert.equal((await handle(hook({sha:'f'.repeat(40),repository:{full_name:'owner/repo'}},{event:'status'}),env,{fetchImpl})).status,204);
   assert.equal(store.getVersion('owner/repo'),1,'events that change nothing shown do not reload dashboards');
   const big='x'.repeat(5000001);
   assert.equal((await handle(hook(big),env,{fetchImpl})).status,413);
@@ -621,9 +629,10 @@ test('webhook events map to the dashboard data they change',()=>{
   assert.deepEqual(webhookTargets('pull_request_review_thread',{pull_request:{number:3}}),{overview:true,pulls:[3]});
   assert.deepEqual(webhookTargets('issue_comment',{issue:{number:4,pull_request:{}}}),{overview:true,pulls:[4]});
   assert.equal(webhookTargets('issue_comment',{issue:{number:4}}),null,'comments on plain issues change nothing shown');
-  assert.deepEqual(webhookTargets('check_run',{check_run:{pull_requests:[{number:2},{number:'x'}]}}),{overview:false,pulls:[2]});
-  assert.deepEqual(webhookTargets('check_suite',{check_suite:{pull_requests:[]}}),{overview:false,pulls:'all'});
-  assert.deepEqual(webhookTargets('status',{}),{overview:false,pulls:'all'});
+  const sha='a'.repeat(40);
+  assert.deepEqual(webhookTargets('check_run',{check_run:{head_sha:sha,pull_requests:[{number:2},{number:'x'}]}}),{overview:false,pulls:[2],sha});
+  assert.deepEqual(webhookTargets('check_suite',{check_suite:{head_sha:'main',pull_requests:[]}}),{overview:false,pulls:[],sha:null});
+  assert.deepEqual(webhookTargets('status',{sha}),{overview:false,pulls:[],sha});
   assert.deepEqual(webhookTargets('workflow_run',{workflow_run:{pull_requests:[{number:9}]}}),{overview:true,pulls:[9]});
   for(const event of ['ping','push','installation','star']) assert.equal(webhookTargets(event,{}),null,event);
 });

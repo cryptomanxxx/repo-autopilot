@@ -48,7 +48,7 @@ Historical P1/P2 counts use top-level Codex finding comments with explicit prior
 
 ### Choosing a repository
 
-The **Repository** menu at the top lists every repository where the Repo Autopilot GitHub App is installed, most recently pushed first; a GitHub App sign-in can only reach those. It is a large native menu, so on Android tablets it opens the system's full-screen touch list. The choice is remembered on the device and applies to both tabs. Conversations belong to the repository they started in: the chat list shows the selected repository's conversations, and opening an older conversation switches the menu to its repository.
+The **Repository** menu at the top lists the repositories where the Repo Autopilot GitHub App is installed, most recently pushed first; a GitHub App sign-in can only reach those. To stay within the Workers subrequest limit, the list covers up to 5 installations and 200 repositories each. It is a large native menu, so on Android tablets it opens the system's full-screen touch list. The choice is remembered on the device and applies to both tabs. Conversations belong to the repository they started in: the chat list shows the selected repository's conversations, and opening an older conversation switches the menu to its repository.
 
 To add a repository, open **Add repositories** (GitHub → Settings → Applications → Repo Autopilot → Configure), select it, then tap **Reload list**.
 
@@ -62,7 +62,7 @@ The **Agent chat** tab lets you talk to the coding agent directly. You sign in w
 
 When the agent proposes a change it adds exact search/replace blocks. The Worker checks them against the current files, and each search text must match exactly once. Which files may be edited depends on the repository:
 
-- **Other repositories:** source, style, page and documentation files (for example `.js`, `.ts`, `.tsx`, `.css`, `.html`, `.md`, `.py`). Never files in hidden folders such as `.github`, package manifests (`package.json`, `requirements.txt`, `setup.py`), lockfiles, environment files, `node_modules`, build output or build configuration (`*.config.*`).
+- **Other repositories:** source, style, page and documentation files (for example `.js`, `.ts`, `.tsx`, `.css`, `.html`, `.md`, `.py`). Never files in hidden folders such as `.github`, package manifests (`package.json`, `requirements*.txt`, `setup.py`), lockfiles, environment files, `node_modules`, build output, or build and test-runner configuration (`*.config.*`, `conftest.py`, webpack, gulp and Grunt files).
 - **Repo Autopilot itself:** only README and `.js`, `.css`, `.html` and `.md` files under `src/`, `public/` and `test/`, minus the files the Worker runs on (see *Limits*).
 
  
@@ -96,7 +96,7 @@ GitHub can tell the app when something changes, so the dashboard updates within 
 3. In the GitHub App settings (*General → Webhook*), check **Active**, set the **Webhook URL** to `https://repo-autopilot-chat.<your-subdomain>.workers.dev/api/webhook` and the **Webhook secret** to the same value.
 4. Under *Permissions & events → Subscribe to events*, check **Pull request**, **Pull request review**, **Pull request review comment**, **Pull request review thread**, **Issue comment**, **Check run**, **Check suite**, **Status** and **Workflow run**.
 
-Every delivery is verified with GitHub's `X-Hub-Signature-256` HMAC; without the secret the endpoint is disabled. *Recent Deliveries* in the app settings shows each delivery; a working setup answers `204`. Events from every repository where the app is installed are handled. Reactions (such as the Codex thumbs-up) send no event and appear on the next load.
+Every delivery is verified with GitHub's `X-Hub-Signature-256` HMAC; without the secret the endpoint is disabled. Check and status events are matched with the head commits of loaded pull requests, so checks on other branches cause no reload, and data loaded while an event arrived is not cached. Each deploy keeps Worker secrets that are not in the workflow; to turn the webhook off, uncheck **Active** in the app settings. *Recent Deliveries* in the app settings shows each delivery; a working setup answers `204`. Events from every repository where the app is installed are handled. Reactions (such as the Codex thumbs-up) send no event and appear on the next load.
 
 Local check: `npx wrangler deploy --dry-run --config worker/wrangler.jsonc` bundles the Worker without deploying.
 

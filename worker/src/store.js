@@ -15,6 +15,7 @@ export class ChatStoreLogic {
     sql.exec(`CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, owner TEXT NOT NULL, until INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS versions (repository TEXT PRIMARY KEY, version INTEGER NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS heads (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY (repository, number))`);
     // Conversations from before repository selection have no repository; they belong to the app's own one.
     try {sql.exec('SELECT repository FROM conversations LIMIT 0');}
     catch {sql.exec('ALTER TABLE conversations ADD COLUMN repository TEXT');}
@@ -54,14 +55,25 @@ export class ChatStoreLogic {
     this.sql.exec('INSERT OR REPLACE INTO cache (key, value, expires) VALUES (?, ?, ?)',key,JSON.stringify(value),this.now()+ms);
   }
 
+  // Dashboard data from GitHub. It is not cached when a webhook moved the repository's version on while it
+  // was loading, because it may predate that event. The head commit of each pull request is remembered so
+  // check and status events, which name a commit, find their pull request.
+  setDashboardCache(key,value,ms,{repository,version,pull=null}) {
+    const repo=repository.toLowerCase();
+    if(pull&&/^[0-9a-f]{40}$/.test(pull.sha||'')) this.sql.exec('INSERT OR REPLACE INTO heads (repository, number, sha) VALUES (?, ?, ?)',repo,pull.number,pull.sha);
+    if(this.getVersion(repo)===version) this.setCache(key,value,ms);
+  }
+
   // GitHub data is cached under keys that start with the repository (`overview:owner/repo`,
   // `pull:owner/repo:<number>:<updatedAt>`). A webhook event drops the affected entries and moves the
-  // repository's version on, which tells open dashboards to reload.
-  invalidate(repository,{overview=false,pulls=[]}={}) {
+  // repository's version on, which tells open dashboards to reload. Returns null when nothing shown changed.
+  invalidate(repository,{overview=false,pulls=[],sha=null}={}) {
     const repo=repository.toLowerCase(),like=value=>value.replace(/[\\%_]/g,'\\$&');
+    const numbers=new Set(pulls);
+    if(sha) for(const {number} of this.rows('SELECT number FROM heads WHERE repository = ? AND sha = ?',repo,sha)) numbers.add(number);
+    if(!overview&&!numbers.size) return null;
     if(overview) this.sql.exec('DELETE FROM cache WHERE key = ?',`overview:${repo}`);
-    if(pulls==='all') this.sql.exec("DELETE FROM cache WHERE key LIKE ? ESCAPE '\\'",`pull:${like(repo)}:%`);
-    else for(const number of pulls) this.sql.exec("DELETE FROM cache WHERE key LIKE ? ESCAPE '\\'",`pull:${like(repo)}:${number}:%`);
+    for(const number of numbers) this.sql.exec("DELETE FROM cache WHERE key LIKE ? ESCAPE '\\'",`pull:${like(repo)}:${number}:%`);
     this.sql.exec('INSERT INTO versions (repository, version) VALUES (?, 1) ON CONFLICT (repository) DO UPDATE SET version = version + 1',repo);
     return this.getVersion(repo);
   }

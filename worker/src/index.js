@@ -20,6 +20,7 @@ export class ChatStore extends DurableObject {
   invalidate(repository,targets) {return this.logic.invalidate(repository,targets);}
   getVersion(repository) {return this.logic.getVersion(repository);}
   setCache(key,value,ms) {return this.logic.setCache(key,value,ms);}
+  setDashboardCache(key,value,ms,options) {return this.logic.setDashboardCache(key,value,ms,options);}
 }
 
 export default {fetch:(request,env)=>handle(request,env)};

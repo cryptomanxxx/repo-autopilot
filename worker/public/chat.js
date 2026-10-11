@@ -111,11 +111,13 @@ function selectRepository(name,{keepConversation=false}={}) {
 const setBusy=busy=>{state.busy=busy;$('repo-picker').disabled=busy;$('repo-reload').disabled=busy;};
 
 async function loadConversations() {
-  const repository=state.repository,request=++state.conversationRequest;
+  const repository=state.repository,request=++state.conversationRequest,list=$('conversations');
+  // Another repository's conversations are removed at once, not when (or if) the new list arrives.
+  if(list.dataset.repository!==repository) {list.replaceChildren();list.dataset.repository=repository;}
   const {conversations}=await api(`/api/conversations?repo=${encodeURIComponent(repository)}`);
   // A slower answer for an earlier repository must not replace the current list.
   if(request!==state.conversationRequest) return;
-  const list=$('conversations');list.replaceChildren();
+  list.replaceChildren();
   for(const conversation of conversations) {
     const item=document.createElement('li'),button=document.createElement('button');
     button.className='conversation'+(conversation.id===state.conversation?' active':'');
@@ -130,7 +132,11 @@ async function openConversation(id) {
   const previous=state.conversation;let failed=false;
   state.conversation=id;
   if(state.tab==='chat') history.replaceState(null,'',chatHash());
-  if(!id) {$('conversation-title').textContent='New conversation';renderMessages([]);await loadConversations();return;}
+  if(!id) {
+    $('conversation-title').textContent='New conversation';renderMessages([]);
+    try {await loadConversations();} catch(error) {status(error.message);}
+    return;
+  }
   try {
     const conversation=await api(`/api/conversations/${id}`);
     if(state.conversation!==id) return;
@@ -202,7 +208,7 @@ $('composer').onsubmit=async event=>{
   const thinking=document.createElement('p');thinking.className='muted thinking';thinking.textContent='The agent is reading the code and writing an answer…';container.append(thinking);thinking.scrollIntoView({block:'end'});
   status('');
   try {
-    const result=await api('/api/chat',{conversation:state.conversation,repo:state.repository,text,image:state.image},430000);
+    const result=await api('/api/chat',{conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image},430000);
     $('message').value='';clearImage();thinking.remove();
     setBusy(false);state.conversation=result.conversation;await openConversation(result.conversation);
   } catch(error) {

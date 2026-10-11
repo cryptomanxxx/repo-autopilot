@@ -238,17 +238,18 @@ async function resolveRepository(requested,access) {
 }
 
 // Which cached data a GitHub webhook event makes stale. null: the event changes nothing shown.
+// Check and status events name a commit; it is matched with the head commits of loaded pull requests, so
+// events for other branches (such as pushes to the default branch) cause no reload.
 export function webhookTargets(event,payload) {
   const numbers=list=>Array.isArray(list)?list.map(item=>item?.number).filter(n=>Number.isSafeInteger(n)&&n>0):[];
+  const commit=sha=>typeof sha==='string'&&/^[0-9a-f]{40}$/.test(sha)?sha:null;
   switch(event) {
     case 'pull_request': case 'pull_request_review': case 'pull_request_review_comment': case 'pull_request_review_thread':
       return {overview:true,pulls:numbers([payload.pull_request])};
     case 'issue_comment': return payload.issue?.pull_request?{overview:true,pulls:numbers([payload.issue])}:null;
-    case 'check_run': case 'check_suite': {
-      const found=numbers(payload[event]?.pull_requests);
-      return {overview:false,pulls:found.length?found:'all'};
-    }
-    case 'status': return {overview:false,pulls:'all'};
+    case 'check_run': case 'check_suite':
+      return {overview:false,pulls:numbers(payload[event]?.pull_requests),sha:commit(payload[event]?.head_sha)};
+    case 'status': return {overview:false,pulls:[],sha:commit(payload.sha)};
     case 'workflow_run': return {overview:true,pulls:numbers(payload.workflow_run?.pull_requests)};
     default: return null;
   }
@@ -288,6 +289,7 @@ async function dashboard(url,{store,session,fetchImpl,repository}) {
   const cached=fresh?null:await store.getCache(key);
   if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
   if(cached) return json(200,cached);
+  const version=await store.getVersion(repository);
   let value,changed=false;
   try {
     if(pull) {
@@ -312,7 +314,7 @@ async function dashboard(url,{store,session,fetchImpl,repository}) {
   }
   // A result with a failed part is cached only briefly, so a transient GitHub error does not stick. A pull
   // request that changed while loading is not cached at all: the next load should read it again.
-  if(!changed) await store.setCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
+  if(!changed) await store.setDashboardCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS,{repository,version,pull:pull?{number:Number(pull[1]),sha:value.headSha}:null});
   return json(200,value);
 }
 
