@@ -131,7 +131,7 @@ export async function runAgent({repository,issueNumber,token,appToken,groqKey,ex
     throw new Error('Task instruction is invalid.');
   }
   await notify('working','Reading repository code and preparing a bounded change. Close this issue to request cancellation.');
-  let publishedCompareUrl=null;
+  let publishedCompareUrl=null,publishedPullUrl=null;
   try {
     const ref=await api(`git/ref/heads/${metadata.default_branch}`);
     const parent=ref.object.sha;
@@ -174,6 +174,7 @@ export async function runAgent({repository,issueNumber,token,appToken,groqKey,ex
       try {pull=await api('pulls','POST',{title:prTitle,head:branch,base:metadata.default_branch,body:prBody},appToken);} catch {}
       const pullUrl=typeof pull?.html_url==='string' && pull.html_url.startsWith(`https://github.com/${repo}/pull/`) ? pull.html_url : null;
       if(pullUrl) {
+        publishedPullUrl=pullUrl;
         await notify('ready for PR',`${edits.summary}\n\n[Open pull request](${pullUrl})\n\n${edits.files.length} file(s) changed. The pull request was opened by the GitHub App, so CI and Codex review run automatically. The agent does not merge changes.`);
         return;
       }
@@ -182,6 +183,11 @@ export async function runAgent({repository,issueNumber,token,appToken,groqKey,ex
     }
     await notify('ready for PR',`${edits.summary}\n\n[Review changes and create PR](${url})\n\n${edits.files.length} file(s) changed. Tests have not run yet. Creating the PR with your GitHub account triggers CI and Codex review. The agent does not merge changes.`);
   } catch(error) {
+    if(publishedPullUrl) {
+      // The app already opened the pull request; never point the owner back to the compare link.
+      try {await notify('ready for PR',`The pull request was opened successfully, but its detailed reply could not be delivered.\n\n[Open pull request](${publishedPullUrl})\n\nCI and Codex review run on the pull request; do not retry the task.`);} catch {console.log(`Pull request is open: ${publishedPullUrl}`);}
+      return;
+    }
     if(publishedCompareUrl) {
       // A notification failure cannot undo the successful branch publication.
       try {await notify('ready for PR',`The code branch was published successfully, but its detailed reply could not be delivered.\n\n[Review changes and create PR](${publishedCompareUrl})\n\nTests have not run yet. Create the PR for CI and Codex review; do not retry the task.`);} catch {console.log(`Branch is ready for review: ${publishedCompareUrl}`);}

@@ -60,6 +60,16 @@ test('configured GitHub App opens the pull request with its own token, never mer
   assert.match(JSON.parse(comments.at(-1).body).body,/\[Open pull request\]\(https:\/\/github\.com\/owner\/project\/pull\/7\)/);
   assert.equal(h.calls.find(c=>c.url.startsWith('https://api.groq.com/')).body.includes('app-secret'),false);
 });
+test('a failed notification after the app opened the PR keeps the pull request link',async()=>{
+  const h=harness();let notifications=0;
+  await runAgent({...config,appToken:'app-secret',fetchImpl:async(url,options)=>{
+    if(url.endsWith('/pulls')) return {ok:true,json:async()=>({html_url:'https://github.com/owner/project/pull/7'})};
+    if(url.endsWith('/comments') && options.method==='POST' && ++notifications===2) return {ok:false,status:503};
+    return h.fetchImpl(url,options);
+  }});
+  const body=JSON.parse(h.calls.filter(c=>c.url.endsWith('/comments')).at(-1).body).body;
+  assert.match(body,/Agent: ready for PR/);assert.match(body,/\[Open pull request\]\(https:\/\/github\.com\/owner\/project\/pull\/7\)/);assert.equal(body.includes('create PR'),false);
+});
 test('a failed automatic pull request falls back to the compare link',async()=>{
   const h=harness();
   await runAgent({...config,appToken:'app-secret',fetchImpl:(url,options)=>url.endsWith('/pulls')?Promise.resolve({ok:false,status:422}):h.fetchImpl(url,options)});
