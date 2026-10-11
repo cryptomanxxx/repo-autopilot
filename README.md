@@ -94,6 +94,32 @@ Create a GitHub App owned by your account with only **Contents**, **Issues** and
 
 The task workflow then creates a one-hour installation token (`actions/create-github-app-token`) scoped to this repository. Commits, the `autopilot/task-N` branch and the pull request are created with that token, which triggers CI and Codex review; agent replies on the task issue still use the Actions token. The agent never merges. Without the variable, or if the token cannot be created, behavior is unchanged: the agent publishes a branch and a compare link for you to create the PR.
 
+## Agent chat on Cloudflare Workers
+
+`worker/` is a Cloudflare Worker that lets you chat with the coding agent directly, without GitHub issues or Actions. You sign in with GitHub, ask about the code or describe a change, and can attach or paste a screenshot. For each message the Worker downloads the current default branch as one archive. It sends whole relevant files, not excerpts, to the model together with the conversation. Answers arrive within seconds once the model replies.
+
+When the agent proposes a change it adds exact search/replace blocks. The Worker checks them against the current files: only the paths the Actions agent may edit are allowed, and each search text must match exactly once. If a block does not apply, the model gets one correction round. A **Create pull request** button then re-applies the edits to the latest default branch and opens a pull request with your GitHub account, so CI runs on it as usual. The agent never merges.
+
+- **Model:** Workers AI with `@cf/meta/llama-4-scout-17b-16e-instruct` by default. This model reads images, and the binding needs no API key. Each message sends up to `CONTEXT_CHARS` characters of files (default 60,000, roughly 15–20k tokens). The free Workers AI allocation is a fixed daily amount, so it covers a limited number of messages per day; check usage in the Cloudflare dashboard under AI → Workers AI. Set the repository variable `AUTOPILOT_CHAT_MODEL` to use another Workers AI model. To use an OpenAI-compatible provider instead, set the repository variables `AUTOPILOT_CHAT_MODEL_PROVIDER=openai-compatible`, `AUTOPILOT_CHAT_MODEL_BASE_URL` (HTTPS, for example `https://api.groq.com/openai/v1`) and `AUTOPILOT_CHAT_MODEL`, plus the secret `AUTOPILOT_CHAT_MODEL_API_KEY`. `AUTOPILOT_CHAT_CONTEXT_CHARS` changes the file budget. Make these changes in the repository settings, not the Cloudflare dashboard: each deploy replaces the Worker's variables.
+- **Storage and security:** Conversations, sessions and locks live in one SQLite-backed Durable Object in your Cloudflare account. They are private, unlike the public task issues. Sign-in uses the GitHub App user flow with PKCE and an encrypted, browser-bound state. Only the configured owner is admitted, and only GitHub App user tokens (`ghu_`) are accepted. The token is valid for at most eight hours and is stored server-side; the browser only gets an HttpOnly session cookie, and only a hash of that cookie is stored. Writes require the exact origin and a CSRF token, and one answer is generated at a time. The Worker holds no long-lived GitHub write credential.
+- **Images:** The browser scales images down and converts them to JPEG before upload. The image is sent to the model for that message only and is not stored.
+- **Limits:** The agent cannot edit the code it runs on (`worker/` and the files it bundles: `src/agent.js`, `src/github.js`, `src/codex.js`, `src/progress.js`), the chat files, workflows, dependencies or credentials. A test fails if the Worker starts bundling another repository file without making it read-only. Edits keep each file's line endings. On the Workers Free plan each request has a small CPU budget; the archive is decompressed natively to stay within it. If Cloudflare reports *Worker exceeded CPU time limit*, lower `AUTOPILOT_CHAT_CONTEXT_CHARS` or switch to Workers Paid.
+
+### Set up the chat
+
+1. **GitHub App.** Use the app from the section below or create one, with **Contents** and **Pull requests** set to *Read and write* and installed on this repository. In the app settings:
+   - Add the callback URL `https://repo-autopilot-chat.<your-subdomain>.workers.dev/auth/callback`.
+   - Keep **Expire user authorization tokens** enabled.
+   - Generate a client secret.
+2. **Cloudflare API token.** In the Cloudflare dashboard, create an API token from the **Edit Cloudflare Workers** template and copy your **Account ID**.
+3. **Repository settings.** Under *Settings → Secrets and variables → Actions*, add:
+   - the secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `AUTOPILOT_CHAT_CLIENT_SECRET` (the app's client secret)
+   - the variable `AUTOPILOT_CHAT_CLIENT_ID` (the app's client ID)
+4. **Deploy.** Run the **Agent chat Worker** workflow, or push a change under `worker/`. It runs the tests, then deploys with Wrangler and uploads the client secret together with the code, so no version runs without it. Without the settings it only builds and skips deployment.
+5. **Link it from the dashboard.** Set the repository variable `AUTOPILOT_CHAT_URL` to the Worker URL so the dashboard links to the chat, and run the Pages workflow.
+
+Local check: `npx wrangler deploy --dry-run --config worker/wrangler.jsonc` bundles the Worker without deploying. The Node chat server described next is the older, issue-based alternative and is no longer needed once the Worker runs.
+
 ## Direct chat backend (optional, requires deployment)
 
 The separate Node 22 chat server supports GitHub login, creating public tasks, replying to the same task and attaching a PNG/JPEG screenshot up to 2 MB. It polls replies every 20 seconds while visible. Existing GitHub Pages remains the read-only dashboard; the configured chat link opens the server's chat page. The code does not deploy or activate a hosted backend automatically.

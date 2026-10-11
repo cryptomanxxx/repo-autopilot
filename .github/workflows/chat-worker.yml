@@ -1,0 +1,85 @@
+name: Agent chat Worker
+on:
+  push:
+    branches: [main]
+    paths: ['worker/**', 'src/agent.js', 'src/github.js', 'src/codex.js', 'src/progress.js', '.github/workflows/chat-worker.yml']
+  pull_request:
+    paths: ['worker/**', 'src/agent.js', 'src/github.js', 'src/codex.js', 'src/progress.js', '.github/workflows/chat-worker.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: chat-worker-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: false
+env:
+  WRANGLER_VERSION: 4.149.0
+jobs:
+  # Bundles the Worker exactly as a deployment would, without credentials.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - run: npx --yes wrangler@${WRANGLER_VERSION} deploy --dry-run --outdir "$RUNNER_TEMP/worker" --config worker/wrangler.jsonc
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    steps:
+      - id: config
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLIENT_ID: ${{ vars.AUTOPILOT_CHAT_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.AUTOPILOT_CHAT_CLIENT_SECRET }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
+            echo "::notice::Agent chat is not deployed: set CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID and AUTOPILOT_CHAT_CLIENT_SECRET secrets and the AUTOPILOT_CHAT_CLIENT_ID variable (see README)."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/checkout@v4
+        with:
+          # Deploy exactly the commit the build job tested.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - if: steps.config.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - if: steps.config.outputs.ready == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          REPOSITORY: ${{ github.repository }}
+          OWNER: ${{ vars.AUTOPILOT_TASK_USER || github.repository_owner }}
+          CLIENT_ID: ${{ vars.AUTOPILOT_CHAT_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.AUTOPILOT_CHAT_CLIENT_SECRET }}
+          MODEL_API_KEY: ${{ secrets.AUTOPILOT_CHAT_MODEL_API_KEY }}
+          MODEL: ${{ vars.AUTOPILOT_CHAT_MODEL }}
+          MODEL_PROVIDER: ${{ vars.AUTOPILOT_CHAT_MODEL_PROVIDER }}
+          MODEL_BASE_URL: ${{ vars.AUTOPILOT_CHAT_MODEL_BASE_URL }}
+          CONTEXT_CHARS: ${{ vars.AUTOPILOT_CHAT_CONTEXT_CHARS }}
+        # Every setting comes from repository variables: a deploy replaces the Worker's variables, so
+        # values typed into the Cloudflare dashboard would be lost. Secrets ship with the same version.
+        run: |
+          if [ "$MODEL_PROVIDER" = "openai-compatible" ] && [ -z "$MODEL" ]; then
+            echo "::error::AUTOPILOT_CHAT_MODEL_PROVIDER is set; also set AUTOPILOT_CHAT_MODEL to the provider's model name."
+            exit 1
+          fi
+          args=(--config worker/wrangler.jsonc --var "REPOSITORY:$REPOSITORY" --var "AUTOPILOT_USER:$OWNER" --var "GITHUB_CLIENT_ID:$CLIENT_ID")
+          for name in MODEL MODEL_PROVIDER MODEL_BASE_URL CONTEXT_CHARS; do
+            if [ -n "${!name}" ]; then args+=(--var "$name:${!name}"); fi
+          done
+          umask 077
+          secrets="$RUNNER_TEMP/chat-secrets.json"
+          node -e 'const s={GITHUB_CLIENT_SECRET:process.env.CLIENT_SECRET};if(process.env.MODEL_API_KEY) s.MODEL_API_KEY=process.env.MODEL_API_KEY;require("fs").writeFileSync(process.argv[1],JSON.stringify(s))' "$secrets"
+          trap 'rm -f "$secrets"' EXIT
+          npx --yes "wrangler@$WRANGLER_VERSION" deploy "${args[@]}" --secrets-file "$secrets"
