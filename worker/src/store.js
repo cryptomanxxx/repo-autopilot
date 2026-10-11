@@ -13,6 +13,7 @@ export class ChatStoreLogic {
     sql.exec(`CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, has_image INTEGER NOT NULL DEFAULT 0, proposal TEXT, pr_url TEXT, created INTEGER NOT NULL)`);
     sql.exec(`CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages (conversation, id)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, owner TEXT NOT NULL, until INTEGER NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER NOT NULL)`);
   }
   rows(query,...bindings) {return this.sql.exec(query,...bindings).toArray();}
 
@@ -38,6 +39,16 @@ export class ChatStoreLogic {
     return true;
   }
   releaseLock(name,owner) {this.sql.exec('DELETE FROM locks WHERE name = ? AND owner = ?',name,owner);}
+
+  // Short-lived cache of GitHub data shared by all open tabs, which keeps dashboard refreshes cheap.
+  getCache(key) {
+    const [row]=this.rows('SELECT value FROM cache WHERE key = ? AND expires > ?',key,this.now());
+    return row?JSON.parse(row.value):null;
+  }
+  setCache(key,value,ms) {
+    this.sql.exec('DELETE FROM cache WHERE expires <= ?',this.now());
+    this.sql.exec('INSERT OR REPLACE INTO cache (key, value, expires) VALUES (?, ?, ?)',key,JSON.stringify(value),this.now()+ms);
+  }
 
   createConversation(id,title) {
     const now=this.now();

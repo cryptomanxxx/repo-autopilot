@@ -2,6 +2,11 @@
 
 An open-source GitHub dashboard and future development orchestrator for any repository. MIT licensed, with no Debatt-AI-specific configuration.
 
+There are two ways to use it:
+
+- **The Repo Autopilot app** (Cloudflare Worker, sign-in with GitHub): a live dashboard and the agent chat in two tabs. See [Repo Autopilot app on Cloudflare Workers](#repo-autopilot-app-on-cloudflare-workers).
+- **The public dashboard** (GitHub Pages, no sign-in): saved data for this repository and anonymous access for other public repositories. It links to the app when `AUTOPILOT_CHAT_URL` is set.
+
 ## Web dashboard (GitHub Pages)
 
 [Open the dashboard](https://cryptomanxxx.github.io/repo-autopilot/) — this address becomes available after the Pages workflow is merged, Pages is enabled, and deployment succeeds.
@@ -26,7 +31,7 @@ python -m http.server 8080 --directory dist
 
 View the most recently updated pull requests (5 hosted, 10 local), opened/merged timestamps, concise Codex progress, head-commit check/status results, and 15 recent GitHub Actions runs. Links open the corresponding GitHub discussion or workflow. Empty states and API errors are shown explicitly.
 
-Automatic merge is **off**. The optional owner-triggered Actions agent prepares a branch for review; it does not execute generated code or merge changes. A successful CI indicator is informational: it does not establish branch protection, resolved conversations, current review approval, or merge eligibility. Review histories and comments are limited to 100 entries per endpoint, with truncation warnings. Codex status includes PR reactions, review summaries and comments. A thumbs-up is shown as current only when paired with a completed Code Review summary for the PR head commit and a reaction timestamp at or after completion. Current-commit findings and explicit no-findings comments are supported; older or unlinked activity is labeled unverified. A newer review request invalidates the earlier status. Incomplete histories never establish a clear result. These are informational signals, not formal GitHub approvals or merge authorization.
+Automatic merge is **off**. The coding agent in the Repo Autopilot app proposes changes as pull requests; it does not execute generated code or merge changes. A successful CI indicator is informational: it does not establish branch protection, resolved conversations, current review approval, or merge eligibility. Review histories and comments are limited to 100 entries per endpoint, with truncation warnings. Codex status includes PR reactions, review summaries and comments. A thumbs-up is shown as current only when paired with a completed Code Review summary for the PR head commit and a reaction timestamp at or after completion. Current-commit findings and explicit no-findings comments are supported; older or unlinked activity is labeled unverified. A newer review request invalidates the earlier status. Incomplete histories never establish a clear result. These are informational signals, not formal GitHub approvals or merge authorization.
 
 ## Run
 
@@ -76,38 +81,26 @@ Filter PRs by open, needs attention, merged or all, and workflows by CI, deploym
 
 Historical P1/P2 counts use top-level Codex finding comments with explicit priority badges, deduplicated by comment identity. Replies and summary text do not count as new findings. Counts remain after resolution; incomplete history is marked as a lower bound. The separate unresolved-thread count includes all reviewers and is unverified if authenticated thread retrieval fails. #Commits counts commits after review, not the number of findings fixed.
 
-## Actions agent tasks
+## Repo Autopilot app on Cloudflare Workers
 
-The hosted Repo Autopilot view includes a task box and the latest five owner tasks found among the 30 most recently updated issues. Write an instruction and choose **Continue on GitHub**. GitHub opens a prefilled public issue; submit it as the repository owner to start the agent. When the optional chat backend is configured, choose **Open agent chat** to send tasks and follow-up messages directly. The browser stores no credentials. Your task and agent responses are public. The owner-only worker runs trusted default-branch code with `GROQ_API_KEY` from Actions secrets and uses Groq's `openai/gpt-oss-120b`. Model API usage and limits apply. Requests use at most 6,000 UTF-8 bytes of serialized messages and reserve 1,500 completion tokens to fit the 8,000-token free-tier budget conservatively. The agent ranks source windows by task relevance, including code beyond file headers, and sends bounded source excerpts and applies only unique exact replacements against the complete original files. Truncated responses cannot publish a branch.
+`worker/` is a Cloudflare Worker with two tabs, **Dashboard** and **Agent chat**, behind GitHub sign-in.
 
-The worker performs one bounded attempt, reads source through GitHub REST, validates up to eight exact source replacements, and creates `autopilot/task-N`. Allowed edits are existing supplied JS/CSS/HTML/Markdown files in src, public and test, plus README. Agent infrastructure, hidden files, workflows, dependencies and secrets are excluded. Generated code is never executed in the secret-bearing worker. This first version handles small tasks with the supplied source context; it may ask for more information rather than change code. It does not yet automatically iterate over Codex feedback.
+The **Dashboard** tab reads live data from GitHub with your sign-in: the 6 most recently updated pull requests with merge readiness, CI, Codex progress and activity flow, and 15 recent GitHub Actions runs. The overview takes three GitHub requests and each pull request is loaded by its own request with at most ten, so every Worker call stays well under the Workers subrequest limit. Results are cached in the Durable Object for a minute (an hour for merged or closed pull requests); a pull request whose `updatedAt` changed, and the **Refresh** button, bypass the cache. The tab refreshes every three minutes while it is open. When a chat answer has become a pull request, **Follow in dashboard** opens that pull request's row. Addresses keep the view: `#dashboard`, `#pr-<number>`, `#chat` and `#chat/<conversation>`.
 
-Open the task in the dashboard to read replies. If changes are ready, use **Review changes and create PR** and create the PR with your GitHub account. This deliberate confirmation ensures CI and the configured Codex integration receive user-created PR events; PRs created with the built-in Actions token do not normally trigger other Actions workflows. If the optional GitHub App is configured (see below), the agent opens the PR itself with the app's token instead, so CI and Codex review start automatically; if that fails, it falls back to the compare link. Review and green CI remain required before merging. Close the task issue to request cancellation: the worker checks before publishing a branch, but closing does not undo an already published branch. Owner replies beginning with `<!-- repo-autopilot-reply -->` resume tasks that are waiting for input or have failed. Each reply gets one bounded attempt and a distinct branch; duplicate workflow reruns do not repeat the same reply. Tasks that are already working, have a reply queued, or are ready for PR cannot accept another reply. Continuation prompts include bounded chronological excerpts of the original task, agent clarification and owner replies. Long text and screenshot descriptions are explicitly marked as shortened excerpts to preserve the request budget.
+### Agent chat
 
-The dashboard refreshes every 20 seconds while a PR or a queued/working task is visible in saved data. Completed worker runs refresh the data snapshot. GitHub queue delays still apply. This is a task interface with GitHub confirmation, not a continuous authenticated in-page chat; follow-up conversation and automatic fix loops are future work.
+The **Agent chat** tab lets you talk to the coding agent directly. You sign in with GitHub, ask about the code or describe a change, and can attach or paste a screenshot. For each message the Worker downloads the current default branch as one archive. It sends whole relevant files, not excerpts, to the model together with the conversation. Answers arrive within seconds once the model replies.
 
-For an organization-owned repository, set the repository Actions variable `AUTOPILOT_TASK_USER` to the GitHub login allowed to submit tasks. The worker and snapshot collector use that same account. For a personal repository, the default is the repository owner. Updating this variable requires repository administration access. Existing files omitted from the model context cannot be replaced; the validator checks the complete source tree before creating a commit.
-
-## Optional GitHub App for the task agent
-
-Create a GitHub App owned by your account with only **Contents**, **Issues** and **Pull requests** set to read and write (Metadata read-only is mandatory), webhook disabled, installable only on your account. Install it on this repository only. Store its App ID as the repository Actions **variable** `AUTOPILOT_APP_ID` and its private key as the **secret** `AUTOPILOT_APP_PRIVATE_KEY`.
-
-The task workflow then creates a one-hour installation token (`actions/create-github-app-token`) scoped to this repository. Commits, the `autopilot/task-N` branch and the pull request are created with that token, which triggers CI and Codex review; agent replies on the task issue still use the Actions token. The agent never merges. Without the variable, or if the token cannot be created, behavior is unchanged: the agent publishes a branch and a compare link for you to create the PR.
-
-## Agent chat on Cloudflare Workers
-
-`worker/` is a Cloudflare Worker that lets you chat with the coding agent directly, without GitHub issues or Actions. You sign in with GitHub, ask about the code or describe a change, and can attach or paste a screenshot. For each message the Worker downloads the current default branch as one archive. It sends whole relevant files, not excerpts, to the model together with the conversation. Answers arrive within seconds once the model replies.
-
-When the agent proposes a change it adds exact search/replace blocks. The Worker checks them against the current files: only the paths the Actions agent may edit are allowed, and each search text must match exactly once. If a block does not apply, the model gets one correction round. A **Create pull request** button then re-applies the edits to the latest default branch and opens a pull request with your GitHub account, so CI runs on it as usual. The agent never merges.
+When the agent proposes a change it adds exact search/replace blocks. The Worker checks them against the current files: only README and source, page and test files under `src/`, `public/` and `test/` may be edited, and each search text must match exactly once. If a block does not apply, the model gets one correction round. A **Create pull request** button then re-applies the edits to the latest default branch and opens a pull request with your GitHub account, so CI runs on it as usual. The agent never merges.
 
 - **Model:** Workers AI with `@cf/meta/llama-4-scout-17b-16e-instruct` by default. This model reads images, and the binding needs no API key. Each message sends up to `CONTEXT_CHARS` characters of files (default 60,000, roughly 15–20k tokens). The free Workers AI allocation is a fixed daily amount, so it covers a limited number of messages per day; check usage in the Cloudflare dashboard under AI → Workers AI. Set the repository variable `AUTOPILOT_CHAT_MODEL` to use another Workers AI model. To use an OpenAI-compatible provider instead, set the repository variables `AUTOPILOT_CHAT_MODEL_PROVIDER=openai-compatible`, `AUTOPILOT_CHAT_MODEL_BASE_URL` (HTTPS, for example `https://api.groq.com/openai/v1`) and `AUTOPILOT_CHAT_MODEL`, plus the secret `AUTOPILOT_CHAT_MODEL_API_KEY`. `AUTOPILOT_CHAT_CONTEXT_CHARS` changes the file budget. Make these changes in the repository settings, not the Cloudflare dashboard: each deploy replaces the Worker's variables.
-- **Storage and security:** Conversations, sessions and locks live in one SQLite-backed Durable Object in your Cloudflare account. They are private, unlike the public task issues. Sign-in uses the GitHub App user flow with PKCE and an encrypted, browser-bound state. Only the configured owner is admitted, and only GitHub App user tokens (`ghu_`) are accepted. The token is valid for at most eight hours and is stored server-side; the browser only gets an HttpOnly session cookie, and only a hash of that cookie is stored. Writes require the exact origin and a CSRF token, and one answer is generated at a time. The Worker holds no long-lived GitHub write credential.
+- **Storage and security:** Conversations, sessions and locks live in one SQLite-backed Durable Object in your Cloudflare account. They are private. Sign-in uses the GitHub App user flow with PKCE and an encrypted, browser-bound state. Only the configured owner is admitted, and only GitHub App user tokens (`ghu_`) are accepted. The token is valid for at most eight hours and is stored server-side; the browser only gets an HttpOnly session cookie, and only a hash of that cookie is stored. Writes require the exact origin and a CSRF token, and one answer is generated at a time. The Worker holds no long-lived GitHub write credential.
 - **Images:** The browser scales images down and converts them to JPEG before upload. The image is sent to the model for that message only and is not stored.
-- **Limits:** The agent cannot edit the code it runs on (`worker/` and the files it bundles: `src/agent.js`, `src/github.js`, `src/codex.js`, `src/progress.js`), the chat files, workflows, dependencies or credentials. A test fails if the Worker starts bundling another repository file without making it read-only. Edits keep each file's line endings. On the Workers Free plan each request has a small CPU budget; the archive is decompressed natively to stay within it. If Cloudflare reports *Worker exceeded CPU time limit*, lower `AUTOPILOT_CHAT_CONTEXT_CHARS` or switch to Workers Paid.
+- **Limits:** The agent cannot edit the code it runs on (`worker/`, which also holds the dashboard rendering shared with Pages, and the files it bundles: `src/agent.js`, `src/github.js`, `src/codex.js`, `src/progress.js`), workflows, dependencies or credentials. A test fails if the Worker starts bundling another repository file without making it read-only. Edits keep each file's line endings. On the Workers Free plan each request has a small CPU budget; the archive is decompressed natively to stay within it. If Cloudflare reports *Worker exceeded CPU time limit*, lower `AUTOPILOT_CHAT_CONTEXT_CHARS` or switch to Workers Paid.
 
-### Set up the chat
+### Set up the app
 
-1. **GitHub App.** Use the app from the section below or create one, with **Contents** and **Pull requests** set to *Read and write* and installed on this repository. In the app settings:
+1. **GitHub App.** Create a GitHub App owned by your account, installed on this repository only, with **Contents** and **Pull requests** set to *Read and write* and **Actions**, **Checks**, **Commit statuses** and **Issues** set to *Read-only* (the dashboard reads workflow runs, checks, statuses and PR comments with your sign-in, which only has the app's permissions). In the app settings:
    - Add the callback URL `https://repo-autopilot-chat.<your-subdomain>.workers.dev/auth/callback`.
    - Keep **Expire user authorization tokens** enabled.
    - Generate a client secret.
@@ -116,30 +109,7 @@ When the agent proposes a change it adds exact search/replace blocks. The Worker
    - the secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `AUTOPILOT_CHAT_CLIENT_SECRET` (the app's client secret)
    - the variable `AUTOPILOT_CHAT_CLIENT_ID` (the app's client ID)
 4. **Deploy.** Run the **Agent chat Worker** workflow, or push a change under `worker/`. It runs the tests, then deploys with Wrangler and uploads the client secret together with the code, so no version runs without it. Without the settings it only builds and skips deployment.
-5. **Link it from the dashboard.** Set the repository variable `AUTOPILOT_CHAT_URL` to the Worker URL so the dashboard links to the chat, and run the Pages workflow.
+5. **Link it from the public dashboard.** Set the repository variable `AUTOPILOT_CHAT_URL` to the Worker URL and run the Pages workflow.
 
-Local check: `npx wrangler deploy --dry-run --config worker/wrangler.jsonc` bundles the Worker without deploying. The Node chat server described next is the older, issue-based alternative and is no longer needed once the Worker runs.
+Local check: `npx wrangler deploy --dry-run --config worker/wrangler.jsonc` bundles the Worker without deploying.
 
-## Direct chat backend (optional, requires deployment)
-
-The separate Node 22 chat server supports GitHub login, creating public tasks, replying to the same task and attaching a PNG/JPEG screenshot up to 2 MB. It polls replies every 20 seconds while visible. Existing GitHub Pages remains the read-only dashboard; the configured chat link opens the server's chat page. The code does not deploy or activate a hosted backend automatically.
-
-Screenshots are sent to Groq `qwen/qwen3.8-27b` for a concise visual description. Only that description is saved in the public GitHub task; original image files are not stored by this app. This is a separate vision request from the GPT-OSS coding request and is subject to Groq model permissions and limits. No live vision-model test has been performed by CI.
-
-Deploy the supplied Dockerfile on a host with HTTPS, or run `npm run chat` with Node 22. Configure these environment variables on that host:
-
-| Variable | Purpose |
-| --- | --- |
-| `CHAT_ORIGIN` | Public HTTPS origin, e.g. `https://chat.example.com`, with no path. Use `http://127.0.0.1:3001` for local development. |
-| `GITHUB_REPOSITORY` | Fixed public repository, e.g. `cryptomanxxx/repo-autopilot`. |
-| `AUTOPILOT_TASK_USER` | Allowed GitHub login; defaults to the repository owner. Match the Actions variable if configured. |
-| `GITHUB_CLIENT_ID` | Client ID of the repository's GitHub App (see the GitHub App section). |
-| `GITHUB_CLIENT_SECRET` | A client secret generated for that GitHub App, stored only on the server. |
-| `GROQ_API_KEY` | Server-side key for screenshot interpretation. The Actions coding worker still uses its repository secret. |
-| `HOST`, `PORT` | Listener settings; Docker defaults to `0.0.0.0:3001`. |
-
-Sign-in uses the same GitHub App as the task agent, through GitHub's user authorization flow. In the app's settings add the callback URL `<CHAT_ORIGIN>/auth/callback`, keep **Expire user authorization tokens** enabled and generate a client secret. The resulting user token carries no OAuth scopes: it works only on repositories where the app is installed and only with the app's permissions (Contents, Issues, Pull requests), so a leaked session token cannot reach your other repositories. The server accepts only GitHub App user tokens (`ghu_` prefix, no OAuth scopes), so an OAuth app cannot be configured by mistake, and it admits only the configured owner login. Sessions end when the eight-hour user token expires. OAuth tokens stay in server memory; the browser receives an opaque HttpOnly session cookie. OAuth uses browser-bound encrypted stateless state and PKCE; unauthenticated login requests do not fill a global state map. Follow-up writes are locked per task across all sessions in the server process. Writes require an exact origin and session CSRF token. Sessions expire after eight hours and are lost on restart; run one server instance. Do not put OAuth secrets or API keys in a Pages variable or browser code.
-
-Once the server is running, set the repository Actions variable `AUTOPILOT_CHAT_URL` to its HTTPS chat URL and run the Pages workflow. Only this public URL is inserted into the static build. The dashboard keeps the GitHub confirmation route until this variable is configured.
-
-References: [GitHub App user access tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app), [Groq vision](https://console.groq.com/docs/vision).

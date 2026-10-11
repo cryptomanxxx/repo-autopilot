@@ -43,3 +43,15 @@ test('dashboard refresh signal cannot substitute for real CI',()=>{
  assert.equal(ciState([signal,{name:'test',status:'completed',conclusion:'failure'}],[]),'failure');
  assert.equal(ciState([signal,{name:'test',status:'completed',conclusion:'success'}],[]),'success');
 });
+
+test('a snapshot without access to workflow runs still lists pull requests, with a warning',async()=>{
+  const api=createGitHub({userAgent:'test-agent',fetchImpl:async(url,options)=>{
+    assert.equal(options.headers['User-Agent'],'test-agent');
+    if(url.includes('/actions/runs')) return {ok:false,status:403,json:async()=>({})};
+    return {ok:true,json:async()=>url.includes('/pulls?')?[]:{full_name:'a/b',html_url:'https://github.com/a/b'}};
+  }});
+  const data=await api.snapshot('a/b');
+  assert.deepEqual(data.workflows,[]);assert.match(data.warnings[0],/GitHub Actions runs are unavailable: GitHub access denied/);
+  const browser=createGitHub({fetchImpl:async(url,options)=>{assert.equal(options.headers['User-Agent'],undefined,'browsers keep their own User-Agent');return {ok:true,json:async()=>url.includes('/actions/runs')?{workflow_runs:[]}:url.includes('/pulls?')?[]:{full_name:'a/b'}};}});
+  await browser.snapshot('a/b');
+});

@@ -6,13 +6,16 @@ import {createGitHub} from '../src/github.js';
 
 test('Pages build publishes only static assets with project-relative URLs',async()=>{
   execFileSync(process.execPath,['scripts/build-pages.js']);
-  assert.deepEqual((await readdir('dist')).sort(),['app.js','codex.js','github.js','index.html','progress.js','saved-data.js','style.css','task-ui.js']);
+  assert.deepEqual((await readdir('dist')).sort(),['app.js','codex.js','dashboard-view.js','dashboard.css','github.js','index.html','progress.js','saved-data.js','style.css']);
   const html=await readFile('dist/index.html','utf8');
   assert.match(html,/data-mode="static"/);
   assert.match(html,/href="\.\/style.css"/);
   assert.match(html,/src="\.\/app.js"/);
   const app=await readFile('dist/app.js','utf8');
   assert.match(app,/from '\.\/github.js'/);
+  assert.match(app,/from '\.\/dashboard-view.js'/);
+  assert.match(html,/href="\.\/dashboard.css"/);
+  assert.doesNotMatch(html,/agent-task|task-text/,'the issue-based task box is gone');
   // An injected build-time environment secret must not appear in any output.
   for(const name of await readdir('dist')) assert.equal((await readFile(`dist/${name}`,'utf8')).includes('test-pages-secret-never-publish'),false);
 });
