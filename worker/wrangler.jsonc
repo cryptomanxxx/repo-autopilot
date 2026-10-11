@@ -1,0 +1,13 @@
+// Cloudflare Worker for the Repo Autopilot agent chat. Deployed by .github/workflows/chat-worker.yml,
+// which also supplies REPOSITORY, AUTOPILOT_USER, GITHUB_CLIENT_ID and the GITHUB_CLIENT_SECRET secret.
+{
+  "name": "repo-autopilot-chat",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+  "assets": {"directory": "public", "binding": "ASSETS", "run_worker_first": true},
+  "ai": {"binding": "AI"},
+  "durable_objects": {"bindings": [{"name": "CHAT", "class_name": "ChatStore"}]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["ChatStore"]}],
+  "vars": {"MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct", "CONTEXT_CHARS": "60000"},
+  "observability": {"enabled": true}
+}
