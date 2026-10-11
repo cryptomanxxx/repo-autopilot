@@ -70,6 +70,6 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10} = {}) {
       const readiness=mergeReadiness(pr,{ci:details.ci,codex:details.codex,checksComplete:details.checksComplete,verification});
       items.push({readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details});
     }
-    return {repository:metadata.full_name, url:metadata.html_url, fetchedAt:new Date().toISOString(), autonomy:false, scope:`${pullLimit} most recently updated PRs; 15 recent workflow runs. Review lists are limited to 100 entries. CI is informational, not merge eligibility.`, warnings, pulls:items, workflows:runs.workflow_runs.map(r => ({id:r.id, name:r.name, title:r.display_title, status:r.status, conclusion:r.conclusion, branch:r.head_branch, sha:r.head_sha, url:r.html_url, updatedAt:r.updated_at}))};
+    return {repository:metadata.full_name, url:metadata.html_url, fetchedAt:new Date().toISOString(), autonomy:false, scope:`${pullLimit} most recently updated PRs; 15 recent workflow runs. Review lists are limited to 100 entries. CI is informational, not merge eligibility.`, warnings, pulls:items, workflows:runs.workflow_runs.map(r => ({id:r.id, runNumber:r.run_number, name:r.name, title:r.display_title, status:r.status, conclusion:r.conclusion, branch:r.head_branch, sha:r.head_sha, url:r.html_url, updatedAt:r.updated_at}))};
   }};
 }
