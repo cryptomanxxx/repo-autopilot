@@ -150,6 +150,7 @@ export function displayText(answer) {
   return answer.replace(/\r\n/g,'\n').replace(BLOCK,'').replace(/^PR-TITLE:.*$/m,'').replace(/\n{3,}/g,'\n\n').trim();
 }
 
+// Returns {text, truncated}; truncated is true when the answer hit the output limit.
 export async function callModel(env,messages,{fetchImpl=fetch}={}) {
   const model=env.MODEL||DEFAULT_MODEL,max_tokens=Number(env.MAX_OUTPUT_TOKENS)||4096;
   if((env.MODEL_PROVIDER||'workers-ai')==='workers-ai') {
@@ -162,7 +163,7 @@ export async function callModel(env,messages,{fetchImpl=fetch}={}) {
     finally {clearTimeout(timer);}
     const content=typeof result?.response==='string'?result.response:result?.choices?.[0]?.message?.content??(result?.response!==undefined?JSON.stringify(result.response):undefined);
     if(typeof content!=='string'||!content.trim()) throw new PublicError('The model returned an empty answer.');
-    return content+(result?.usage?.completion_tokens>=max_tokens?CUT_OFF:'');
+    return {text:content,truncated:result?.usage?.completion_tokens>=max_tokens};
   }
   if(env.MODEL_PROVIDER!=='openai-compatible') throw new PublicError('Unknown MODEL_PROVIDER.');
   if(!env.MODEL) throw new PublicError('Set AUTOPILOT_CHAT_MODEL to a model name of your provider.');
@@ -180,13 +181,17 @@ export async function callModel(env,messages,{fetchImpl=fetch}={}) {
   }
   const choice=data?.choices?.[0];
   if(typeof choice?.message?.content!=='string'||!choice.message.content.trim()) throw new PublicError('The model returned an empty answer.');
-  return choice.message.content+(choice.finish_reason==='length'?CUT_OFF:'');
+  return {text:choice.message.content,truncated:choice.finish_reason==='length'};
 }
 
 // Asks the model, and when its edit blocks cannot be applied, gives it one chance to correct them.
 export async function answer(env,{messages,files,existingPaths,fetchImpl}) {
-  let reply=await callModel(env,messages,{fetchImpl});
+  let result=await callModel(env,messages,{fetchImpl});
   for(let attempt=0;;attempt++) {
+    const reply=result.truncated?result.text+CUT_OFF:result.text;
+    // An answer cut off at the output limit may stop between intended edits, so its edit blocks
+    // never become a proposal; a correction round would most likely be cut off as well.
+    if(result.truncated) return {reply,proposal:null,error:/^<<<<<<< SEARCH/m.test(result.text)?'The answer was cut off at the output limit, so its edits may be incomplete. Ask for a smaller change.':null};
     try {
       const {edits,title}=parseEdits(reply);
       if(!edits.length) return {reply,proposal:null,error:null};
@@ -194,7 +199,7 @@ export async function answer(env,{messages,files,existingPaths,fetchImpl}) {
       return {reply,proposal:{edits,title},error:null};
     } catch(error) {
       if(attempt>0) return {reply,proposal:null,error:error.message};
-      try {reply=await callModel(env,[...messages,{role:'assistant',content:reply},{role:'user',content:`Your edit blocks could not be applied: ${error.message} Send your complete answer again with corrected edit blocks. Copy SEARCH text exactly from the supplied file contents.`}],{fetchImpl});}
+      try {result=await callModel(env,[...messages,{role:'assistant',content:reply},{role:'user',content:`Your edit blocks could not be applied: ${error.message} Send your complete answer again with corrected edit blocks. Copy SEARCH text exactly from the supplied file contents.`}],{fetchImpl});}
       catch {return {reply,proposal:null,error:error.message};}
     }
   }

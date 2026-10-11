@@ -174,16 +174,22 @@ test('model provider failures and cut-off answers are explained',async()=>{
   const env={MODEL_PROVIDER:'openai-compatible',MODEL_BASE_URL:'https://models.example/v1',MODEL_API_KEY:'k',MODEL:'m'};
   await assert.rejects(callModel({...env,MODEL_BASE_URL:'not a url'},[]),/Configure MODEL_BASE_URL/);
   await assert.rejects(callModel({...env,MODEL:undefined},[]),/AUTOPILOT_CHAT_MODEL/);
-  assert.equal(await callModel({...env,MODEL:'@cf/meta/llama-3.1-8b-instruct'},[],{fetchImpl:async()=>Response.json({choices:[{message:{content:'ok'}}]})}),'ok','Cloudflare models work through the OpenAI-compatible endpoint');
+  assert.equal((await callModel({...env,MODEL:'@cf/meta/llama-3.1-8b-instruct'},[],{fetchImpl:async()=>Response.json({choices:[{message:{content:'ok'}}]})})).text,'ok','Cloudflare models work through the OpenAI-compatible endpoint');
   await assert.rejects(callModel({...env,MODEL_BASE_URL:'http://models.example'},[]),/Configure MODEL_BASE_URL/);
   await assert.rejects(callModel(env,[],{fetchImpl:async()=>{throw Object.assign(new Error('x'),{name:'TimeoutError'});}}),/timed out after 150 seconds/);
   await assert.rejects(callModel(env,[],{fetchImpl:async()=>new Response('<html>',{status:200})}),/no valid response/);
   await assert.rejects(callModel(env,[],{fetchImpl:async()=>new Response('{}',{status:429})}),/HTTP 429/);
   let sent;
-  assert.match(await callModel(env,[{role:'user',content:'hi'}],{fetchImpl:async(url,options)=>{sent={url,options};return Response.json({choices:[{message:{content:'Hi'},finish_reason:'length'}]});}}),/^Hi\n\n\[The answer was cut off/);
+  assert.deepEqual(await callModel(env,[{role:'user',content:'hi'}],{fetchImpl:async(url,options)=>{sent={url,options};return Response.json({choices:[{message:{content:'Hi'},finish_reason:'length'}]});}}),{text:'Hi',truncated:true});
   assert.equal(sent.url,'https://models.example/v1/chat/completions');assert.equal(sent.options.headers.Authorization,'Bearer k');
-  assert.match(await callModel({AI:{run:async()=>({response:'Long',usage:{completion_tokens:4096}})}},[]),/cut off/);
-  assert.equal(await callModel({AI:{run:async()=>({response:'Short',usage:{completion_tokens:10}})}},[]),'Short');
+  assert.deepEqual(await callModel({AI:{run:async()=>({response:'Long',usage:{completion_tokens:4096}})}},[]),{text:'Long',truncated:true});
+  assert.deepEqual(await callModel({AI:{run:async()=>({response:'Short',usage:{completion_tokens:10}})}},[]),{text:'Short',truncated:false});
+  // A cut-off answer never becomes a proposal, even when a complete edit block was written before the limit.
+  const block='Two edits.\n<<<<<<< SEARCH public/a.js\nold\n=======\nnew\n>>>>>>> REPLACE\n<<<<<<< SEARCH public/b.js\nol';
+  let calls=0;const cut=await answer({AI:{run:async()=>(calls++,{response:block,usage:{completion_tokens:4096}})}},{messages:[],files:{'public/a.js':'old\n'},existingPaths:['public/a.js']});
+  assert.equal(cut.proposal,null);assert.match(cut.error,/cut off/);assert.match(cut.reply,/\[The answer was cut off/);assert.equal(calls,1,'no correction round is spent');
+  const prose=await answer({AI:{run:async()=>({response:'A long explanation',usage:{completion_tokens:4096}})}},{messages:[],files:{},existingPaths:[]});
+  assert.deepEqual([prose.proposal,prose.error],[null,null]);assert.match(prose.reply,/cut off/);
 });
 
 test('images must be small PNG or JPEG data URLs',()=>{
