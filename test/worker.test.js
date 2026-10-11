@@ -174,6 +174,7 @@ test('model provider failures and cut-off answers are explained',async()=>{
   const env={MODEL_PROVIDER:'openai-compatible',MODEL_BASE_URL:'https://models.example/v1',MODEL_API_KEY:'k',MODEL:'m'};
   await assert.rejects(callModel({...env,MODEL_BASE_URL:'not a url'},[]),/Configure MODEL_BASE_URL/);
   await assert.rejects(callModel({...env,MODEL:undefined},[]),/AUTOPILOT_CHAT_MODEL/);
+  assert.equal(await callModel({...env,MODEL:'@cf/meta/llama-3.1-8b-instruct'},[],{fetchImpl:async()=>Response.json({choices:[{message:{content:'ok'}}]})}),'ok','Cloudflare models work through the OpenAI-compatible endpoint');
   await assert.rejects(callModel({...env,MODEL_BASE_URL:'http://models.example'},[]),/Configure MODEL_BASE_URL/);
   await assert.rejects(callModel(env,[],{fetchImpl:async()=>{throw Object.assign(new Error('x'),{name:'TimeoutError'});}}),/timed out after 150 seconds/);
   await assert.rejects(callModel(env,[],{fetchImpl:async()=>new Response('<html>',{status:200})}),/no valid response/);
@@ -272,7 +273,7 @@ test('sign-in requires the owner, a GitHub App token and the starting browser',a
   const misconfigured=await handle(request(`/auth/callback?error=redirect_uri_mismatch&state=${encodeURIComponent(attempt.state)}`,{cookie:`autopilot_login=${attempt.browser}`}),network.env,{fetchImpl});
   assert.equal(misconfigured.headers.get('Location'),'/?signin=github');
   const forged=await handle(request('/auth/callback?error=access_denied',{cookie:`autopilot_login=${attempt.browser}`}),network.env,{fetchImpl});
-  assert.equal(forged.headers.get('Location'),'/?signin=expired');assert.equal(forged.headers.get('Set-Cookie'),null,'another page cannot cancel a pending sign-in');
+  assert.equal(forged.headers.get('Location'),'/?signin=cancelled');assert.equal(forged.headers.get('Set-Cookie'),null,'another page cannot clear a pending sign-in');
   const expired=environment();let now=1000;
   const late=await signIn(expired.env,fetchImpl,()=>now);now+=601000;
   assert.equal((await handle(request(`/auth/callback?code=c&state=${encodeURIComponent(late.state)}`,{cookie:`autopilot_login=${late.browser}`}),expired.env,{fetchImpl,now:()=>now})).headers.get('Location'),'/?signin=expired');
@@ -345,6 +346,12 @@ test('pull requests keep file modes and can be retried after a partial failure',
   assert.deepEqual(await retried.json(),{url:'https://github.com/owner/repo/pull/7'});
   const patch=calls.find(c=>c.method==='PATCH');
   assert.equal(patch.url.split('/git/refs/heads/')[1],branch,'the retry reuses the same branch');assert.equal(JSON.parse(patch.options.body).force,true);
+  // A pull request opened from the branch after the first check is reused, not overwritten.
+  store.sql.exec('UPDATE messages SET pr_url = NULL');calls.length=0;let lookups=0;
+  const racing=github({calls,refStatus:422});
+  const raced=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:async(url,options)=>url.includes('/pulls?state=open')?(calls.push({url,method:'GET',options}),Response.json(lookups++?[{html_url:'https://github.com/owner/repo/pull/9'}]:[])):racing(url,options)});
+  assert.deepEqual(await raced.json(),{url:'https://github.com/owner/repo/pull/9'});
+  assert.equal(calls.some(c=>c.method==='PATCH'),false);
   // A pull request that exists but was never recorded is reused without touching its branch.
   store.sql.exec('UPDATE messages SET pr_url = NULL');calls.length=0;
   const reused=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422,openPulls:[{html_url:'https://github.com/owner/repo/pull/8'}]})});

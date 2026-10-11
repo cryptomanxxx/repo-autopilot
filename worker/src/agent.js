@@ -165,7 +165,7 @@ export async function callModel(env,messages,{fetchImpl=fetch}={}) {
     return content+(result?.usage?.completion_tokens>=max_tokens?CUT_OFF:'');
   }
   if(env.MODEL_PROVIDER!=='openai-compatible') throw new PublicError('Unknown MODEL_PROVIDER.');
-  if(model.startsWith('@cf/')) throw new PublicError('Set AUTOPILOT_CHAT_MODEL to a model name of your provider.');
+  if(!env.MODEL) throw new PublicError('Set AUTOPILOT_CHAT_MODEL to a model name of your provider.');
   let base;
   try {base=new URL(env.MODEL_BASE_URL);} catch {}
   if(base?.protocol!=='https:'||!env.MODEL_API_KEY) throw new PublicError('Configure MODEL_BASE_URL (HTTPS) and the MODEL_API_KEY secret.');

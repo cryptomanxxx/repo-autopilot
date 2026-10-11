@@ -51,6 +51,9 @@ export function githubClient({repository,token,fetchImpl=fetch}) {
       try {await api('git/refs',{method:'POST',body:{ref:`refs/heads/${branch}`,sha:next.sha}});}
       catch(error) {
         if(!(error instanceof GitHubError&&error.status===422)) throw error;
+        // A pull request may have been opened from the branch since the check above.
+        const opened=await openPull();
+        if(opened) return pullUrl(opened);
         await api(`git/refs/heads/${branch}`,{method:'PATCH',body:{sha:next.sha,force:true}});
       }
       try {return pullUrl(await api('pulls',{method:'POST',body:{title,head:branch,base,body}}));}

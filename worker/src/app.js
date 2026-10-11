@@ -119,11 +119,12 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   if(request.method==='GET'&&url.pathname==='/auth/callback') {
     // Sign-in problems return to the chat page, which explains them, instead of showing raw JSON.
     // The pending sign-in cookie is only cleared for this browser's own, valid state.
-    const pending=await openState(env.GITHUB_CLIENT_SECRET,url.searchParams.get('state'),now());
-    if(!pending||pending.browser!==cookies(request).autopilot_login) return redirect('/?signin=expired');
-    const failed=reason=>redirect(`/?signin=${reason}`,[cookie('autopilot_login','',{path:'/auth'})]);
     const githubError=url.searchParams.get('error'),code=url.searchParams.get('code');
-    if(githubError) return failed(githubError==='access_denied'?'cancelled':'github');
+    const reason=githubError?(githubError==='access_denied'?'cancelled':'github'):'expired';
+    const pending=await openState(env.GITHUB_CLIENT_SECRET,url.searchParams.get('state'),now());
+    if(!pending||pending.browser!==cookies(request).autopilot_login) return redirect(`/?signin=${reason}`);
+    const failed=reason=>redirect(`/?signin=${reason}`,[cookie('autopilot_login','',{path:'/auth'})]);
+    if(githubError) return failed(reason);
     if(!code) return failed('failed');
     let token,user;
     try {
@@ -135,7 +136,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
       if(!token.access_token.startsWith('ghu_')||token.scope) return failed('app');
       const userResponse=await fetchImpl('https://api.github.com/user',{redirect:'manual',headers:{Authorization:`Bearer ${token.access_token}`,Accept:'application/vnd.github+json','User-Agent':'repo-autopilot-chat'},signal:AbortSignal.timeout(20000)});
       user=userResponse.ok?await userResponse.json().catch(()=>({})):{};
-    } catch {return failed('failed');}
+    } catch(error) {console.error('sign-in failed',error?.stack||error);return failed('failed');}
     if(typeof user.login!=='string'||user.login.toLowerCase()!==config.owner) return failed('owner');
     const id=randomHex(),lifetime=Number.isFinite(token.expires_in)&&token.expires_in>0?token.expires_in*1000:8*HOUR;
     await store.createSession({hash:hex(await sha256(id)),token:token.access_token,csrf:randomHex(),login:user.login,expires:now()+Math.min(lifetime,8*HOUR)});

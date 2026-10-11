@@ -70,7 +70,7 @@ jobs:
         # Every setting comes from repository variables: a deploy replaces the Worker's variables, so
         # values typed into the Cloudflare dashboard would be lost. Secrets ship with the same version.
         run: |
-          if [ -n "$MODEL_PROVIDER" ] && [ -z "$MODEL" ]; then
+          if [ "$MODEL_PROVIDER" = "openai-compatible" ] && [ -z "$MODEL" ]; then
             echo "::error::AUTOPILOT_CHAT_MODEL_PROVIDER is set; also set AUTOPILOT_CHAT_MODEL to the provider's model name."
             exit 1
           fi
