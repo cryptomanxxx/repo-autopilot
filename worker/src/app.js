@@ -1,4 +1,5 @@
 import {githubClient,GitHubError,readLimited} from './github.js';
+import {repositoryName} from '../../src/github.js';
 import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
 
 const encoder=new TextEncoder();
@@ -47,10 +48,11 @@ export function validateImage(image) {
 }
 
 function settings(env,request) {
-  const url=new URL(request.url);
-  if(!env.REPOSITORY||!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.REPOSITORY)||!env.GITHUB_CLIENT_ID||!env.GITHUB_CLIENT_SECRET) return {error:'The chat is not configured yet: set REPOSITORY, GITHUB_CLIENT_ID and the GITHUB_CLIENT_SECRET secret.'};
-  const origin=env.CHAT_ORIGIN?new URL(env.CHAT_ORIGIN).origin:url.origin;
-  return {origin,repository:env.REPOSITORY,owner:(env.AUTOPILOT_USER||env.REPOSITORY.split('/')[0]).toLowerCase(),secure:origin.startsWith('https:'),sameOrigin:url.origin===origin};
+  const url=new URL(request.url),error={error:'The chat is not configured yet: set REPOSITORY, GITHUB_CLIENT_ID and the GITHUB_CLIENT_SECRET secret (and CHAT_ORIGIN, if used, to an https:// origin).'};
+  let repository,origin;
+  try {repository=repositoryName(env.REPOSITORY);origin=env.CHAT_ORIGIN?new URL(env.CHAT_ORIGIN).origin:url.origin;} catch {return {...error,secure:url.protocol==='https:'};}
+  if(repository!==env.REPOSITORY||!env.GITHUB_CLIENT_ID||!env.GITHUB_CLIENT_SECRET||origin==='null') return {...error,secure:url.protocol==='https:'};
+  return {origin,repository,owner:(env.AUTOPILOT_USER||repository.split('/')[0]).toLowerCase(),secure:origin.startsWith('https:'),sameOrigin:url.origin===origin};
 }
 
 const SECURITY_HEADERS={
@@ -177,7 +179,8 @@ async function chat(body,{env,store,github,config,fetchImpl}) {
     if(!conversation) throw new UserError(404,'Conversation not found.');
   }
   const lock=randomHex(16);
-  if(!await store.acquireLock('model',lock,180000)) throw new UserError(429,'The agent is still answering another message. Wait until it has finished.');
+  // Longer than the worst case below: GitHub reads plus two model calls of at most 150 s each.
+  if(!await store.acquireLock('model',lock,420000)) throw new UserError(429,'The agent is still answering another message. Wait until it has finished.');
   try {
     const client=github(),head=await client.head(),archive=await client.archive(head.sha),files=textFiles(archive);
     const history=conversation?.messages||[];
@@ -195,7 +198,7 @@ async function chat(body,{env,store,github,config,fetchImpl}) {
 async function pullRequest(body,{store,github}) {
   if(typeof body.conversation!=='string'||!/^[0-9a-f]{32}$/.test(body.conversation)||!Number.isSafeInteger(body.message)||body.message<1) throw new UserError(400,'Invalid request.');
   const lock=randomHex(16);
-  if(!await store.acquireLock('pull-request',lock,120000)) throw new UserError(429,'A pull request is already being created. Wait a moment.');
+  if(!await store.acquireLock('pull-request',lock,240000)) throw new UserError(429,'A pull request is already being created. Wait a moment.');
   try {
     const message=await store.getMessage(body.conversation,body.message);
     if(!message||message.role!=='assistant'||!message.proposal) throw new UserError(404,'This message has no proposed change.');

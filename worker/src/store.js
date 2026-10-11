@@ -16,7 +16,8 @@ export class ChatStoreLogic {
 
   createSession({hash,token,csrf,login,expires}) {
     this.sql.exec('DELETE FROM sessions WHERE expires <= ?',this.now());
-    if(this.rows('SELECT COUNT(*) AS n FROM sessions')[0].n>=20) throw new Error('Too many active sessions. Sign out elsewhere or wait for sessions to expire.');
+    // At most 20 sessions; a new sign-in replaces the oldest instead of locking the owner out.
+    this.sql.exec('DELETE FROM sessions WHERE hash IN (SELECT hash FROM sessions ORDER BY expires DESC LIMIT -1 OFFSET 19)');
     this.sql.exec('INSERT INTO sessions (hash, token, csrf, login, expires) VALUES (?, ?, ?, ?, ?)',hash,token,csrf,login,Math.min(expires,this.now()+8*HOUR));
   }
   getSession(hash) {
@@ -64,7 +65,8 @@ export class ChatStoreLogic {
     return {user:this.addMessage(conversation,{...user,role:'user'}),assistant:this.addMessage(conversation,{...assistant,role:'assistant'})};
   }
   getMessage(conversation,id) {
-    return this.getConversation(conversation)?.messages.find(m=>m.id===id) || null;
+    const [m]=this.rows('SELECT id, role, content, has_image, proposal, pr_url, created FROM messages WHERE conversation = ? AND id = ?',conversation,id);
+    return m?{id:m.id,role:m.role,content:m.content,hasImage:Boolean(m.has_image),proposal:m.proposal?JSON.parse(m.proposal):null,prUrl:m.pr_url||null,created:m.created}:null;
   }
   setPullRequest(conversation,id,url) {
     this.sql.exec('UPDATE messages SET pr_url = ? WHERE conversation = ? AND id = ? AND pr_url IS NULL',url,conversation,id);

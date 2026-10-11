@@ -1,4 +1,4 @@
-const state={csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0};
+const state={csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false};
 const $=id=>document.getElementById(id);
 const status=text=>{$('status').textContent=text;};
 const MAX_SIDE=1600,MAX_DATA_URL=1400000;
@@ -85,7 +85,7 @@ async function createPullRequest(message,button) {
   if(state.busy) return;
   state.busy=true;button.disabled=true;status('Creating pull request…');
   try {
-    await api('/api/pull-request',{conversation:state.conversation,message},120000);
+    await api('/api/pull-request',{conversation:state.conversation,message},250000);
     status('Pull request created. CI runs on GitHub.');
     state.busy=false;await openConversation(state.conversation);
   } catch(error) {status(error.message);button.disabled=false;}
@@ -105,18 +105,20 @@ async function prepareImage(file) {
   bitmap.close();throw new Error('The image is too large.');
 }
 function clearImage() {
-  state.imageSelection++;state.image=null;$('image').value='';$('preview').hidden=true;$('remove-image').hidden=true;
+  state.imageSelection++;state.preparing=false;state.image=null;$('image').value='';$('preview').hidden=true;$('remove-image').hidden=true;
   if(state.previewUrl) URL.revokeObjectURL(state.previewUrl);state.previewUrl=null;
 }
 async function attach(file) {
   if(!file) return;
   clearImage();const selection=state.imageSelection;
   if(!/^image\/(png|jpeg|webp)$/.test(file.type)||file.size>20000000) {status('Choose a PNG, JPEG or WebP image.');return;}
+  state.preparing=true;status('Preparing image…');
   try {
     const data=await prepareImage(file);
     if(selection!==state.imageSelection) return;
     state.image=data;state.previewUrl=URL.createObjectURL(file);$('preview').src=state.previewUrl;$('preview').hidden=false;$('remove-image').hidden=false;status('Image attached.');
   } catch {if(selection===state.imageSelection) {clearImage();status('Could not read the image.');}}
+  finally {if(selection===state.imageSelection) state.preparing=false;}
 }
 $('image').onchange=()=>attach($('image').files[0]);
 $('remove-image').onclick=()=>{clearImage();status('');};
@@ -129,6 +131,7 @@ $('message').addEventListener('keydown',event=>{if(event.key==='Enter'&&(event.c
 $('composer').onsubmit=async event=>{
   event.preventDefault();
   if(state.busy) return;
+  if(state.preparing) {status('Wait until the image is ready.');return;}
   const text=$('message').value.trim();if(!text) return;
   state.busy=true;$('send').disabled=true;$('message').disabled=true;$('image').disabled=true;
   const container=$('messages');container.querySelector('.empty')?.remove();
@@ -136,7 +139,7 @@ $('composer').onsubmit=async event=>{
   const thinking=document.createElement('p');thinking.className='muted thinking';thinking.textContent='The agent is reading the code and writing an answer…';container.append(thinking);thinking.scrollIntoView({block:'end'});
   status('');
   try {
-    const result=await api('/api/chat',{conversation:state.conversation,text,image:state.image},240000);
+    const result=await api('/api/chat',{conversation:state.conversation,text,image:state.image},430000);
     $('message').value='';clearImage();
     state.busy=false;await openConversation(result.conversation);
   } catch(error) {

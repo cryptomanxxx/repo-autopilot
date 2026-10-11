@@ -7,8 +7,10 @@ export class GitHubError extends Error {
   constructor(status,path) {super(`GitHub request failed (HTTP ${status}).`);this.status=status;this.path=path;}
 }
 
+import {repositoryName} from '../../src/github.js';
+
 export function githubClient({repository,token,fetchImpl=fetch}) {
-  if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository||'')) throw new Error('Invalid repository configuration.');
+  if(repositoryName(repository)!==repository) throw new Error('Invalid repository configuration.');
   const headers=accept=>({Authorization:`Bearer ${token}`,Accept:accept,'User-Agent':'repo-autopilot-chat','X-GitHub-Api-Version':'2022-11-28'});
   async function api(path,{method='GET',body}={}) {
     const response=await fetchImpl(`${API}/repos/${repository}${path?'/'+path:''}`,{method,headers:{...headers('application/vnd.github+json'),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});

@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test,{mock} from 'node:test';
 import assert from 'node:assert/strict';
 import {gzipSync} from 'node:zlib';
 import {execFileSync} from 'node:child_process';
@@ -8,7 +8,9 @@ import {join,dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {ChatStoreLogic} from '../worker/src/store.js';
 import {readTar} from '../worker/src/github.js';
-import {selectContext,parseEdits,applyEdits,buildMessages,answer,textFiles,displayText,readableFile} from '../worker/src/agent.js';
+import {selectContext,parseEdits,applyEdits,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel} from '../worker/src/agent.js';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
 import {handle,validateImage} from '../worker/src/app.js';
 
 // Adapter giving node:sqlite the Durable Object `sql.exec(query, ...bindings).toArray()` shape.
@@ -49,8 +51,11 @@ test('store keeps sessions, locks, exchanges and pull request links consistent',
   assert.equal(store.getMessage('c1',ids.assistant).prUrl,'https://github.com/o/r/pull/1','the first pull request link is kept');
   assert.equal(store.getMessage('other',ids.assistant),null);
   assert.equal(store.listConversations()[0].title,'First');
-  for(let i=0;i<20;i++) store.createSession({hash:`s${i}`,token:'t',csrf:'c',login:'o',expires:time+1000});
-  assert.throws(()=>store.createSession({hash:'x',token:'t',csrf:'c',login:'o',expires:time+1000}),/Too many/);
+  for(let i=0;i<20;i++) store.createSession({hash:`s${i}`,token:'t',csrf:'c',login:'o',expires:time+1000+i});
+  store.createSession({hash:'x',token:'t',csrf:'c',login:'o',expires:time+5000});
+  assert.equal(store.rows('SELECT COUNT(*) AS n FROM sessions')[0].n,20);
+  assert.equal(store.getSession('s0'),null,'the oldest session makes room for a new sign-in');
+  assert.equal(store.getSession('x').login,'o');assert.equal(store.getSession('s19').login,'o');
 });
 
 test('archive reader handles GitHub prefixes, pax paths and skips non-files',()=>{
@@ -82,8 +87,8 @@ test('context prefers named and related files within the budget',()=>{
   assert.deepEqual(context.listing,['README.md','public/app.js','public/style.css','src/github.js']);
   assert.equal(readableFile('.github/workflows/ci.yml',10),true);
   assert.equal(readableFile('.env',10),false);assert.equal(readableFile('dist/app.js',10),false);assert.equal(readableFile('public/logo.png',10),false);
-  const decoded=textFiles(new Map([['a.js',new TextEncoder().encode('a\r\nb')],['b.js',new Uint8Array([0xff,0xfe])],['c.png',new Uint8Array([1])]]));
-  assert.deepEqual(decoded,{'a.js':'a\nb'});
+  const decoded=textFiles(new Map([['a.js',new TextEncoder().encode('a\r\nb')],['bom.js',new Uint8Array([0xef,0xbb,0xbf,0x61])],['b.js',new Uint8Array([0xff,0xfe])],['c.png',new Uint8Array([1])]]));
+  assert.deepEqual(decoded,{'a.js':'a\r\nb','bom.js':'\ufeffa'},'line endings and BOM are kept byte for byte');
 });
 
 test('edit blocks are parsed, applied exactly once and limited to allowed paths',()=>{
@@ -104,6 +109,23 @@ test('edit blocks are parsed, applied exactly once and limited to allowed paths'
   assert.throws(()=>applyEdits(block('.github/workflows/ci.yml',''),files,Object.keys(files)),/may not be edited/);
   assert.throws(()=>applyEdits(block('public/app.js',''),files,Object.keys(files)),/already exists/);
   assert.throws(()=>parseEdits('<<<<<<< SEARCH a.js\nx\n=======\ny\n'),/malformed/);
+  const crlf={'public/win.js':'\ufeffa\r\nb\r\nc\r\n'};
+  assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/win.js\na\nb\n=======\na\nB\n>>>>>>> REPLACE').edits,crlf,Object.keys(crlf)),[{path:'public/win.js',content:'\ufeffa\r\nB\r\nc\r\n'}],'CRLF files keep their line endings');
+  for(const path of WORKER_SOURCES) assert.throws(()=>applyEdits(block(path,'x'),{[path]:'x'},[path]),/may not be edited/,path);
+  assert.throws(()=>applyEdits(block('public/app.js','const x=1;','const x=1;'),files,Object.keys(files)),/do not change/);
+  const many=Object.fromEntries(Array.from({length:9},(_,i)=>[`public/f${i}.js`,'a']));
+  assert.throws(()=>applyEdits(Object.keys(many).map(path=>({path,search:'a',replace:'b'})),many,Object.keys(many)),/at most 8 files/);
+  const big={'public/big.js':'a'+'x'.repeat(90000)};
+  assert.equal(applyEdits(block('public/big.js','a','b'),big,['public/big.js'])[0].content.length,90001,'large readable files can be edited');
+});
+
+test('every repository file bundled into the Worker is read-only for the chat agent',()=>{
+  const root=fileURLToPath(new URL('..',import.meta.url)),seen=new Set(),pending=['worker/src/index.js'];
+  while(pending.length) {
+    const file=pending.pop();if(seen.has(file)) continue;seen.add(file);
+    for(const [,spec] of readFileSync(join(root,file),'utf8').matchAll(/from\s+'(\.[^']+)'/g)) pending.push(join(dirname(file),spec));
+  }
+  assert.deepEqual([...seen].filter(f=>!f.startsWith('worker/')).sort(),[...WORKER_SOURCES].sort());
 });
 
 test('messages carry files, history and the current image',()=>{
@@ -125,6 +147,15 @@ test('a failed edit gets one correction round before it is reported',async()=>{
   const failed=await answer(failing,{messages:[],files:{'public/a.js':'old\n'},existingPaths:['public/a.js']});
   assert.equal(failed.proposal,null);assert.match(failed.error,/does not match/);
   await assert.rejects(answer({AI:{run:async()=>{throw new Error('3036: daily free allocation exceeded');}}},{messages:[],files:{},existingPaths:[]}),/daily free allocation/);
+});
+
+test('a model that never answers times out instead of holding the chat lock',async()=>{
+  mock.timers.enable({apis:['setTimeout']});
+  try {
+    const pending=callModel({AI:{run:()=>new Promise(()=>{})}},[]);
+    mock.timers.tick(150000);
+    await assert.rejects(pending,/timed out after 150 seconds/);
+  } finally {mock.timers.reset();}
 });
 
 test('images must be small PNG or JPEG data URLs',()=>{
@@ -215,6 +246,11 @@ test('API rejects missing sessions, foreign origins and missing CSRF tokens',asy
   assert.match(page.headers.get('Content-Security-Policy'),/default-src 'self'/);assert.equal(page.headers.get('X-Frame-Options'),'DENY');
   assert.equal((await handle(request('/api/session'),{...env,GITHUB_CLIENT_SECRET:''},{fetchImpl})).status,503);
   assert.equal((await handle(request('/api/session'),{...env,CHAT_ORIGIN:'https://other.example'},{fetchImpl})).status,404);
+  for(const broken of [{CHAT_ORIGIN:'chat.example.com'},{REPOSITORY:'owner/..'},{REPOSITORY:'https://github.com/owner/repo'}]) {
+    const response=await handle(request('/api/session'),{...env,...broken},{fetchImpl});
+    assert.equal(response.status,503,JSON.stringify(broken));assert.match((await response.json()).error,/not configured/);
+  }
+  assert.equal((await handle(request('/'),{...env,CHAT_ORIGIN:'chat.example.com'},{fetchImpl})).status,200,'pages still load with a broken setting');
   const logout=await handle(post('/api/logout',auth,{}),env,{fetchImpl});
   assert.match(logout.headers.get('Set-Cookie'),/Max-Age=0/);
   assert.equal((await handle(request('/api/conversations',{cookie:auth.cookie}),env,{fetchImpl})).status,401);
