@@ -413,7 +413,7 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
     const ok=value=>Response.json(value);
     if(url==='https://github.com/login/oauth/access_token') return ok({access_token:'ghu_user',expires_in:28800,scope:''});
     if(url==='https://api.github.com/user') return ok({login:'owner'});
-    if(url==='https://api.github.com/graphql') return ok({data:{repository:{pullRequest:{headRefOid:pulls[0].head.sha,mergeStateStatus:'CLEAN',reviewDecision:null,reviewThreads:{pageInfo:{hasNextPage:false},nodes:[]}}}}});
+    if(url==='https://api.github.com/graphql') return ok({data:{repository:{pullRequest:{headRefOid:pulls[JSON.parse(options.body).variables.number-1].head.sha,mergeStateStatus:'CLEAN',reviewDecision:null,reviewThreads:{pageInfo:{hasNextPage:false},nodes:[]}}}}});
     const path=url.replace('https://api.github.com/repos/owner/repo','');
     if(path==='') return ok({full_name:'owner/repo',html_url:'https://github.com/owner/repo'});
     if(path.startsWith('/pulls?state=all')) return ok(pulls);
@@ -436,7 +436,8 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
   calls.length=0;
   const detail=await (await get('/api/dashboard/pulls/1?updated=2026-10-01T00:00:00Z')).json();
   assert.equal(detail.number,1);assert.equal(detail.ci,'success');assert.equal(detail.state,'open');assert.ok(detail.readiness.label);
-  assert.ok(calls.length<=10,`one pull request needs at most ten GitHub calls (used ${calls.length})`);
+  assert.equal(calls.filter(c=>c.url.endsWith('/pulls/1')).length,1,'the pull request is fetched once');
+  assert.ok(calls.length<=9,`one pull request needs at most nine GitHub calls (used ${calls.length})`);
   assert.ok(calls.filter(c=>c.url==='https://api.github.com/graphql').every(c=>c.options.headers['User-Agent']));
   calls.length=0;
   await get('/api/dashboard');await get('/api/dashboard/pulls/1?updated=2026-10-01T00:00:00Z');
@@ -457,7 +458,14 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
   assert.equal((await handle(request('/api/dashboard'),env,{fetchImpl})).status,401,'the dashboard requires sign-in');
   const failing=async url=>url.startsWith('https://api.github.com/repos/')?new Response('{}',{status:502}):fetchImpl(url);
   const failed=await handle(request('/api/dashboard?fresh=1',{cookie:auth.cookie}),env,{fetchImpl:failing,now:()=>time});
-  assert.equal(failed.status,500);assert.match((await failed.json()).error,/GitHub request failed \(502\)/);
+  assert.equal(failed.status,502,'GitHub refusals are reported as such, not as server errors');assert.match((await failed.json()).error,/GitHub request failed \(502\)/);
+  const missing=async url=>/\/pulls\/77$/.test(url)?new Response('{}',{status:404}):fetchImpl(url);
+  assert.equal((await handle(request('/api/dashboard/pulls/77',{cookie:auth.cookie}),env,{fetchImpl:missing,now:()=>time})).status,404);
+  // A pull request whose details partly failed is shown, but not cached.
+  const flaky=async url=>/\/pulls\/2\/reviews/.test(url)?new Response('{}',{status:503}):fetchImpl(url);
+  const partial=await (await handle(request('/api/dashboard/pulls/2?updated=y',{cookie:auth.cookie}),env,{fetchImpl:flaky,now:()=>time})).json();
+  assert.match(partial.detailError,/503/);
+  assert.equal(store.getCache('pull:2:y'),null,'failed details are not cached');
   const expired=async url=>url.startsWith('https://api.github.com/repos/')?new Response('{}',{status:401}):fetchImpl(url);
   assert.equal((await handle(request('/api/dashboard?fresh=1',{cookie:auth.cookie}),env,{fetchImpl:expired,now:()=>time})).status,401);
   assert.equal((await get('/api/dashboard')).status,401,'an expired GitHub token ends the session');

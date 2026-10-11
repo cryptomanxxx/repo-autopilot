@@ -13,7 +13,7 @@ async function api(path,body,timeout=30000) {
 }
 
 function showSignedOut(message) {
-  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;
+  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;
   for(const id of ['tabs','chat','dashboard-view']) $(id).hidden=true;
 }
 
@@ -60,7 +60,7 @@ function renderMessage(message) {
     if(message.prUrl) {
       const link=document.createElement('a');link.href=message.prUrl;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open pull request';box.append(link);
       const number=followPull(message.prUrl);
-      if(number) {const follow=document.createElement('button');follow.type='button';follow.className='secondary';follow.textContent='Follow in dashboard';follow.onclick=()=>{showPull(number);showTab('dashboard',{hash:`#pr-${number}`});};box.append(follow);}
+      if(number) {const follow=document.createElement('button');follow.type='button';follow.className='secondary';follow.textContent='Follow in dashboard';follow.onclick=()=>{showTab('dashboard',{hash:`#pr-${number}`});showPull(number);};box.append(follow);}
     } else if(message.id) {
       const button=document.createElement('button');button.textContent='Create pull request';
       button.onclick=()=>createPullRequest(message.id,button);box.append(button);
@@ -193,9 +193,11 @@ try {
     const hash=location.hash,conversation=/^#(?:chat\/)?([0-9a-f]{32})$/.exec(hash)?.[1]||null,pull=/^#pr-([1-9]\d{0,8})$/.exec(hash)?.[1];
     let saved=null;try {saved=localStorage.getItem('autopilot-tab');} catch {}
     const tab=conversation||hash==='#chat'?'chat':pull||hash==='#dashboard'?'dashboard':saved==='chat'?'chat':'dashboard';
-    if(pull) showPull(Number(pull));
     state.tab=tab;
-    await openConversation(conversation);
+    // The dashboard starts loading at once instead of waiting for the conversation list.
+    const chat=openConversation(conversation);
     showTab(tab,{hash:pull?`#pr-${pull}`:undefined});
+    if(pull) showPull(Number(pull));
+    await chat;
   }
 } catch(error) {$('account').textContent=error.message||'Repo Autopilot is unavailable. Try again later.';}

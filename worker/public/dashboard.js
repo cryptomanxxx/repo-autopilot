@@ -33,7 +33,7 @@ function openPending() {
 }
 
 export async function loadDashboard({fresh=false}={}) {
-  if(loading||!api) return;
+  if(loading||!api||$('dashboard-view').hidden) return;
   loading=true;$('refresh').disabled=true;
   if(!data) status('Loading live GitHub data…');
   try {

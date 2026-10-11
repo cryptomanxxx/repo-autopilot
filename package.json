@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/server.js",
     "test": "node --test",
-    "check": "node --check src/server.js && node --check src/github.js && node --check public/app.js && node --check scripts/build-pages.js && node --check src/codex.js && node --check src/progress.js && node --check scripts/snapshot-pages.js && node --check scripts/publish-data.js && node --check public/saved-data.js && node --check worker/src/index.js && node --check worker/src/app.js && node --check worker/src/agent.js && node --check worker/src/github.js && node --check worker/src/store.js && node --check worker/public/chat.js && node --check worker/public/dashboard-view.js && node --check src/agent.js",
+    "check": "node --check src/server.js && node --check src/github.js && node --check public/app.js && node --check scripts/build-pages.js && node --check src/codex.js && node --check src/progress.js && node --check scripts/snapshot-pages.js && node --check scripts/publish-data.js && node --check public/saved-data.js && node --check worker/src/index.js && node --check worker/src/app.js && node --check worker/src/agent.js && node --check worker/src/github.js && node --check worker/src/store.js && node --check worker/public/chat.js && node --check worker/public/dashboard-view.js && node --check worker/public/dashboard.js && node --check src/agent.js",
     "build": "node scripts/build-pages.js",
     "snapshot": "node scripts/snapshot-pages.js"
   }

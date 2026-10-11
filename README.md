@@ -109,7 +109,8 @@ When the agent proposes a change it adds exact search/replace blocks. The Worker
    - the secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` and `AUTOPILOT_CHAT_CLIENT_SECRET` (the app's client secret)
    - the variable `AUTOPILOT_CHAT_CLIENT_ID` (the app's client ID)
 4. **Deploy.** Run the **Agent chat Worker** workflow, or push a change under `worker/`. It runs the tests, then deploys with Wrangler and uploads the client secret together with the code, so no version runs without it. Without the settings it only builds and skips deployment.
-5. **Link it from the public dashboard.** Set the repository variable `AUTOPILOT_CHAT_URL` to the Worker URL and run the Pages workflow.
+5. **Owner account.** Only the repository owner can sign in. For a repository owned by an organization, set the repository variable `AUTOPILOT_TASK_USER` to the GitHub login allowed to use the app.
+6. **Link it from the public dashboard.** Set the repository variable `AUTOPILOT_CHAT_URL` to the Worker URL and run the Pages workflow.
 
 Local check: `npx wrangler deploy --dry-run --config worker/wrangler.jsonc` bundles the Worker without deploying.
 

@@ -50,8 +50,9 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
     const warnings = runs.error ? [`GitHub Actions runs are unavailable: ${runs.error.message}`] : [];
     return {repo, repository:metadata.full_name, url:metadata.html_url, fetchedAt:new Date().toISOString(), autonomy:false, scope:`${pullLimit} most recently updated PRs; 15 recent workflow runs. Review lists are limited to 100 entries. CI is informational, not merge eligibility.`, warnings, pulls, workflows:(runs.workflow_runs || []).map(r => ({id:r.id, runNumber:r.run_number, name:r.name, title:r.display_title, status:r.status, conclusion:r.conclusion, branch:r.head_branch, sha:r.head_sha, url:r.html_url, updatedAt:r.updated_at}))};
   }
-  // Reviews, comments, checks, Codex state and merge readiness of one listed pull request: at most nine requests.
-  async function pullDetails(repo, listed) {
+  // Reviews, comments, checks, Codex state and merge readiness of one listed pull request: at most nine
+  // requests. With current:true the caller has just fetched the pull request, so it is not fetched again.
+  async function pullDetails(repo, listed, {current: fresh = false} = {}) {
     const root = `/repos/${repo}`, warnings = [];
     let pr=listed;
     let verification={complete:false};
@@ -63,7 +64,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
       details = {ci: ciState(checks.check_runs, status.statuses), reviews: reviews.map(r => ({author:r.user?.login, state:r.state, commit:r.commit_id, url:r.html_url})), codexComments: all.filter(c => !(c.body || '').includes('<!-- codex-pull-request-review-summary -->')).filter(c => c.user?.login === 'chatgpt-codex-connector[bot]').map(c => ({body:c.body, url:c.html_url, createdAt:c.created_at || c.submitted_at})), detailError:null, codex:codexStatus(pr.head.sha,{reviews,comments,inline,reactions,truncated:[reviews,comments,inline,reactions].some(a=>a.length>=100)}), progress:reviewProgress(pr.head.sha,{reviews,comments,inline,commits,reactions,openedAt:pr.created_at,mergedAt:pr.merged_at,findingsTruncated:[comments,inline].some(a=>a.length>=100),truncated:[reviews,comments,commits].some(a=>a.length>=100)}), checksComplete:checks.check_runs.length<100 && status.statuses.length<100 && (checks.total_count ?? checks.check_runs.length)<=checks.check_runs.length};
       if ([reviews, comments, inline, reactions, commits, checks.check_runs, status.statuses].some(a => a.length >= 100)) warnings.push(`PR #${pr.number}: detail list may be truncated at 100 entries.`);
     } catch (error) {details.detailError = error.message;}
-    if(pr.state === 'open') {
+    if(pr.state === 'open' && !fresh) {
       try {
         const current=await get(`${root}/pulls/${pr.number}`);
         if(current.head?.sha !== pr.head.sha) {details.checksComplete=false;details.codex={state:'unknown',label:'Codex: code changed during loading'};details.progress.currentCompleted=false;details.detailError='PR changed during loading; refresh for a consistent snapshot.';}
@@ -72,7 +73,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
         if(verification.headSha !== pr.head.sha) verification={complete:false};
       } catch(error) {details.detailError=error.message;}
     }
-    if(pr.state !== 'open') {verification=await mergeVerification(repo,pr.number);if(verification.headSha !== pr.head.sha) verification={complete:false};}
+    if(pr.state !== 'open' || fresh) {verification=await mergeVerification(repo,pr.number);if(verification.headSha !== pr.head.sha) verification={complete:false};}
     details.unresolvedThreads=verification.complete ? verification.unresolvedThreads : null;
     const readiness=mergeReadiness(pr,{ci:details.ci,codex:details.codex,checksComplete:details.checksComplete,verification});
     return {warnings, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details}};

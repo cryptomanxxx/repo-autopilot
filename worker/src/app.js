@@ -195,18 +195,22 @@ async function dashboard(url,{store,config,session,fetchImpl}) {
   let value;
   try {
     if(pull) {
-      const {item,warnings}=await client.pullDetails(config.repository,await client.pull(config.repository,Number(pull[1])));
+      // The pull request was just fetched, so pullDetails need not fetch it a second time.
+      const {item,warnings}=await client.pullDetails(config.repository,await client.pull(config.repository,Number(pull[1])),{current:true});
       value={...item,warnings};
     } else {
       const {repo,pulls,...rest}=await client.overview(config.repository);
       value={...rest,pulls:pulls.map(p=>({number:p.number,title:p.title,url:p.html_url,state:p.merged_at?'merged':p.state,updatedAt:p.updated_at}))};
     }
   } catch(error) {
-    // createGitHub reports GitHub failures with a status and a message written for the owner.
-    if(Number.isInteger(error?.status)) throw Object.assign(new PublicError(error.message),{status:error.status});
+    // createGitHub reports GitHub failures with a status and a message written for the owner. An expired
+    // token (401) ends the session in run(); other refusals are reported as GitHub's, not as server errors.
+    if(error?.status===401) throw error;
+    if(Number.isInteger(error?.status)) throw new UserError(error.status===404?404:502,error.message);
     throw error;
   }
-  await store.setCache(key,value,pull&&value.state!=='open'?CLOSED_CACHE_MS:OPEN_CACHE_MS);
+  // Results with a failed part are never cached, so a transient GitHub error does not stick.
+  if(!value.detailError) await store.setCache(key,value,pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
   return json(200,value);
 }
 
