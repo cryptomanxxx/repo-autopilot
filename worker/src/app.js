@@ -193,11 +193,11 @@ async function dashboard(url,{store,config,session,fetchImpl}) {
   const cached=fresh?null:await store.getCache(key);
   if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
   if(cached) return json(200,cached);
-  let value;
+  let value,changed=false;
   try {
     if(pull) {
-      const {item,warnings}=await client.pullDetails(config.repository,await client.pull(config.repository,Number(pull[1])));
-      value={...item,warnings};
+      const {item,warnings,changed:moved}=await client.pullDetails(config.repository,await client.pull(config.repository,Number(pull[1])));
+      value={...item,warnings};changed=moved;
     } else {
       const {repo,pulls,...rest}=await client.overview(config.repository);
       value={...rest,pulls:pulls.map(p=>({number:p.number,title:p.title,url:p.html_url,state:p.merged_at?'merged':p.state,updatedAt:p.updated_at}))};
@@ -208,15 +208,16 @@ async function dashboard(url,{store,config,session,fetchImpl}) {
     if(error?.status===401) throw error;
     if(Number.isInteger(error?.status)) {
       const refused={status:[403,404,429].includes(error.status)?error.status:502,message:error.message};
-      // A refusal (a missing permission, a rate limit) is remembered briefly so reloads do not repeat it.
-      await store.setCache(key,{refused},ERROR_CACHE_MS);
+      // A refusal (a missing permission, a rate limit) is remembered briefly so reloads do not repeat it;
+      // GitHub server errors are not, so a recovered GitHub is used at once. Caching is best-effort.
+      if([403,429].includes(error.status)) {try {await store.setCache(key,{refused},ERROR_CACHE_MS);} catch {}}
       throw new UserError(refused.status,refused.message);
     }
     throw error;
   }
   // A result with a failed part is cached only briefly, so a transient GitHub error does not stick. A pull
   // request that changed while loading is not cached at all: the next load should read it again.
-  if(!value.detailError?.startsWith('PR changed during loading')) await store.setCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
+  if(!changed) await store.setCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
   return json(200,value);
 }
 

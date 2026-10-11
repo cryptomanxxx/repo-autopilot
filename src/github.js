@@ -56,7 +56,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
   async function pullDetails(repo, listed) {
     const root = `/repos/${repo}`, warnings = [];
     let pr=listed;
-    let verification={complete:false};
+    let verification={complete:false}, changed=false;
     let details = {ci: 'unknown', reviews: [], codexComments: [], detailError: null, codex: {state:'unknown',label:'Codex: details unavailable'}, progress:{reviewCount:null,updatesAfterReview:null,currentCompleted:false}, checksComplete:false};
     // Limit concurrency and API cost; detail errors are visible, never treated as approval.
     try {
@@ -68,7 +68,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
     if(pr.state === 'open') {
       try {
         const current=await get(`${root}/pulls/${pr.number}`);
-        if(current.head?.sha !== pr.head.sha) {details.checksComplete=false;details.codex={state:'unknown',label:'Codex: code changed during loading'};details.progress.currentCompleted=false;details.detailError='PR changed during loading; refresh for a consistent snapshot.';}
+        if(current.head?.sha !== pr.head.sha) {changed=true;details.checksComplete=false;details.codex={state:'unknown',label:'Codex: code changed during loading'};details.progress.currentCompleted=false;details.detailError='PR changed during loading; refresh for a consistent snapshot.';}
         pr=current;
         verification=await mergeVerification(repo,pr.number);
         if(verification.headSha !== pr.head.sha) verification={complete:false};
@@ -78,7 +78,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
     if(listed.state !== 'open') {verification=await mergeVerification(repo,pr.number);if(verification.headSha !== pr.head.sha) verification={complete:false};}
     details.unresolvedThreads=verification.complete ? verification.unresolvedThreads : null;
     const readiness=mergeReadiness(pr,{ci:details.ci,codex:details.codex,checksComplete:details.checksComplete,verification});
-    return {warnings, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details}};
+    return {warnings, changed, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details}};
   }
   return {
     overview, pullDetails,
