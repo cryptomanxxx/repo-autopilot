@@ -191,6 +191,7 @@ async function dashboard(url,{store,config,session,fetchImpl}) {
   if(updated.length>40) throw new UserError(400,'Invalid request.');
   const key=pull?`pull:${pull[1]}:${updated}`:'overview';
   const cached=fresh?null:await store.getCache(key);
+  if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
   if(cached) return json(200,cached);
   let value;
   try {
@@ -205,12 +206,17 @@ async function dashboard(url,{store,config,session,fetchImpl}) {
     // createGitHub reports GitHub failures with a status and a message written for the owner. An expired
     // token (401) ends the session in run(); other refusals are reported as GitHub's, not as server errors.
     if(error?.status===401) throw error;
-    if(Number.isInteger(error?.status)) throw new UserError([403,404,429].includes(error.status)?error.status:502,error.message);
+    if(Number.isInteger(error?.status)) {
+      const refused={status:[403,404,429].includes(error.status)?error.status:502,message:error.message};
+      // A refusal (a missing permission, a rate limit) is remembered briefly so reloads do not repeat it.
+      await store.setCache(key,{refused},ERROR_CACHE_MS);
+      throw new UserError(refused.status,refused.message);
+    }
     throw error;
   }
-  // A result with a failed part is cached only briefly: a transient GitHub error does not stick, and a
-  // lasting one (a missing permission, a rate limit) is not retried on every load.
-  await store.setCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
+  // A result with a failed part is cached only briefly, so a transient GitHub error does not stick. A pull
+  // request that changed while loading is not cached at all: the next load should read it again.
+  if(!value.detailError?.startsWith('PR changed during loading')) await store.setCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
   return json(200,value);
 }
 

@@ -64,7 +64,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
       const all = [...reviews, ...comments, ...inline];
       details = {ci: ciState(checks.check_runs, status.statuses), reviews: reviews.map(r => ({author:r.user?.login, state:r.state, commit:r.commit_id, url:r.html_url})), codexComments: all.filter(c => !(c.body || '').includes('<!-- codex-pull-request-review-summary -->')).filter(c => c.user?.login === 'chatgpt-codex-connector[bot]').map(c => ({body:c.body, url:c.html_url, createdAt:c.created_at || c.submitted_at})), detailError:null, codex:codexStatus(pr.head.sha,{reviews,comments,inline,reactions,truncated:[reviews,comments,inline,reactions].some(a=>a.length>=100)}), progress:reviewProgress(pr.head.sha,{reviews,comments,inline,commits,reactions,openedAt:pr.created_at,mergedAt:pr.merged_at,findingsTruncated:[comments,inline].some(a=>a.length>=100),truncated:[reviews,comments,commits].some(a=>a.length>=100)}), checksComplete:checks.check_runs.length<100 && status.statuses.length<100 && (checks.total_count ?? checks.check_runs.length)<=checks.check_runs.length};
       if ([reviews, comments, inline, reactions, commits, checks.check_runs, status.statuses].some(a => a.length >= 100)) warnings.push(`PR #${pr.number}: detail list may be truncated at 100 entries.`);
-    } catch (error) {details.detailError = error.message;}
+    } catch (error) {if (error.status === 401) throw error;details.detailError = error.message;}
     if(pr.state === 'open') {
       try {
         const current=await get(`${root}/pulls/${pr.number}`);
@@ -72,9 +72,10 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
         pr=current;
         verification=await mergeVerification(repo,pr.number);
         if(verification.headSha !== pr.head.sha) verification={complete:false};
-      } catch(error) {details.detailError=error.message;}
+      } catch(error) {if(error.status === 401) throw error;details.detailError=error.message;}
     }
-    if(pr.state !== 'open') {verification=await mergeVerification(repo,pr.number);if(verification.headSha !== pr.head.sha) verification={complete:false};}
+    // The listed state decides, so a pull request merged during loading is not verified twice.
+    if(listed.state !== 'open') {verification=await mergeVerification(repo,pr.number);if(verification.headSha !== pr.head.sha) verification={complete:false};}
     details.unresolvedThreads=verification.complete ? verification.unresolvedThreads : null;
     const readiness=mergeReadiness(pr,{ci:details.ci,codex:details.codex,checksComplete:details.checksComplete,verification});
     return {warnings, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details}};

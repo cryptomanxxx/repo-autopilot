@@ -437,6 +437,7 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
   const detail=await (await get('/api/dashboard/pulls/1?updated=2026-10-01T00:00:00Z')).json();
   assert.equal(detail.number,1);assert.equal(detail.ci,'success');assert.equal(detail.state,'open');assert.ok(detail.readiness.label);
   assert.ok(calls.length<=10,`one pull request needs at most ten GitHub calls (used ${calls.length})`);
+  assert.equal(calls.filter(c=>c.url.endsWith('/pulls/1')).length,2,'an open pull request is read again after its details');
   assert.ok(calls.filter(c=>c.url==='https://api.github.com/graphql').every(c=>c.options.headers['User-Agent']));
   calls.length=0;
   await get('/api/dashboard');await get('/api/dashboard/pulls/1?updated=2026-10-01T00:00:00Z');
@@ -468,6 +469,18 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
   time+=31000;assert.equal(store.getCache('pull:2:y'),null,'and retried after 30 seconds');
   const limited=async(url,options)=>url.includes('/actions/runs')||url.endsWith('/repos/owner/repo')?new Response('{}',{status:429}):fetchImpl(url,options);
   assert.equal((await handle(request('/api/dashboard?fresh=1',{cookie:auth.cookie}),env,{fetchImpl:limited,now:()=>time})).status,429,'rate limits keep their status');
+  calls.length=0;
+  assert.equal((await get('/api/dashboard')).status,429,'a refusal is remembered briefly');assert.equal(calls.length,0);
+  time+=31000;
+  // A push between the two reads of an open pull request is reported and not cached.
+  let reads=0;
+  const pushed=async(url,options)=>{if(/\/pulls\/1$/.test(url)&&++reads===2) return Response.json({...pulls[0],head:{sha:'f'.repeat(40)}});return fetchImpl(url,options);};
+  const changed=await (await handle(request('/api/dashboard/pulls/1?updated=z',{cookie:auth.cookie}),env,{fetchImpl:pushed,now:()=>time})).json();
+  assert.match(changed.detailError,/changed during loading/);assert.equal(changed.headSha,'f'.repeat(40));
+  assert.equal(store.getCache('pull:1:z'),null,'a pull request that changed while loading is read again next time');
+  // An expired token found while loading details ends the session instead of showing missing details.
+  const lateExpiry=async(url,options)=>/\/pulls\/1\/reviews/.test(url)?new Response('{}',{status:401}):fetchImpl(url,options);
+  assert.equal((await handle(request('/api/dashboard/pulls/1?updated=w',{cookie:auth.cookie}),env,{fetchImpl:lateExpiry,now:()=>time})).status,401);
   const expired=async(url,options)=>url.startsWith('https://api.github.com/repos/')?new Response('{}',{status:401}):fetchImpl(url,options);
   assert.equal((await handle(request('/api/dashboard?fresh=1',{cookie:auth.cookie}),env,{fetchImpl:expired,now:()=>time})).status,401);
   assert.equal((await get('/api/dashboard')).status,401,'an expired GitHub token ends the session');
