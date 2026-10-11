@@ -8,7 +8,7 @@ const encoder=new TextEncoder();
 const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
 // Each dashboard request stays far below the Workers subrequest limit: the overview needs three GitHub
 // calls and each pull request is loaded by its own request with at most ten.
-export const DASHBOARD_PULLS=6,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR;
+export const DASHBOARD_PULLS=6,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR,ERROR_CACHE_MS=30000;
 const hex=bytes=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
 const randomHex=(bytes=32)=>hex(crypto.getRandomValues(new Uint8Array(bytes)));
 const base64url=bytes=>{let s='';for(const b of bytes) s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
@@ -195,8 +195,7 @@ async function dashboard(url,{store,config,session,fetchImpl}) {
   let value;
   try {
     if(pull) {
-      // The pull request was just fetched, so pullDetails need not fetch it a second time.
-      const {item,warnings}=await client.pullDetails(config.repository,await client.pull(config.repository,Number(pull[1])),{current:true});
+      const {item,warnings}=await client.pullDetails(config.repository,await client.pull(config.repository,Number(pull[1])));
       value={...item,warnings};
     } else {
       const {repo,pulls,...rest}=await client.overview(config.repository);
@@ -206,11 +205,12 @@ async function dashboard(url,{store,config,session,fetchImpl}) {
     // createGitHub reports GitHub failures with a status and a message written for the owner. An expired
     // token (401) ends the session in run(); other refusals are reported as GitHub's, not as server errors.
     if(error?.status===401) throw error;
-    if(Number.isInteger(error?.status)) throw new UserError(error.status===404?404:502,error.message);
+    if(Number.isInteger(error?.status)) throw new UserError([403,404,429].includes(error.status)?error.status:502,error.message);
     throw error;
   }
-  // Results with a failed part are never cached, so a transient GitHub error does not stick.
-  if(!value.detailError) await store.setCache(key,value,pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
+  // A result with a failed part is cached only briefly: a transient GitHub error does not stick, and a
+  // lasting one (a missing permission, a rate limit) is not retried on every load.
+  await store.setCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
   return json(200,value);
 }
 
