@@ -95,12 +95,14 @@ export function validateEdits(result,files,existingPaths=Object.keys(files)) {
   return {summary:result.summary.slice(0,2000),files:result.files.map(f=>({path:f.path,content:f.content}))};
 }
 
-export async function runAgent({repository,issueNumber,token,groqKey,expectedTask,expectedComment,authorizedUser,fetchImpl=fetch}) {
+export async function runAgent({repository,issueNumber,token,appToken,groqKey,expectedTask,expectedComment,authorizedUser,fetchImpl=fetch}) {
   const repo=repositoryName(repository),owner=repo.split('/')[0];
   const taskUser=(authorizedUser || owner).toLowerCase();
   if(!Number.isSafeInteger(issueNumber) || issueNumber<1 || !token) throw new Error('Agent configuration is missing.');
-  async function api(path,method='GET',body) {
-    const response=await fetchImpl(`https://api.github.com/repos/${repo}${path ? '/'+path : ''}`,{method,headers:{Authorization:`Bearer ${token}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:body ? JSON.stringify(body) : undefined,signal:AbortSignal.timeout(20000)});
+  // Optional GitHub App installation token: commits, the branch and the pull request are created as the app,
+  // so the pull request triggers CI and Codex review. Reads and task comments keep the Actions token.
+  async function api(path,method='GET',body,auth=token) {
+    const response=await fetchImpl(`https://api.github.com/repos/${repo}${path ? '/'+path : ''}`,{method,headers:{Authorization:`Bearer ${auth}`,Accept:'application/vnd.github+json','Content-Type':'application/json'},body:body ? JSON.stringify(body) : undefined,signal:AbortSignal.timeout(20000)});
     if(!response.ok) throw new Error(`GitHub request failed (HTTP ${response.status}).`);
     return response.json();
   }
@@ -129,7 +131,7 @@ export async function runAgent({repository,issueNumber,token,groqKey,expectedTas
     throw new Error('Task instruction is invalid.');
   }
   await notify('working','Reading repository code and preparing a bounded change. Close this issue to request cancellation.');
-  let publishedCompareUrl=null;
+  let publishedCompareUrl=null,publishedPullUrl=null;
   try {
     const ref=await api(`git/ref/heads/${metadata.default_branch}`);
     const parent=ref.object.sha;
@@ -157,16 +159,35 @@ export async function runAgent({repository,issueNumber,token,groqKey,expectedTas
     if(!await stillAuthorized()) {await notify('stopped','Task was closed or edited before any branch was published.');return;}
     if(!edits.files.length) {await notify('needs input',edits.summary+'\n\nReply in the chat with the additional information to continue this task.');return;}
     if((await api(`git/ref/heads/${metadata.default_branch}`)).object.sha !== parent) throw new Error('Default branch changed while the agent was working. Create a new task to retry against current code.');
-    const newTree=await api('git/trees','POST',{base_tree:commit.tree.sha,tree:edits.files.map(f=>({...f,mode:'100644',type:'blob'}))});
-    const next=await api('git/commits','POST',{message:`Autopilot task #${issueNumber}`,tree:newTree.sha,parents:[parent]});
+    const writeToken=appToken || token;
+    const newTree=await api('git/trees','POST',{base_tree:commit.tree.sha,tree:edits.files.map(f=>({...f,mode:'100644',type:'blob'}))},writeToken);
+    const next=await api('git/commits','POST',{message:`Autopilot task #${issueNumber}`,tree:newTree.sha,parents:[parent]},writeToken);
     if(!await stillAuthorized()) {await notify('stopped','Task was closed or edited before the branch was published.');return;}
     const branch=`autopilot/task-${issueNumber}${expectedComment ? `-reply-${expectedComment.id}` : ''}`;
-    await api('git/refs','POST',{ref:`refs/heads/${branch}`,sha:next.sha});
+    await api('git/refs','POST',{ref:`refs/heads/${branch}`,sha:next.sha},writeToken);
+    const prTitle=issue.title.slice(TASK_PREFIX.length, TASK_PREFIX.length+100),prBody=`Implements #${issueNumber}.\n\n${edits.summary}\n\nAgent-generated changes require CI and Codex review before merging.`;
     const url=new URL(`https://github.com/${repo}/compare/${metadata.default_branch}...${branch}`);
-    url.searchParams.set('expand','1');url.searchParams.set('title',issue.title.slice(TASK_PREFIX.length, TASK_PREFIX.length+100));url.searchParams.set('body',`Implements #${issueNumber}.\n\n${edits.summary}\n\nAgent-generated changes require CI and Codex review before merging.`);
+    url.searchParams.set('expand','1');url.searchParams.set('title',prTitle);url.searchParams.set('body',prBody);
     publishedCompareUrl=url.href;
+    if(appToken) {
+      let pull=null;
+      try {pull=await api('pulls','POST',{title:prTitle,head:branch,base:metadata.default_branch,body:prBody},appToken);} catch {}
+      const pullUrl=typeof pull?.html_url==='string' && pull.html_url.startsWith(`https://github.com/${repo}/pull/`) ? pull.html_url : null;
+      if(pullUrl) {
+        publishedPullUrl=pullUrl;
+        await notify('ready for PR',`${edits.summary}\n\n[Open pull request](${pullUrl})\n\n${edits.files.length} file(s) changed. The pull request was opened by the GitHub App, so CI and Codex review run automatically. The agent does not merge changes.`);
+        return;
+      }
+      await notify('ready for PR',`${edits.summary}\n\n[Review changes and create PR](${url})\n\n${edits.files.length} file(s) changed. The branch was published, but the pull request could not be opened automatically. Create it with your GitHub account to start CI and Codex review. The agent does not merge changes.`);
+      return;
+    }
     await notify('ready for PR',`${edits.summary}\n\n[Review changes and create PR](${url})\n\n${edits.files.length} file(s) changed. Tests have not run yet. Creating the PR with your GitHub account triggers CI and Codex review. The agent does not merge changes.`);
   } catch(error) {
+    if(publishedPullUrl) {
+      // The app already opened the pull request; never point the owner back to the compare link.
+      try {await notify('ready for PR',`The pull request was opened successfully, but its detailed reply could not be delivered.\n\n[Open pull request](${publishedPullUrl})\n\nCI and Codex review run on the pull request; do not retry the task.`);} catch {console.log(`Pull request is open: ${publishedPullUrl}`);}
+      return;
+    }
     if(publishedCompareUrl) {
       // A notification failure cannot undo the successful branch publication.
       try {await notify('ready for PR',`The code branch was published successfully, but its detailed reply could not be delivered.\n\n[Review changes and create PR](${publishedCompareUrl})\n\nTests have not run yet. Create the PR for CI and Codex review; do not retry the task.`);} catch {console.log(`Branch is ready for review: ${publishedCompareUrl}`);}
