@@ -1,4 +1,5 @@
-const state={csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false};
+import {startDashboard,showDashboard,showPull} from './dashboard.js';
+const state={csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:''};
 const $=id=>document.getElementById(id);
 const status=text=>{$('status').textContent=text;};
 const MAX_SIDE=1600,MAX_DATA_URL=1400000;
@@ -12,7 +13,25 @@ async function api(path,body,timeout=30000) {
 }
 
 function showSignedOut(message) {
-  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;$('chat').hidden=true;
+  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;
+  for(const id of ['tabs','chat','dashboard-view']) $(id).hidden=true;
+}
+
+// The address keeps the open tab: #dashboard, #pr-<number>, #chat and #chat/<conversation>.
+function chatHash() {return state.conversation?`#chat/${state.conversation}`:'#chat';}
+function showTab(tab,{hash}={}) {
+  state.tab=tab;
+  try {localStorage.setItem('autopilot-tab',tab);} catch {}
+  for(const [name,panel] of [['dashboard','dashboard-view'],['chat','chat']]) {
+    $(panel).hidden=name!==tab;$(`tab-${name}`).setAttribute('aria-selected',String(name===tab));
+  }
+  history.replaceState(null,'',hash??(tab==='chat'?chatHash():'#dashboard'));
+  if(tab==='dashboard') showDashboard();
+}
+function followPull(url) {
+  const prefix=`https://github.com/${state.repository}/pull/`.toLowerCase();
+  const rest=typeof url==='string'&&url.toLowerCase().startsWith(prefix)?url.slice(prefix.length):'';
+  return /^[1-9]\d{0,8}$/.test(rest)?Number(rest):null;
 }
 
 // Splits text into prose and code: ``` fences and SEARCH/REPLACE edit blocks are shown as code.
@@ -40,6 +59,8 @@ function renderMessage(message) {
     const files=document.createElement('p');files.textContent=`Proposed change: ${message.proposal.paths.join(', ')}`;box.append(files);
     if(message.prUrl) {
       const link=document.createElement('a');link.href=message.prUrl;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open pull request';box.append(link);
+      const number=followPull(message.prUrl);
+      if(number) {const follow=document.createElement('button');follow.type='button';follow.className='secondary';follow.textContent='Follow in dashboard';follow.onclick=()=>{showTab('dashboard',{hash:`#pr-${number}`});showPull(number);};box.append(follow);}
     } else if(message.id) {
       const button=document.createElement('button');button.textContent='Create pull request';
       button.onclick=()=>createPullRequest(message.id,button);box.append(button);
@@ -72,15 +93,15 @@ async function openConversation(id) {
   if(state.busy) return;
   const previous=state.conversation;let failed=false;
   state.conversation=id;
-  if(!id) {history.replaceState(null,'',location.pathname);$('conversation-title').textContent='New conversation';renderMessages([]);await loadConversations();return;}
-  history.replaceState(null,'',`#${id}`);
+  if(state.tab==='chat') history.replaceState(null,'',chatHash());
+  if(!id) {$('conversation-title').textContent='New conversation';renderMessages([]);await loadConversations();return;}
   try {
     const conversation=await api(`/api/conversations/${id}`);
     if(state.conversation!==id) return;
     $('conversation-title').textContent=conversation.title;renderMessages(conversation.messages);
   } catch(error) {
     // Keep sending to the conversation that is actually on screen.
-    if(state.conversation===id) {state.conversation=previous;history.replaceState(null,'',previous?`#${previous}`:location.pathname);}
+    if(state.conversation===id) {state.conversation=previous;if(state.tab==='chat') history.replaceState(null,'',chatHash());}
     status(error.message);failed=true;
   }
   try {await loadConversations();} catch(error) {if(!failed) status(error.message);}
@@ -158,14 +179,25 @@ $('logout').onclick=async()=>{try {await api('/api/logout',{});} catch {} locati
 const SIGN_IN_PROBLEMS={cancelled:'Sign-in was cancelled.',expired:'The sign-in expired or started in another browser. Try again.',failed:'GitHub sign-in failed. Try again.',app:'The chat must use the client ID and secret of a GitHub App, not an OAuth app.',owner:'Only the repository owner account can use this chat.',github:'GitHub rejected the sign-in. Check the GitHub App\'s callback URL and client ID.'};
 const signInProblem=SIGN_IN_PROBLEMS[new URLSearchParams(location.search).get('signin')];
 if(location.search) history.replaceState(null,'',location.pathname+location.hash);
+$('tab-dashboard').onclick=()=>showTab('dashboard');
+$('tab-chat').onclick=()=>showTab('chat');
 try {
   const session=await api('/api/session');
   if(!session.login) showSignedOut(signInProblem?`${signInProblem} Sign in with the owner account of ${session.repository}.`:`Sign in with the owner account of ${session.repository}.`);
   else {
-    state.csrf=session.csrf;
+    state.csrf=session.csrf;state.repository=session.repository;
     $('account').textContent=`${session.repository} · ${session.login} · model ${session.model}`;
-    $('logout').hidden=false;$('chat').hidden=false;
-    const id=/^#([0-9a-f]{32})$/.exec(location.hash)?.[1]||null;
-    await openConversation(id);
+    $('logout').hidden=false;$('tabs').hidden=false;
+    startDashboard(api,{isVisible:()=>state.tab==='dashboard'});
+    // Older chat links used #<conversation>; they still open the chat.
+    const hash=location.hash,conversation=/^#(?:chat\/)?([0-9a-f]{32})$/.exec(hash)?.[1]||null,pull=/^#pr-([1-9]\d{0,8})$/.exec(hash)?.[1];
+    let saved=null;try {saved=localStorage.getItem('autopilot-tab');} catch {}
+    const tab=conversation||hash==='#chat'?'chat':pull||hash==='#dashboard'?'dashboard':saved==='chat'?'chat':'dashboard';
+    state.tab=tab;
+    // The dashboard starts loading at once instead of waiting for the conversation list.
+    const chat=openConversation(conversation);
+    showTab(tab,{hash:pull?`#pr-${pull}`:undefined});
+    if(pull) showPull(Number(pull));
+    await chat;
   }
-} catch(error) {$('account').textContent=error.message||'The chat is unavailable. Try again later.';}
+} catch(error) {$('account').textContent=error.message||'Repo Autopilot is unavailable. Try again later.';}

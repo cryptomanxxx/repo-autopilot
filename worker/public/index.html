@@ -1,8 +1,16 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Repo Autopilot · Agent chat</title><link rel="stylesheet" href="/chat.css"><script type="module" src="/chat.js"></script></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Repo Autopilot</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/chat.css"><script type="module" src="/chat.js"></script></head>
 <body><main>
-<header><span class="eyebrow">REPO AUTOPILOT</span><h1>Agent chat</h1><p id="account" class="muted">Loading…</p><a id="login" class="button" href="/auth/login" hidden>Sign in with GitHub</a><button id="logout" class="secondary" hidden>Sign out</button></header>
-<section id="chat" class="layout" hidden>
+<header><span class="eyebrow">REPO AUTOPILOT</span><h1>Repo Autopilot</h1><p id="account" class="muted">Loading…</p><a id="login" class="button" href="/auth/login" hidden>Sign in with GitHub</a><button id="logout" class="secondary" hidden>Sign out</button></header>
+<div id="tabs" class="tabs" role="tablist" hidden><button type="button" role="tab" id="tab-dashboard" aria-controls="dashboard-view" aria-selected="false">Dashboard</button><button type="button" role="tab" id="tab-chat" aria-controls="chat" aria-selected="false">Agent chat</button></div>
+<section id="dashboard-view" role="tabpanel" aria-labelledby="tab-dashboard" hidden>
+<div class="toolbar"><div id="summary" class="summary"></div><button type="button" id="refresh" class="secondary">Refresh</button></div>
+<p id="data-age" class="muted small"></p><p id="dashboard-status" role="status" class="muted"></p>
+<h2>Pull requests</h2><label class="filter-label">Show <select id="pr-filter"><option value="all">All</option><option value="open">Open</option><option value="attention">Needs attention</option><option value="merged">Merged</option></select></label><div id="pulls" class="compact-list"></div>
+<h2>GitHub Actions</h2><label class="filter-label">Show <select id="workflow-filter"><option value="all">All</option><option value="ci">CI</option><option value="deployment">Deployment</option><option value="other">Other</option></select></label><div id="workflows" class="compact-list"></div>
+<p id="scope" class="muted small"></p>
+</section>
+<section id="chat" class="layout" role="tabpanel" aria-labelledby="tab-chat" hidden>
 <nav aria-label="Conversations"><button id="new-conversation" class="secondary">New conversation</button><ul id="conversations"></ul></nav>
 <section class="thread"><h2 id="conversation-title">New conversation</h2>
 <div id="messages" aria-live="polite"><p class="muted empty">Ask about the code or describe a change. The agent reads the repository's current files and can propose edits; you decide whether to open a pull request.</p></div>

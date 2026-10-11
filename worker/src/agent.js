@@ -30,7 +30,7 @@ Rules for edits:
 - The SEARCH text must match exactly one place in the file. Copy it character for character and include a few unchanged lines so it is unique.
 - To create a new file, leave the SEARCH section empty.
 - A line consisting only of ======= separates SEARCH from REPLACE, so choose SEARCH and replacement text that does not contain such a line.
-- Only these paths may be edited: README.md and .js, .css, .html or .md files under src/, public/ or test/. Never edit the agent itself (worker/, ${WORKER_SOURCES.join(', ')}, src/tasks.js, src/chat.js, src/chat-server.js, public/chat*), workflows, dependencies or credentials. If the owner asks for such a change, explain that it must be made by hand.
+- Only these paths may be edited: README.md and .js, .css, .html or .md files under src/, public/ or test/. Never edit the agent itself (worker/, ${WORKER_SOURCES.join(', ')}), workflows, dependencies or credentials. If the owner asks for such a change, explain that it must be made by hand.
 - Use at most ${MAX_EDITS} blocks and keep the change as small as the request allows.
 - Optionally add one line "PR-TITLE: <short title>" before the blocks.
 Only include edit blocks when the owner wants code changed. The owner reviews the edits and decides whether to open a pull request; CI runs on that pull request.`;

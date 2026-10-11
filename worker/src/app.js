@@ -1,11 +1,14 @@
 import {githubClient,GitHubError,readLimited} from './github.js';
-import {repositoryName} from '../../src/github.js';
+import {repositoryName,createGitHub} from '../../src/github.js';
 import {PublicError,UserError} from './errors.js';
 export {UserError};
 import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
 
 const encoder=new TextEncoder();
 const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
+// Each dashboard request stays far below the Workers subrequest limit: the overview needs three GitHub
+// calls and each pull request is loaded by its own request with at most ten.
+export const DASHBOARD_PULLS=6,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR,ERROR_CACHE_MS=30000;
 const hex=bytes=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
 const randomHex=(bytes=32)=>hex(crypto.getRandomValues(new Uint8Array(bytes)));
 const base64url=bytes=>{let s='';for(const b of bytes) s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
@@ -149,6 +152,15 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:env.MODEL||DEFAULT_MODEL}:{login:null,repository:config.repository});
   if(!session) throw new UserError(401,'Sign in to chat.');
 
+  const github=()=>githubClient({repository:config.repository,token:session.token,fetchImpl});
+  const run=async work=>{
+    try {return await work();}
+    catch(error) {
+      if((error instanceof GitHubError||Number.isInteger(error?.status))&&error.status===401) {await store.deleteSession(hash);throw new UserError(401,'Your GitHub sign-in has expired. Sign in again.');}
+      throw error;
+    }
+  };
+  if(request.method==='GET'&&(url.pathname==='/api/dashboard'||url.pathname.startsWith('/api/dashboard/'))) return run(()=>dashboard(url,{store,config,session,fetchImpl}));
   if(request.method==='GET'&&url.pathname==='/api/conversations') return json(200,{conversations:await store.listConversations()});
   const conversationPath=/^\/api\/conversations\/([0-9a-f]{32})$/.exec(url.pathname);
   if(request.method==='GET'&&conversationPath) {
@@ -163,17 +175,50 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     return json(200,{ok:true},{'Set-Cookie':cookie(sessionCookie,'')});
   }
   const body=await readJson(request);
-  const github=()=>githubClient({repository:config.repository,token:session.token,fetchImpl});
-  const run=async work=>{
-    try {return await work();}
-    catch(error) {
-      if(error instanceof GitHubError&&error.status===401) {await store.deleteSession(hash);throw new UserError(401,'Your GitHub sign-in has expired. Sign in again.');}
-      throw error;
-    }
-  };
   if(url.pathname==='/api/chat') return run(()=>chat(body,{env,store,github,config,fetchImpl}));
   if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github}));
   throw new UserError(404,'Not found.');
+}
+
+// Live dashboard data from GitHub, cached briefly so several tabs and refreshes share requests.
+// The client passes each pull request's updatedAt, so new commits or comments bypass the cache.
+async function dashboard(url,{store,config,session,fetchImpl}) {
+  const client=createGitHub({token:session.token,fetchImpl,pullLimit:DASHBOARD_PULLS,userAgent:'repo-autopilot-chat'});
+  const fresh=url.searchParams.get('fresh')==='1';
+  const pull=/^\/api\/dashboard\/pulls\/([1-9]\d{0,8})$/.exec(url.pathname);
+  if(url.pathname!=='/api/dashboard'&&!pull) throw new UserError(404,'Not found.');
+  const updated=url.searchParams.get('updated')||'';
+  if(updated.length>40) throw new UserError(400,'Invalid request.');
+  const key=pull?`pull:${pull[1]}:${updated}`:'overview';
+  const cached=fresh?null:await store.getCache(key);
+  if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
+  if(cached) return json(200,cached);
+  let value,changed=false;
+  try {
+    if(pull) {
+      const {item,warnings,changed:moved}=await client.pullDetails(config.repository,await client.pull(config.repository,Number(pull[1])));
+      value={...item,warnings};changed=moved;
+    } else {
+      const {repo,pulls,...rest}=await client.overview(config.repository);
+      value={...rest,pulls:pulls.map(p=>({number:p.number,title:p.title,url:p.html_url,state:p.merged_at?'merged':p.state,updatedAt:p.updated_at}))};
+    }
+  } catch(error) {
+    // createGitHub reports GitHub failures with a status and a message written for the owner. An expired
+    // token (401) ends the session in run(); other refusals are reported as GitHub's, not as server errors.
+    if(error?.status===401) throw error;
+    if(Number.isInteger(error?.status)) {
+      const refused={status:[403,404,429].includes(error.status)?error.status:502,message:error.message};
+      // A refusal (a missing permission, a rate limit) is remembered briefly so reloads do not repeat it;
+      // GitHub server errors are not, so a recovered GitHub is used at once. Caching is best-effort.
+      if([403,429].includes(error.status)) {try {await store.setCache(key,{refused},ERROR_CACHE_MS);} catch {}}
+      throw new UserError(refused.status,refused.message);
+    }
+    throw error;
+  }
+  // A result with a failed part is cached only briefly, so a transient GitHub error does not stick. A pull
+  // request that changed while loading is not cached at all: the next load should read it again.
+  if(!changed) await store.setCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
+  return json(200,value);
 }
 
 async function chat(body,{env,store,github,config,fetchImpl}) {

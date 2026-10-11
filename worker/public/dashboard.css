@@ -1,0 +1,40 @@
+/* Dashboard styles shared by the Repo Autopilot app (Worker) and the GitHub Pages dashboard. */
+.summary{display:flex;flex-wrap:wrap;gap:20px;padding:20px 0}summary{cursor:pointer;color:#9de4c0}.error{color:#ffb3b3}
+.codex-status{font-weight:600}.codex-clear{color:#9de4c0}.codex-findings{color:#ffbf80}.codex-running,.codex-requested{color:#9fc0ff}
+
+.readiness{font-weight:700;font-size:17px}.readiness-ready,.readiness-merged{color:#9de4c0}.readiness-not_ready{color:#ffbf80}
+
+.compact-list{border:1px solid #2a3c55;border-radius:12px;overflow:hidden;background:#141f31}
+.pr-row+.pr-row,.workflow-row+.workflow-row{border-top:1px solid #2a3c55}
+.pr-summary,.workflow-row{display:grid;gap:14px;align-items:center;padding:16px;grid-template-columns:minmax(180px,3fr) minmax(110px,1.5fr) minmax(70px,.8fr) minmax(110px,1.3fr) 65px 85px}
+.pr-summary{position:relative;padding-right:65px;color:inherit;list-style:none}
+.pr-summary::-webkit-details-marker{display:none}
+.pr-summary:hover{background:#1b2940}.pr-summary:focus-visible{outline:2px solid #9fc0ff;outline-offset:-3px}
+.list-cell{display:flex;flex-direction:column;gap:4px;font-size:13px;min-width:0;overflow-wrap:anywhere}
+.cell-label{font-size:11px;color:#a8b7cc;font-weight:400}.pr-title,.workflow-title{font-weight:600;color:#9fc0ff;font-size:14px}
+.expand-label{position:absolute;right:12px;font-size:11px;color:#a8b7cc}.expand-label:before{content:'▸ '}.pr-row[open] .expand-label:before{content:'▾ '}
+.pr-detail{padding:0 16px 16px;border-top:1px solid #2a3c55;font-size:13px}.pr-detail p{margin:10px 0}.ci-success{color:#9de4c0}.ci-failure{color:#ffb3b3}.ci-pending{color:#9fc0ff}
+.workflow-row{grid-template-columns:minmax(180px,3fr) minmax(100px,1.5fr) 80px minmax(80px,1fr) minmax(120px,1.5fr)}
+@media(max-width:850px){.pr-summary{grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.pr-title{grid-column:1/-1}.workflow-row{grid-template-columns:repeat(2,minmax(0,1fr))}.workflow-title{grid-column:1/-1}}
+@media(max-width:480px){.pr-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.pr-title{grid-column:1/-1}}
+
+[hidden]{display:none!important}select{background:#141f31;color:inherit;border:1px solid #435975;border-radius:6px;padding:7px;font:inherit}.filter-label{display:flex;align-items:center;gap:10px;font-size:13px}.list-head{font-size:12px;color:#a8b7cc;background:#0b1220}.list-head+.pr-row{border-top:1px solid #2a3c55}
+.review-flow{list-style:none;padding:6px 0 0;margin:16px 0;display:flex;flex-wrap:wrap;row-gap:22px}.review-flow li{position:relative;flex:0 0 210px;max-width:100%;border-top:2px solid #435975;padding:16px 16px 0 0;display:flex;flex-direction:column;gap:5px;font-size:14px}.review-flow li span{font-size:12px}.review-flow li:before{content:'';position:absolute;left:0;top:-6px;width:10px;height:10px;border-radius:50%;background:#9fc0ff}.review-flow li:last-child{border-color:transparent}.review-flow .flow-clear:before,.review-flow .flow-merged:before{background:#9de4c0}.review-flow .flow-changed:before{background:#ffbf80}
+@media(min-width:851px){.pr-summary .cell-label{display:none}.pr-summary.list-head{padding-top:10px;padding-bottom:10px}}
+@media(max-width:850px){.list-head{display:none}}
+
+@media(min-width:851px){.workflow-row .cell-label{display:none}}
+
+@media(min-width:851px){.pr-summary{grid-template-columns:minmax(160px,3fr) minmax(100px,1.5fr) 75px minmax(110px,1.3fr) 55px 60px 35px 35px;gap:10px}}
+.review-flow .flow-findings:before{background:#ffbf80}
+
+/* Shared minimum widths keep headers and values aligned without collisions. */
+@media(min-width:851px){
+  #pulls{overflow-x:auto}
+  .pr-summary{min-width:1000px;grid-template-columns:minmax(160px,1fr) 120px 75px 145px 78px 82px 35px 35px;gap:14px;padding-right:70px}
+  .pr-summary>.list-cell:not(.pr-title){text-align:center;align-items:center}
+  .pr-summary.list-head>span:not(:first-child){text-align:center}
+  .list-head span{white-space:nowrap}
+}
+.review-flow li:last-child:before{background:#d5a6ff;box-shadow:0 0 0 4px #392c55;width:12px;height:12px;top:-7px}
+.review-flow li:last-child strong:after{content:'Latest';display:inline-block;margin-left:10px;padding:2px 7px;border-radius:9px;background:#392c55;color:#ead8ff;font-size:10px;font-weight:600}

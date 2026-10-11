@@ -1,10 +1,7 @@
 import {createGitHub, repositoryName} from './github.js';
 import {loadSavedData} from './saved-data.js';
-import {taskUrl,renderTasks} from './task-ui.js';
+import {renderSummary,renderPulls,renderWorkflows,applyFilters as filter} from './dashboard-view.js';
 const $ = id => document.getElementById(id);
-function el(tag, text, className) {const node = document.createElement(tag);node.textContent = text;if(className) node.className = className;return node;}
-function link(text, url) {const node = el('a',text);if(typeof url === 'string' && url.startsWith('https://github.com/')) {node.href=url;node.target='_blank';node.rel='noopener noreferrer';}return node;}
-function cell(label,text,className='') {const node=el('span','',`list-cell ${className}`);node.append(el('span',label,'cell-label'),el('span',text));return node;}
 const staticMode = document.documentElement.dataset.mode === 'static';
 const github = createGitHub({pullLimit:5});
 const configuredRepository='cryptomanxxx/repo-autopilot';
@@ -14,20 +11,8 @@ let loading=false;
 let backgroundRefresh=false;
 let usingSavedSnapshot=false;
 let lastRefresh=0;
-const activeWork=()=>latestData?.pulls.some(pr=>pr.state === 'open') || latestData?.tasks?.some(task=>['queued','working'].includes(task.status));
-$('agent-task').addEventListener('submit',event=>{
-  event.preventDefault();
-  if(!usingSavedSnapshot) return;
-  const text=$('task-text').value.trim();if(!text) return;
-  try {window.open(taskUrl(configuredRepository,text),'_blank','noopener,noreferrer');} catch(error) {$('task-status').textContent=error.message;return;}
-  $('task-status').textContent='Confirm the task on GitHub to start the agent. Its reply will appear below after saved data refreshes.';
-});
-function applyFilters() {
-  const choice=$('pr-filter').value;
-  for(const row of $('pulls').querySelectorAll('.pr-row')) row.hidden=!(choice === 'all' || row.dataset.state === choice || choice === 'attention' && row.dataset.attention === 'true');
-  const workflow=$('workflow-filter').value;
-  for(const row of $('workflows').querySelectorAll('.workflow-row:not(.list-head)')) row.hidden=workflow !== 'all' && row.dataset.category !== workflow;
-}
+const activeWork=()=>latestData?.pulls.some(pr=>pr.state === 'open');
+const applyFilters=()=>filter({pullFilter:$('pr-filter'),workflowFilter:$('workflow-filter'),pulls:$('pulls'),workflows:$('workflows')});
 for(const id of ['pr-filter','workflow-filter']) $(id).addEventListener('change',applyFilters);
 function updateAge() {
   if(!latestData) return;
@@ -46,7 +31,7 @@ $('mode-note').textContent = staticMode ? 'Repo Autopilot uses saved GitHub Acti
 const selected = new URLSearchParams(location.search).get('repo');
 $('repo').value = selected || configuredRepository;
 $('repository').addEventListener('submit',async event => {
-  event.preventDefault();if(loading) return;loading=true;const automatic=backgroundRefresh;backgroundRefresh=false;const expanded=new Set([...$('pulls').querySelectorAll('details[open]')].map(n=>n.dataset.number));const button = event.target.querySelector('button');button.disabled=true;
+  event.preventDefault();if(loading) return;loading=true;const automatic=backgroundRefresh;backgroundRefresh=false;const button = event.target.querySelector('button');button.disabled=true;
   $('status').textContent=automatic ? 'Checking saved data…' : 'Fetching GitHub data…';if(!automatic) $('dashboard').hidden=true;
   try {
     const repo = repositoryName($('repo').value);
@@ -64,53 +49,14 @@ $('repository').addEventListener('submit',async event => {
       const response = await fetch(`./api/dashboard?repo=${encodeURIComponent(repo)}`);
       data = await response.json();if(!response.ok) throw new Error(data.error || 'Unable to load dashboard.');
     }
-    $('summary').replaceChildren(el('strong',data.repository),el('span',`Snapshot: ${new Date(data.fetchedAt).toLocaleString()}`),el('span',`${data.pulls.filter(p=>p.state==='open').length} open in recent PRs`));
+    renderSummary($('summary'),data);
     const snapshotAge=Date.now()-Date.parse(data.fetchedAt);
     if(savedSnapshot && (!Number.isFinite(snapshotAge) || snapshotAge>30*60*1000 || snapshotAge < -60000)) {
       data={...data,pulls:data.pulls.map(pr=>pr.readiness.state === 'ready' ? {...pr,readiness:{state:'unknown',label:'Cannot verify merge readiness',reasons:['Saved snapshot is stale; check current GitHub status']}} : pr)};
     }
     usingSavedSnapshot=savedSnapshot;latestData=data;updateAge();
-    $('agent-panel').hidden=!savedSnapshot;renderTasks($('tasks'),data.tasks);
-    $('pulls').replaceChildren();
-    const headings=el('div','','pr-summary list-head');for(const title of ['PR','Merge','CI','Codex','#Reviews','#Commits','#P1','#P2']) headings.append(el('span',title));headings.setAttribute('aria-hidden','true');$('pulls').append(headings);
-    for(const pr of data.pulls) {
-      const node=el('details','','pr-row');
-      node.dataset.number=String(pr.number);node.dataset.state=pr.state;node.dataset.attention=String(pr.state === 'open' && pr.readiness.state !== 'ready');node.open=expanded.has(String(pr.number));
-      const summary=el('summary','','pr-summary');
-      const progress=pr.progress;
-      const waiting=['running','requested'].includes(pr.codex.state);
-      const codexText=pr.codex.state === 'clear' ? '✅ Reviewed · clear' : pr.codex.state === 'findings' ? '⚠ Findings' : waiting ? '🔄 Pending' : progress.currentCompleted ? '✓ Reviewed · unverified' : '❔ Unverified';
-      summary.append(cell('PR',`#${pr.number} ${pr.title}`,'pr-title'),cell('Merge',pr.readiness.label,`readiness-${pr.readiness.state}`),cell('CI',pr.ci === 'success' ? '✅ Passed' : pr.ci === 'failure' ? '❌ Failed' : pr.ci,`ci-${pr.ci}`),cell('Codex',codexText,`codex-${pr.codex.state}`),cell('Reviews',progress.reviewCount === null ? '?' : `≥${progress.reviewCount}`),cell('Commits',String(progress.updatesAfterReview ?? '?')),cell('P1',progress.findings ? `${progress.findings.incomplete ? '≥' : ''}${progress.findings.p1}` : '?'),cell('P2',progress.findings ? `${progress.findings.incomplete ? '≥' : ''}${progress.findings.p2}` : '?'));
-      summary.append(el('span','Details','expand-label'));
-      node.append(summary);
-      const detail=el('div','','pr-detail');
-      const flow=el('ol','','review-flow');
-      for(const event of progress.events || []) {const step=el('li','',`flow-${event.kind}`);step.append(el('strong',event.label),el('span',`${new Date(event.at).toLocaleString()}${event.commit ? ' · '+event.commit.slice(0,10) : ''}`,'muted'));flow.append(step);}
-      detail.append(el('h3','PR activity'),el('p','Observed GitHub history · Updates with saved data; code changes do not prove an agent fixed findings. Earlier events may be missing.','muted'),flow);
-      for(const reason of pr.readiness.reasons) detail.append(el('p',reason,'muted'));
-      detail.append(el('p',`${['running','findings','clear'].includes(pr.codex.state) || progress.currentCompleted ? '✅' : '❔'} Codex review acknowledged`));
-      detail.append(el('p',`${waiting ? '🔄' : progress.currentCompleted ? '✅' : '⏳'} Latest code review ${waiting ? 'pending' : progress.currentCompleted ? 'completed' : 'not verified'}`));
-      detail.append(el('p',pr.codex.label,`codex-status codex-${pr.codex.state}`));
-      detail.append(el('p',`Completed reviews: ${progress.reviewCount === null ? 'unknown' : `at least ${progress.reviewCount}`} · Commits after review: ${progress.updatesAfterReview ?? 'unknown'}`));
-      detail.append(el('p',`Historical Codex findings: ${progress.findings?.p1 ?? '?'} P1 · ${progress.findings?.p2 ?? '?'} P2${progress.findings?.incomplete ? ' (incomplete history)' : ''} · Unresolved review threads: ${pr.unresolvedThreads ?? 'unverified'}`));
-      detail.append(el('p','Commits count commits after review; they do not confirm that findings were fixed.','muted'));
-      detail.append(el('p',`Head: ${pr.headSha.slice(0,10)} · Opened: ${new Date(pr.openedAt).toLocaleString()}`));
-      detail.append(el('p',pr.mergedAt ? `Merged: ${new Date(pr.mergedAt).toLocaleString()}` : `Updated: ${new Date(pr.updatedAt).toLocaleString()}`));
-      detail.append(el('p',`${pr.state}${pr.draft ? ' · draft' : ''}`));
-      if(pr.detailError) detail.append(el('p',`Details unavailable: ${pr.detailError}`,'error'));
-      detail.append(link('View PR and review history on GitHub',pr.url));
-      node.append(detail);$('pulls').append(node);
-    }
-    if(!data.pulls.length) $('pulls').append(el('p','No pull requests found.'));
-    $('workflows').replaceChildren(...data.workflows.map(r=>{
-      const node=el('div','','workflow-row');
-      node.dataset.category=/deploy|pages/i.test(r.name) ? 'deployment' : /(?:\bci\b|test|build|lint|continuous integration|check)/i.test(r.name) ? 'ci' : 'other';
-      const title=el('span','','workflow-title');title.append(link(`${r.runNumber ? '#'+r.runNumber+' ' : ''}${r.title || r.name}`,r.url));
-      node.append(title,cell('Workflow',r.name),cell('Status',r.current ? 'Publishing this data' : r.conclusion || r.status),cell('Branch',r.branch),cell('Updated',new Date(r.updatedAt).toLocaleString()));
-      return node;
-    }));
-    const workflowHead=el('div','','workflow-row list-head');for(const title of ['Run','Workflow','Status','Branch','Updated']) workflowHead.append(el('span',title));workflowHead.setAttribute('aria-hidden','true');$('workflows').prepend(workflowHead);
-    if(!data.workflows.length) $('workflows').append(el('p','No workflow runs found.'));
+    renderPulls($('pulls'),data.pulls);
+    renderWorkflows($('workflows'),data.workflows);
     applyFilters();
     $('scope').textContent=[data.scope,...data.warnings].join(' ');$('dashboard').hidden=false;
     const age=Date.now()-Date.parse(data.fetchedAt);
