@@ -19,7 +19,7 @@
 @media(max-width:480px){.pr-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.pr-title{grid-column:1/-1}}
 
 [hidden]{display:none!important}select{background:#141f31;color:inherit;border:1px solid #435975;border-radius:6px;padding:7px;font:inherit}.filter-label{display:flex;align-items:center;gap:10px;font-size:13px}.list-head{font-size:12px;color:#a8b7cc;background:#0b1220}.list-head+.pr-row{border-top:1px solid #2a3c55}
-.review-flow{list-style:none;padding:0 0 0 16px;margin:16px 0}.review-flow li{position:relative;border-left:2px solid #435975;padding:0 0 22px 18px;display:flex;flex-direction:column;gap:5px}.review-flow li:before{content:'';position:absolute;left:-6px;top:4px;width:10px;height:10px;border-radius:50%;background:#9fc0ff}.review-flow li:last-child{padding-bottom:0;border-color:transparent}.review-flow .flow-clear:before,.review-flow .flow-merged:before{background:#9de4c0}.review-flow .flow-changed:before{background:#ffbf80}
+.review-flow{list-style:none;padding:6px 0 0;margin:16px 0;display:flex;flex-wrap:wrap;row-gap:22px}.review-flow li{position:relative;flex:0 0 210px;max-width:100%;border-top:2px solid #435975;padding:16px 16px 0 0;display:flex;flex-direction:column;gap:5px;font-size:14px}.review-flow li span{font-size:12px}.review-flow li:before{content:'';position:absolute;left:0;top:-6px;width:10px;height:10px;border-radius:50%;background:#9fc0ff}.review-flow li:last-child{border-color:transparent}.review-flow .flow-clear:before,.review-flow .flow-merged:before{background:#9de4c0}.review-flow .flow-changed:before{background:#ffbf80}
 @media(min-width:851px){.pr-summary .cell-label{display:none}.pr-summary.list-head{padding-top:10px;padding-bottom:10px}}
 @media(max-width:850px){.list-head{display:none}}
 
@@ -36,7 +36,7 @@
   .pr-summary.list-head>span:not(:first-child){text-align:center}
   .list-head span{white-space:nowrap}
 }
-.review-flow li:last-child:before{background:#d5a6ff;box-shadow:0 0 0 4px #392c55;width:12px;height:12px;left:-7px}
+.review-flow li:last-child:before{background:#d5a6ff;box-shadow:0 0 0 4px #392c55;width:12px;height:12px;top:-7px}
 .review-flow li:last-child strong:after{content:'Latest';display:inline-block;margin-left:10px;padding:2px 7px;border-radius:9px;background:#392c55;color:#ead8ff;font-size:10px;font-weight:600}
 
 textarea{display:block;width:100%;resize:vertical;background:#0b1220;color:inherit;border:1px solid #435975;border-radius:8px;padding:12px;font:inherit}#agent-panel{margin:24px 0}.task-row{padding:14px 16px}.task-row+.task-row{border-top:1px solid #2a3c55}.task-message{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}.task-link{display:inline-block;margin:4px 18px 4px 0;font-size:13px}
