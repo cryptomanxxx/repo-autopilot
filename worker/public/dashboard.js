@@ -3,7 +3,6 @@ import {renderSummary,renderPulls,renderWorkflows,applyFilters,el,link} from './
 const $=id=>document.getElementById(id);
 const REFRESH_MS=180000,VERSION_MS=15000;
 let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,version=null;
-const repo=()=>`repo=${encodeURIComponent(repository())}`;
 const status=text=>{$('dashboard-status').replaceChildren(text);};
 const filters=()=>applyFilters({pullFilter:$('pr-filter'),workflowFilter:$('workflow-filter'),pulls:$('pulls'),workflows:$('workflows')});
 
@@ -36,14 +35,15 @@ function openPending() {
 export async function loadDashboard({fresh=false}={}) {
   if(loading||!api||$('dashboard-view').hidden) return;
   loading=true;$('refresh').disabled=true;
-  const target=repository();
+  // Every request of one load uses the repository selected when it started.
+  const target=repository(),query=`repo=${encodeURIComponent(target)}`;
   if(!data) status('Loading live GitHub data…');
   try {
     // The version is read first, so a change reported while loading triggers one more load.
-    const seen=(await api(`/api/dashboard/version?${repo()}`)).version;
-    const overview=await api(`/api/dashboard?${repo()}${fresh?'&fresh=1':''}`);
+    const seen=(await api(`/api/dashboard/version?${query}`)).version;
+    const overview=await api(`/api/dashboard?${query}${fresh?'&fresh=1':''}`);
     // Each pull request is loaded by its own request so every Worker call stays within its GitHub budget.
-    const pulls=await Promise.all(overview.pulls.map(pr=>api(`/api/dashboard/pulls/${pr.number}?${repo()}&updated=${encodeURIComponent(pr.updatedAt)}${fresh?'&fresh=1':''}`).catch(error=>unavailable(pr,error))));
+    const pulls=await Promise.all(overview.pulls.map(pr=>api(`/api/dashboard/pulls/${pr.number}?${query}&updated=${encodeURIComponent(pr.updatedAt)}${fresh?'&fresh=1':''}`).catch(error=>unavailable(pr,error))));
     if(target!==repository()) return;
     version=seen>0?seen:version;
     data={...overview,pulls,warnings:[...overview.warnings,...pulls.flatMap(pr=>pr.warnings||[])]};
@@ -65,9 +65,10 @@ export async function loadDashboard({fresh=false}={}) {
 // Webhook events move the repository's version on; checking it costs no GitHub request.
 async function checkVersion() {
   if(loading||!data||$('dashboard-view').hidden||document.hidden) return;
+  const target=repository();
   try {
-    const {version:current}=await api(`/api/dashboard/version?${repo()}`);
-    if(current>0&&current!==version) loadDashboard();
+    const {version:current}=await api(`/api/dashboard/version?repo=${encodeURIComponent(target)}`);
+    if(target===repository()&&current>0&&current!==version) loadDashboard();
   } catch {}
 }
 
