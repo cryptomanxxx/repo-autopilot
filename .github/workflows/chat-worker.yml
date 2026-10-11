@@ -63,6 +63,7 @@ jobs:
           CLIENT_ID: ${{ vars.AUTOPILOT_CHAT_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.AUTOPILOT_CHAT_CLIENT_SECRET }}
           MODEL_API_KEY: ${{ secrets.AUTOPILOT_CHAT_MODEL_API_KEY }}
+          WEBHOOK_SECRET: ${{ secrets.AUTOPILOT_WEBHOOK_SECRET }}
           MODEL: ${{ vars.AUTOPILOT_CHAT_MODEL }}
           MODEL_PROVIDER: ${{ vars.AUTOPILOT_CHAT_MODEL_PROVIDER }}
           MODEL_BASE_URL: ${{ vars.AUTOPILOT_CHAT_MODEL_BASE_URL }}
@@ -80,6 +81,6 @@ jobs:
           done
           umask 077
           secrets="$RUNNER_TEMP/chat-secrets.json"
-          node -e 'const s={GITHUB_CLIENT_SECRET:process.env.CLIENT_SECRET};if(process.env.MODEL_API_KEY) s.MODEL_API_KEY=process.env.MODEL_API_KEY;require("fs").writeFileSync(process.argv[1],JSON.stringify(s))' "$secrets"
+          node -e 'const s={GITHUB_CLIENT_SECRET:process.env.CLIENT_SECRET};for(const n of ["MODEL_API_KEY","WEBHOOK_SECRET"]) if(process.env[n]) s[n]=process.env[n];require("fs").writeFileSync(process.argv[1],JSON.stringify(s))' "$secrets"
           trap 'rm -f "$secrets"' EXIT
           npx --yes "wrangler@$WRANGLER_VERSION" deploy "${args[@]}" --secrets-file "$secrets"

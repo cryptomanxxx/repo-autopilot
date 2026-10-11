@@ -1,7 +1,8 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Repo Autopilot</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/chat.css"><script type="module" src="/chat.js"></script></head>
 <body><main>
-<header><span class="eyebrow">REPO AUTOPILOT</span><h1>Repo Autopilot</h1><p id="account" class="muted">Loading…</p><a id="login" class="button" href="/auth/login" hidden>Sign in with GitHub</a><button id="logout" class="secondary" hidden>Sign out</button></header>
+<header><span class="eyebrow">REPO AUTOPILOT</span><h1>Repo Autopilot</h1><p id="account" class="muted">Loading…</p>
+<div id="repo-bar" class="repo-bar" hidden><label for="repo-picker">Repository</label><div class="repo-row"><select id="repo-picker"></select><button type="button" id="repo-reload" class="secondary">Reload list</button></div><p class="muted small">Only repositories where the Repo Autopilot GitHub App is installed are listed. <a href="https://github.com/settings/installations" target="_blank" rel="noopener noreferrer">Add repositories</a></p></div><a id="login" class="button" href="/auth/login" hidden>Sign in with GitHub</a><button id="logout" class="secondary" hidden>Sign out</button></header>
 <div id="tabs" class="tabs" role="tablist" hidden><button type="button" role="tab" id="tab-dashboard" aria-controls="dashboard-view" aria-selected="false">Dashboard</button><button type="button" role="tab" id="tab-chat" aria-controls="chat" aria-selected="false">Agent chat</button></div>
 <section id="dashboard-view" role="tabpanel" aria-labelledby="tab-dashboard" hidden>
 <div class="toolbar"><div id="summary" class="summary"></div><button type="button" id="refresh" class="secondary">Refresh</button></div>

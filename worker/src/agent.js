@@ -5,7 +5,10 @@ export const DEFAULT_MODEL='@cf/meta/llama-4-scout-17b-16e-instruct';
 export const DEFAULT_CONTEXT_CHARS=60000,MODEL_TIMEOUT=150000;
 const CUT_OFF='\n\n[The answer was cut off at the output limit.]';
 const MAX_FILE_CHARS=100000,MAX_HISTORY=10,MAX_HISTORY_CHARS=6000,MAX_EDITS=12,MAX_CHANGED_FILES=8,MAX_RESULT_CHARS=200000;
-const TEXT_FILE=/\.(js|mjs|cjs|ts|css|html|md|json|jsonc|toml|ya?ml|txt)$/;
+const TEXT_FILE=/\.(js|mjs|cjs|jsx|ts|mts|cts|tsx|css|scss|sass|less|html|md|mdx|json|jsonc|toml|ya?ml|txt|py|vue|svelte|astro|sql|prisma|graphql|gql|sh)$/;
+// Folders with installed or generated code, and lockfiles: never read or edited.
+const SKIPPED_DIRS=new Set(['node_modules','dist','build','out','coverage','vendor']),LOCKFILES=new Set(['package-lock.json','yarn.lock','pnpm-lock.yaml','npm-shrinkwrap.json']);
+const SOURCE_FILE=/\.(js|mjs|cjs|jsx|ts|mts|cts|tsx|css|scss|sass|less|html|md|mdx|txt|py|vue|svelte|astro|sql|prisma|graphql|gql)$/;
 const STOP_WORDS=new Set(['that','this','with','from','have','what','when','where','which','should','would','could','there','their','about','into','them','then','than','also','just','like','make','some','will','your','code','file','files','repo','change','please','inte','till','vill','eller','vara','alla','ingen','göra','bara','också','sedan','efter','innan','mycket','finns','skulle','borde']);
 const SCAN_CHARS=20000,MAX_WORDS=30;
 
@@ -13,6 +16,21 @@ const SCAN_CHARS=20000,MAX_WORDS=30;
 // code that runs it, so these stay read-only even where the Actions agent may edit them.
 export const WORKER_SOURCES=['src/agent.js','src/codex.js','src/github.js','src/progress.js'];
 export const editablePath=path=>allowedAgentPath(path)&&!WORKER_SOURCES.includes(path);
+
+// Other repositories: source, style, page and documentation files outside hidden folders, installed or
+// generated code. Workflows, manifests, lockfiles, environment files and build configuration stay read-only.
+export function generalEditablePath(path) {
+  if(typeof path!=='string'||path.length>300||path.includes('\\')||!SOURCE_FILE.test(path)) return false;
+  const parts=path.split('/');
+  return parts.every(p=>p&&p!=='..'&&p!=='.'&&!p.startsWith('.')&&!SKIPPED_DIRS.has(p))&&!/\.config\.[^/]+$/.test(path)&&!/^(requirements[^/]*\.txt|setup\.py)$/.test(parts.at(-1));
+}
+
+// The edit rules for a repository: the app's own repository keeps the stricter list that protects the
+// agent's code; any other repository uses the general one.
+export function editPolicy(repository,home) {
+  if(repository.toLowerCase()===home.toLowerCase()) return {allowed:editablePath,rule:`Only these paths may be edited: README.md and .js, .css, .html or .md files under src/, public/ or test/. Never edit the agent itself (worker/, ${WORKER_SOURCES.join(', ')}), workflows, dependencies or credentials.`};
+  return {allowed:generalEditablePath,rule:'Only source, style, page and documentation files may be edited (for example .js, .ts, .tsx, .css, .html, .md, .py), never files in hidden folders such as .github, never package manifests (package.json, requirements.txt, setup.py), lockfiles, environment files, build output or build configuration (*.config.*).'};
+}
 
 const SYSTEM_PROMPT=`You are the coding agent for a GitHub repository, talking with its owner in a chat.
 Answer in the language the owner writes in. Be concise and concrete. Base every statement about the code on the files supplied below; if a file you need is not included, say which one and ask the owner to name it. Never claim you ran code or tests.
@@ -30,15 +48,15 @@ Rules for edits:
 - The SEARCH text must match exactly one place in the file. Copy it character for character and include a few unchanged lines so it is unique.
 - To create a new file, leave the SEARCH section empty.
 - A line consisting only of ======= separates SEARCH from REPLACE, so choose SEARCH and replacement text that does not contain such a line.
-- Only these paths may be edited: README.md and .js, .css, .html or .md files under src/, public/ or test/. Never edit the agent itself (worker/, ${WORKER_SOURCES.join(', ')}), workflows, dependencies or credentials. If the owner asks for such a change, explain that it must be made by hand.
+- {RULE} If the owner asks for another change, explain that it must be made by hand.
 - Use at most ${MAX_EDITS} blocks and keep the change as small as the request allows.
 - Optionally add one line "PR-TITLE: <short title>" before the blocks.
 Only include edit blocks when the owner wants code changed. The owner reviews the edits and decides whether to open a pull request; CI runs on that pull request.`;
 
 export function readableFile(path,size) {
-  if(size>MAX_FILE_CHARS||!TEXT_FILE.test(path)||path==='package-lock.json') return false;
+  if(size>MAX_FILE_CHARS||!TEXT_FILE.test(path)) return false;
   const parts=path.split('/');
-  if(parts.some(p=>p==='node_modules'||p==='dist')) return false;
+  if(LOCKFILES.has(parts.at(-1))||parts.some(p=>SKIPPED_DIRS.has(p))) return false;
   if(parts.some(p=>p.startsWith('.'))) return /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path);
   return true;
 }
@@ -78,9 +96,9 @@ export function selectContext(files,query,budget=DEFAULT_CONTEXT_CHARS) {
   return {included,listing:Object.keys(files).sort()};
 }
 
-export function buildMessages({repository,head,context,history,text,image}) {
+export function buildMessages({repository,head,context,history,text,image,rule=editPolicy(repository,repository).rule}) {
   const fileText=context.included.map(f=>`----- FILE ${f.path} -----\n${f.text}\n----- END FILE ${f.path} -----`).join('\n\n');
-  const system=`${SYSTEM_PROMPT}\n\nRepository: ${repository}, branch ${head.branch}, commit ${head.sha}.\nAll readable files: ${context.listing.slice(0,500).join(', ')}${context.listing.length>500?` and ${context.listing.length-500} more`:''}\nFull contents are included below for: ${context.included.map(f=>f.path).join(', ')||'none'}.\n\n${fileText}`;
+  const system=`${SYSTEM_PROMPT.replace('{RULE}',()=>rule)}\n\nRepository: ${repository}, branch ${head.branch}, commit ${head.sha}.\nAll readable files: ${context.listing.slice(0,500).join(', ')}${context.listing.length>500?` and ${context.listing.length-500} more`:''}\nFull contents are included below for: ${context.included.map(f=>f.path).join(', ')||'none'}.\n\n${fileText}`;
   const earlier=history.slice(-MAX_HISTORY).map(m=>({role:m.role==='assistant'?'assistant':'user',content:(m.content.length>MAX_HISTORY_CHARS?m.content.slice(0,MAX_HISTORY_CHARS)+'\n[shortened]':m.content)+(m.hasImage?'\n[An image was attached to this message; it is no longer available.]':'')}));
   const current=image?[{type:'text',text},{type:'image_url',image_url:{url:image}}]:text;
   return [{role:'system',content:system},...earlier,{role:'user',content:current}];
@@ -124,10 +142,10 @@ function locate(source,search,path) {
 }
 
 // Applies search/replace edits to the current files. Throws a message the model can act on.
-export function applyEdits(edits,files,existingPaths) {
+export function applyEdits(edits,files,existingPaths,allowed=editablePath) {
   const updated={},existing=new Set(existingPaths);
   for(const edit of edits) {
-    if(!editablePath(edit.path)) throw new PublicError(`${edit.path} may not be edited by the chat agent.`);
+    if(!allowed(edit.path)) throw new PublicError(`${edit.path} may not be edited by the chat agent.`);
     if(!edit.search) {
       if(existing.has(edit.path)||Object.hasOwn(updated,edit.path)) throw new PublicError(`${edit.path} already exists; use a SEARCH section to change it.`);
       updated[edit.path]=edit.replace;continue;
@@ -185,7 +203,7 @@ export async function callModel(env,messages,{fetchImpl=fetch}={}) {
 }
 
 // Asks the model, and when its edit blocks cannot be applied, gives it one chance to correct them.
-export async function answer(env,{messages,files,existingPaths,fetchImpl}) {
+export async function answer(env,{messages,files,existingPaths,allowed=editablePath,fetchImpl}) {
   let result=await callModel(env,messages,{fetchImpl});
   for(let attempt=0;;attempt++) {
     const reply=result.truncated?result.text+CUT_OFF:result.text;
@@ -195,7 +213,7 @@ export async function answer(env,{messages,files,existingPaths,fetchImpl}) {
     try {
       const {edits,title}=parseEdits(reply);
       if(!edits.length) return {reply,proposal:null,error:null};
-      applyEdits(edits,files,existingPaths);
+      applyEdits(edits,files,existingPaths,allowed);
       return {reply,proposal:{edits,title},error:null};
     } catch(error) {
       if(attempt>0) return {reply,proposal:null,error:error.message};

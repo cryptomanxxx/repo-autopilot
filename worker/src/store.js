@@ -14,6 +14,10 @@ export class ChatStoreLogic {
     sql.exec(`CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages (conversation, id)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, owner TEXT NOT NULL, until INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS versions (repository TEXT PRIMARY KEY, version INTEGER NOT NULL)`);
+    // Conversations from before repository selection have no repository; they belong to the app's own one.
+    try {sql.exec('SELECT repository FROM conversations LIMIT 0');}
+    catch {sql.exec('ALTER TABLE conversations ADD COLUMN repository TEXT');}
   }
   rows(query,...bindings) {return this.sql.exec(query,...bindings).toArray();}
 
@@ -50,15 +54,29 @@ export class ChatStoreLogic {
     this.sql.exec('INSERT OR REPLACE INTO cache (key, value, expires) VALUES (?, ?, ?)',key,JSON.stringify(value),this.now()+ms);
   }
 
-  createConversation(id,title) {
-    const now=this.now();
-    this.sql.exec('INSERT INTO conversations (id, title, created, updated) VALUES (?, ?, ?, ?)',id,title,now,now);
+  // GitHub data is cached under keys that start with the repository (`overview:owner/repo`,
+  // `pull:owner/repo:<number>:<updatedAt>`). A webhook event drops the affected entries and moves the
+  // repository's version on, which tells open dashboards to reload.
+  invalidate(repository,{overview=false,pulls=[]}={}) {
+    const repo=repository.toLowerCase(),like=value=>value.replace(/[\\%_]/g,'\\$&');
+    if(overview) this.sql.exec('DELETE FROM cache WHERE key = ?',`overview:${repo}`);
+    if(pulls==='all') this.sql.exec("DELETE FROM cache WHERE key LIKE ? ESCAPE '\\'",`pull:${like(repo)}:%`);
+    else for(const number of pulls) this.sql.exec("DELETE FROM cache WHERE key LIKE ? ESCAPE '\\'",`pull:${like(repo)}:${number}:%`);
+    this.sql.exec('INSERT INTO versions (repository, version) VALUES (?, 1) ON CONFLICT (repository) DO UPDATE SET version = version + 1',repo);
+    return this.getVersion(repo);
   }
-  listConversations(limit=30) {
-    return this.rows('SELECT id, title, updated FROM conversations ORDER BY updated DESC LIMIT ?',limit);
+  getVersion(repository) {return this.rows('SELECT version FROM versions WHERE repository = ?',repository.toLowerCase())[0]?.version||0;}
+
+  createConversation(id,title,repository) {
+    const now=this.now();
+    this.sql.exec('INSERT INTO conversations (id, title, created, updated, repository) VALUES (?, ?, ?, ?, ?)',id,title,now,now,repository);
+  }
+  // Conversations of one repository; with home=true also those saved before repositories were recorded.
+  listConversations(repository,{home=false,limit=30}={}) {
+    return this.rows('SELECT id, title, updated FROM conversations WHERE lower(repository) = lower(?) OR (repository IS NULL AND ?) ORDER BY updated DESC LIMIT ?',repository,home?1:0,limit);
   }
   getConversation(id) {
-    const [conversation]=this.rows('SELECT id, title, updated FROM conversations WHERE id = ?',id);
+    const [conversation]=this.rows('SELECT id, title, updated, repository FROM conversations WHERE id = ?',id);
     if(!conversation) return null;
     const messages=this.rows(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation = ? ORDER BY id`,id).map(toMessage);
     return {...conversation,messages};
@@ -71,8 +89,8 @@ export class ChatStoreLogic {
   }
   // Saves the owner's message and the agent's answer together, so a failed model call never
   // leaves an unanswered message behind. Creates the conversation on its first exchange.
-  saveExchange({conversation,title,user,assistant}) {
-    if(title!==undefined&&title!==null) this.createConversation(conversation,title);
+  saveExchange({conversation,title,repository=null,user,assistant}) {
+    if(title!==undefined&&title!==null) this.createConversation(conversation,title,repository);
     else if(!this.rows('SELECT id FROM conversations WHERE id = ?',conversation).length) throw new Error('Conversation not found.');
     return {user:this.addMessage(conversation,{...user,role:'user'}),assistant:this.addMessage(conversation,{...assistant,role:'assistant'})};
   }
@@ -80,7 +98,7 @@ export class ChatStoreLogic {
     const [m]=this.rows(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation = ? AND id = ?`,conversation,id);
     return m?toMessage(m):null;
   }
-  getTitle(id) {return this.rows('SELECT title FROM conversations WHERE id = ?',id)[0]?.title||null;}
+  getConversationInfo(id) {return this.rows('SELECT title, repository FROM conversations WHERE id = ?',id)[0]||null;}
   setPullRequest(conversation,id,url) {
     this.sql.exec('UPDATE messages SET pr_url = ? WHERE conversation = ? AND id = ? AND pr_url IS NULL',url,conversation,id);
   }
