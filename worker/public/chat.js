@@ -70,6 +70,7 @@ async function loadConversations() {
 
 async function openConversation(id) {
   if(state.busy) return;
+  const previous=state.conversation;
   state.conversation=id;
   if(!id) {history.replaceState(null,'',location.pathname);$('conversation-title').textContent='New conversation';renderMessages([]);await loadConversations();return;}
   history.replaceState(null,'',`#${id}`);
@@ -78,7 +79,11 @@ async function openConversation(id) {
     if(state.conversation!==id) return;
     $('conversation-title').textContent=conversation.title;renderMessages(conversation.messages);
     await loadConversations();
-  } catch(error) {status(error.message);}
+  } catch(error) {
+    // Keep sending to the conversation that is actually on screen.
+    if(state.conversation===id) {state.conversation=previous;history.replaceState(null,'',previous?`#${previous}`:location.pathname);}
+    status(error.message);
+  }
 }
 
 async function createPullRequest(message,button) {
@@ -140,8 +145,8 @@ $('composer').onsubmit=async event=>{
   status('');
   try {
     const result=await api('/api/chat',{conversation:state.conversation,text,image:state.image},430000);
-    $('message').value='';clearImage();
-    state.busy=false;await openConversation(result.conversation);
+    $('message').value='';clearImage();thinking.remove();
+    state.busy=false;state.conversation=result.conversation;await openConversation(result.conversation);
   } catch(error) {
     thinking.remove();container.lastElementChild?.remove();
     status(error.name==='TimeoutError'?'The agent did not answer in time. Try again.':error.message);

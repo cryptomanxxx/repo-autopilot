@@ -111,6 +111,8 @@ test('edit blocks are parsed, applied exactly once and limited to allowed paths'
   assert.throws(()=>parseEdits('<<<<<<< SEARCH a.js\nx\n=======\ny\n'),/malformed/);
   const crlf={'public/win.js':'\ufeffa\r\nb\r\nc\r\n'};
   assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/win.js\na\nb\n=======\na\nB\n>>>>>>> REPLACE').edits,crlf,Object.keys(crlf)),[{path:'public/win.js',content:'\ufeffa\r\nB\r\nc\r\n'}],'CRLF files keep their line endings');
+  const mixed={'public/mixed.js':'a\nb\r\nc\n'};
+  assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/mixed.js\na\nb\n=======\na\nB\n>>>>>>> REPLACE').edits,mixed,Object.keys(mixed)),[{path:'public/mixed.js',content:'a\nB\r\nc\n'}],'mixed line endings still match LF text');
   for(const path of WORKER_SOURCES) assert.throws(()=>applyEdits(block(path,'x'),{[path]:'x'},[path]),/may not be edited/,path);
   assert.throws(()=>applyEdits(block('public/app.js','const x=1;','const x=1;'),files,Object.keys(files)),/do not change/);
   const many=Object.fromEntries(Array.from({length:9},(_,i)=>[`public/f${i}.js`,'a']));
@@ -171,7 +173,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,modes={},refStatus=201,pullStatus=201,openPulls=[]}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -182,10 +184,13 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(path==='/git/ref/heads/main') return ok({object:{sha:head}});
     if(path===`/tarball/${head}`) return new Response(gzipSync(repoTar(repoFiles)));
     if(path===`/git/commits/${head}`) return ok({tree:{sha:'tree0'}});
+    if(path==='/git/trees/tree0?recursive=1') return ok({tree:Object.keys(repoFiles).map(p=>({path:p,mode:modes[p]||'100644',type:'blob'})),truncated:false});
     if(method==='POST'&&path==='/git/trees') return ok({sha:'tree1'},writeStatus);
     if(method==='POST'&&path==='/git/commits') return ok({sha:'commit1'},201);
-    if(method==='POST'&&path==='/git/refs') return ok({},201);
-    if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},201);
+    if(method==='POST'&&path==='/git/refs') return ok({},refStatus);
+    if(method==='PATCH'&&path.startsWith('/git/refs/heads/autopilot/chat-')) return ok({});
+    if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},pullStatus);
+    if(method==='GET'&&path.startsWith('/pulls?state=open&head=owner%3Aautopilot%2Fchat-')) return ok(openPulls);
     return ok({message:'not found'},404);
   };
 }
@@ -284,6 +289,33 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.equal(calls.filter(c=>c.method==='POST').length,writes,'a second click reuses the existing pull request');
   assert.equal((await handle(post('/api/pull-request',auth,{conversation,message:thread.messages[0].id}),env,{fetchImpl})).status,404);
   assert.equal(store.acquireLock('model','t',1),true,'the model lock is released after answering');
+});
+
+test('pull requests keep file modes and can be retried after a partial failure',async()=>{
+  const calls=[],{env,store}=environment();
+  env.AI.run=async()=>({response:'<<<<<<< SEARCH public/app.js\nconst title="Old";\n=======\nconst title="New";\n>>>>>>> REPLACE'});
+  const auth=await session(env,github({calls}));
+  const {conversation}=await (await handle(post('/api/chat',auth,{text:'Change it'}),env,{fetchImpl:github({calls})})).json();
+  const message=store.getConversation(conversation).messages[1].id;
+  const failed=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,pullStatus:502,modes:{'public/app.js':'100755'}})});
+  assert.equal(failed.status,500);assert.match((await failed.json()).error,/HTTP 502/);
+  assert.equal(JSON.parse(calls.findLast(c=>c.url.endsWith('/git/trees')&&c.method==='POST').options.body).tree[0].mode,'100755','executable files stay executable');
+  const firstBranch=JSON.parse(calls.findLast(c=>c.url.endsWith('/git/refs')).options.body).ref;
+  calls.length=0;
+  const retried=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422,pullStatus:422,openPulls:[{html_url:'https://github.com/owner/repo/pull/8'}]})});
+  assert.deepEqual(await retried.json(),{url:'https://github.com/owner/repo/pull/8'});
+  const patch=calls.find(c=>c.method==='PATCH');
+  assert.equal(`refs/heads/${patch.url.split('/git/refs/heads/')[1]}`,firstBranch,'the retry reuses the same branch');
+  assert.equal(JSON.parse(patch.options.body).force,true);
+  assert.equal(store.getMessage(conversation,message).prUrl,'https://github.com/owner/repo/pull/8');
+});
+
+test('internal failures are reported without their details',async()=>{
+  const {env,store}=environment();
+  const auth=await session(env,github({calls:[]}));
+  store.listConversations=()=>{throw new Error('SQLITE_CORRUPT: internal details');};
+  const response=await handle(request('/api/conversations',{cookie:auth.cookie}),env,{fetchImpl:github({calls:[]})});
+  assert.equal(response.status,500);assert.deepEqual(await response.json(),{error:'Request failed. Please try again.'});
 });
 
 test('chat reports stale changes, busy agent, expired tokens and refused writes',async()=>{

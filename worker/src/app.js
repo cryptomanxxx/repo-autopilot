@@ -1,5 +1,7 @@
 import {githubClient,GitHubError,readLimited} from './github.js';
 import {repositoryName} from '../../src/github.js';
+import {PublicError,UserError} from './errors.js';
+export {UserError};
 import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
 
 const encoder=new TextEncoder();
@@ -10,8 +12,6 @@ const base64url=bytes=>{let s='';for(const b of bytes) s+=String.fromCharCode(b)
 const fromBase64url=value=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
 const sha256=async text=>new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(text)));
 
-// Errors whose message is written for the owner and safe to show in the chat.
-export class UserError extends Error {constructor(status,message) {super(message);this.status=status;}}
 
 let keyCache=null;
 async function stateKey(secret) {
@@ -98,8 +98,7 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
   } catch(error) {
     if(error instanceof UserError) return withHeaders(json(error.status,{error:error.message}),secure);
     console.error('chat request failed',error?.stack||error);
-    // Plain Errors from this Worker carry messages written for the owner; anything else may be internal.
-    const message=error?.constructor===Error||error instanceof GitHubError?error.message:'Request failed. Please try again.';
+    const message=error instanceof PublicError?error.message:'Request failed. Please try again.';
     return withHeaders(json(500,{error:message}),secure);
   }
 }
@@ -204,14 +203,14 @@ async function pullRequest(body,{store,github}) {
     if(!message||message.role!=='assistant'||!message.proposal) throw new UserError(404,'This message has no proposed change.');
     if(message.prUrl) return json(200,{url:message.prUrl});
     const client=github(),head=await client.head(),archive=await client.archive(head.sha);
+    const edited=new Set(message.proposal.edits.map(e=>e.path));
     let files;
-    try {files=applyEdits(message.proposal.edits,textFiles(archive),[...archive.keys()]);}
+    try {files=applyEdits(message.proposal.edits,textFiles(new Map([...archive].filter(([path])=>edited.has(path)))),[...archive.keys()]);}
     catch(error) {throw new UserError(409,`The change no longer applies to the current code: ${error.message} Ask the agent to redo it.`);}
-    const conversation=await store.getConversation(body.conversation);
-    const title=message.proposal.title||conversation.title;
+    const title=message.proposal.title||await store.getTitle(body.conversation)||'Change from the agent chat';
     const description=`${displayText(message.content).slice(0,4000)}\n\n---\nCreated from the Repo Autopilot chat on ${head.sha.slice(0,10)}. Agent-generated: review the diff and CI before merging.`;
     let url;
-    try {url=await client.createPullRequest({base:head.branch,parent:head.sha,files,branch:`autopilot/chat-${body.conversation.slice(0,8)}-${body.message}-${Date.now().toString(36)}`,title,body:description});}
+    try {url=await client.createPullRequest({base:head.branch,parent:head.sha,files,branch:`autopilot/chat-${body.conversation.slice(0,12)}-${body.message}`,title,body:description});}
     catch(error) {
       if(error instanceof GitHubError&&[403,404].includes(error.status)) throw new UserError(403,`GitHub refused to create the pull request (HTTP ${error.status}). Check that the GitHub App is installed on this repository with Contents and Pull requests set to Read and write.`);
       throw error;

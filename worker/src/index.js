@@ -13,6 +13,7 @@ export class ChatStore extends DurableObject {
   listConversations() {return this.logic.listConversations();}
   getConversation(id) {return this.logic.getConversation(id);}
   getMessage(conversation,id) {return this.logic.getMessage(conversation,id);}
+  getTitle(id) {return this.logic.getTitle(id);}
   saveExchange(exchange) {return this.logic.saveExchange(exchange);}
   setPullRequest(conversation,id,url) {return this.logic.setPullRequest(conversation,id,url);}
 }

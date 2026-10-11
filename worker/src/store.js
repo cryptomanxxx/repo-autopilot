@@ -2,6 +2,8 @@
 // (`sql.exec(query, ...bindings)` returning a cursor with `toArray()`), so every method runs
 // atomically inside the Durable Object and can be tested with any SQLite adapter.
 const HOUR=3600000;
+const MESSAGE_COLUMNS='id, role, content, has_image, proposal, pr_url, created';
+const toMessage=m=>({id:m.id,role:m.role,content:m.content,hasImage:Boolean(m.has_image),proposal:m.proposal?JSON.parse(m.proposal):null,prUrl:m.pr_url||null,created:m.created});
 
 export class ChatStoreLogic {
   constructor(sql,now=Date.now) {
@@ -47,8 +49,7 @@ export class ChatStoreLogic {
   getConversation(id) {
     const [conversation]=this.rows('SELECT id, title, updated FROM conversations WHERE id = ?',id);
     if(!conversation) return null;
-    const messages=this.rows('SELECT id, role, content, has_image, proposal, pr_url, created FROM messages WHERE conversation = ? ORDER BY id',id)
-      .map(m=>({id:m.id,role:m.role,content:m.content,hasImage:Boolean(m.has_image),proposal:m.proposal?JSON.parse(m.proposal):null,prUrl:m.pr_url||null,created:m.created}));
+    const messages=this.rows(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation = ? ORDER BY id`,id).map(toMessage);
     return {...conversation,messages};
   }
   addMessage(conversation,{role,content,hasImage=false,proposal=null}) {
@@ -65,9 +66,10 @@ export class ChatStoreLogic {
     return {user:this.addMessage(conversation,{...user,role:'user'}),assistant:this.addMessage(conversation,{...assistant,role:'assistant'})};
   }
   getMessage(conversation,id) {
-    const [m]=this.rows('SELECT id, role, content, has_image, proposal, pr_url, created FROM messages WHERE conversation = ? AND id = ?',conversation,id);
-    return m?{id:m.id,role:m.role,content:m.content,hasImage:Boolean(m.has_image),proposal:m.proposal?JSON.parse(m.proposal):null,prUrl:m.pr_url||null,created:m.created}:null;
+    const [m]=this.rows(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation = ? AND id = ?`,conversation,id);
+    return m?toMessage(m):null;
   }
+  getTitle(id) {return this.rows('SELECT title FROM conversations WHERE id = ?',id)[0]?.title||null;}
   setPullRequest(conversation,id,url) {
     this.sql.exec('UPDATE messages SET pr_url = ? WHERE conversation = ? AND id = ? AND pr_url IS NULL',url,conversation,id);
   }

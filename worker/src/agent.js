@@ -1,14 +1,16 @@
 import {allowedAgentPath} from '../../src/agent.js';
+import {PublicError} from './errors.js';
 
 export const DEFAULT_MODEL='@cf/meta/llama-4-scout-17b-16e-instruct';
 export const DEFAULT_CONTEXT_CHARS=60000,MODEL_TIMEOUT=150000;
 const MAX_FILE_CHARS=100000,MAX_HISTORY=10,MAX_HISTORY_CHARS=6000,MAX_EDITS=12,MAX_CHANGED_FILES=8,MAX_RESULT_CHARS=200000;
+const TEXT_FILE=/\.(js|mjs|cjs|ts|css|html|md|json|jsonc|toml|ya?ml|txt)$/;
+const STOP_WORDS=new Set(['that','this','with','from','have','what','when','where','which','should','would','could','there','their','about','into','them','then','than','also','just','like','make','some','will','your','code','file','files','repo','change','fix','please','och','att','det','som','för','med','inte','till','av','kan','vill','ska','den','har','jag','men','när','nu','så','eller','vara','hur','vad','var','dom','där','alla','ingen','göra','gör','bara','också','sedan','efter','innan','mycket','finns','skulle','borde']);
+
 // Repository files bundled into this Worker (checked by a test). The agent may never change the
 // code that runs it, so these stay read-only even where the Actions agent may edit them.
 export const WORKER_SOURCES=['src/agent.js','src/codex.js','src/github.js','src/progress.js'];
 export const editablePath=path=>allowedAgentPath(path)&&!WORKER_SOURCES.includes(path);
-const TEXT_FILE=/\.(js|mjs|cjs|ts|css|html|md|json|jsonc|toml|ya?ml|txt)$/;
-const STOP_WORDS=new Set(['that','this','with','from','have','what','when','where','which','should','would','could','there','their','about','into','them','then','than','also','just','like','make','some','will','your','code','file','files','repo','change','fix','please','och','att','det','som','för','med','inte','till','av','kan','vill','ska','den','har','jag','men','när','nu','så','eller','vara','hur','vad','var','dom','där','alla','ingen','göra','gör','bara','också','sedan','efter','innan','mycket','finns','skulle','borde']);
 
 const SYSTEM_PROMPT=`You are the coding agent for a GitHub repository, talking with its owner in a chat.
 Answer in the language the owner writes in. Be concise and concrete. Base every statement about the code on the files supplied below; if a file you need is not included, say which one and ask the owner to name it. Never claim you ran code or tests.
@@ -25,7 +27,8 @@ replacement lines
 Rules for edits:
 - The SEARCH text must match exactly one place in the file. Copy it character for character and include a few unchanged lines so it is unique.
 - To create a new file, leave the SEARCH section empty.
-- Only these paths may be edited: README.md and .js, .css, .html or .md files under src/, public/ or test/. Never edit the agent itself (worker/, src/agent.js, src/github.js, src/codex.js, src/progress.js, src/tasks.js, src/chat.js, src/chat-server.js, public/chat*), workflows, dependencies or credentials. If the owner asks for such a change, explain that it must be made by hand.
+- A line consisting only of ======= separates SEARCH from REPLACE, so choose SEARCH and replacement text that does not contain such a line.
+- Only these paths may be edited: README.md and .js, .css, .html or .md files under src/, public/ or test/. Never edit the agent itself (worker/, ${WORKER_SOURCES.join(', ')}, src/tasks.js, src/chat.js, src/chat-server.js, public/chat*), workflows, dependencies or credentials. If the owner asks for such a change, explain that it must be made by hand.
 - Use at most ${MAX_EDITS} blocks and keep the change as small as the request allows.
 - Optionally add one line "PR-TITLE: <short title>" before the blocks.
 Only include edit blocks when the owner wants code changed. The owner reviews the edits and decides whether to open a pull request; CI runs on that pull request.`;
@@ -92,8 +95,8 @@ export function parseEdits(answer) {
     edits.push({path:match[1],search,replace});
   }
   const opened=(text.match(/^<<<<<<< SEARCH/gm)||[]).length;
-  if(opened!==edits.length) throw new Error('An edit block is incomplete or malformed.');
-  if(edits.length>MAX_EDITS) throw new Error(`Too many edit blocks (maximum ${MAX_EDITS}).`);
+  if(opened!==edits.length) throw new PublicError('An edit block is incomplete or malformed.');
+  if(edits.length>MAX_EDITS) throw new PublicError(`Too many edit blocks (maximum ${MAX_EDITS}).`);
   const title=/^PR-TITLE:[ \t]*(.+)$/m.exec(text)?.[1].trim().slice(0,100)||null;
   return {edits,title};
 }
@@ -102,25 +105,26 @@ export function parseEdits(answer) {
 export function applyEdits(edits,files,existingPaths) {
   const updated={},existing=new Set(existingPaths);
   for(const edit of edits) {
-    if(!editablePath(edit.path)) throw new Error(`${edit.path} may not be edited by the chat agent.`);
+    if(!editablePath(edit.path)) throw new PublicError(`${edit.path} may not be edited by the chat agent.`);
     if(!edit.search) {
-      if(existing.has(edit.path)||Object.hasOwn(updated,edit.path)) throw new Error(`${edit.path} already exists; use a SEARCH section to change it.`);
+      if(existing.has(edit.path)||Object.hasOwn(updated,edit.path)) throw new PublicError(`${edit.path} already exists; use a SEARCH section to change it.`);
       updated[edit.path]=edit.replace;continue;
     }
     const source=updated[edit.path]??files[edit.path];
-    if(source===undefined) throw new Error(`${edit.path} is not a readable file in the repository.`);
-    // The model writes LF; files with CRLF line endings keep them.
-    const crlf=source.includes('\r\n'),convert=text=>crlf?text.replace(/\r?\n/g,'\r\n'):text;
+    if(source===undefined) throw new PublicError(`${edit.path} is not a readable file in the repository.`);
+    // The model writes LF. When that text is not found in a file with CRLF line endings, match and
+    // write with CRLF instead, so the file keeps its line endings.
+    const crlf=!source.includes(edit.search)&&source.includes('\r\n'),convert=text=>crlf?text.replace(/\r?\n/g,'\r\n'):text;
     const search=convert(edit.search),start=source.indexOf(search);
-    if(start<0) throw new Error(`The SEARCH text for ${edit.path} does not match the file exactly.`);
-    if(source.indexOf(search,start+1)>=0) throw new Error(`The SEARCH text for ${edit.path} matches more than one place; include more surrounding lines.`);
+    if(start<0) throw new PublicError(`The SEARCH text for ${edit.path} does not match the file exactly.`);
+    if(source.indexOf(search,start+1)>=0) throw new PublicError(`The SEARCH text for ${edit.path} matches more than one place; include more surrounding lines.`);
     updated[edit.path]=source.slice(0,start)+convert(edit.replace)+source.slice(start+search.length);
   }
   const changed=Object.entries(updated).map(([path,content])=>({path,content}));
-  if(changed.length>MAX_CHANGED_FILES) throw new Error(`A change may touch at most ${MAX_CHANGED_FILES} files.`);
+  if(changed.length>MAX_CHANGED_FILES) throw new PublicError(`A change may touch at most ${MAX_CHANGED_FILES} files.`);
   for(const file of changed) {
-    if(file.content.length>MAX_RESULT_CHARS) throw new Error(`${file.path} would exceed ${MAX_RESULT_CHARS} characters.`);
-    if(files[file.path]===file.content) throw new Error(`The edits to ${file.path} do not change the file.`);
+    if(file.content.length>MAX_RESULT_CHARS) throw new PublicError(`${file.path} would exceed ${MAX_RESULT_CHARS} characters.`);
+    if(files[file.path]===file.content) throw new PublicError(`The edits to ${file.path} do not change the file.`);
   }
   return changed;
 }
@@ -132,24 +136,24 @@ export function displayText(answer) {
 export async function callModel(env,messages,{fetchImpl=fetch}={}) {
   const model=env.MODEL||DEFAULT_MODEL,max_tokens=Number(env.MAX_OUTPUT_TOKENS)||4096;
   if((env.MODEL_PROVIDER||'workers-ai')==='workers-ai') {
-    if(!env.AI) throw new Error('The Workers AI binding is not configured.');
+    if(!env.AI) throw new PublicError('The Workers AI binding is not configured.');
     let result,timer;
     // The binding takes no abort signal; the timeout keeps each request within the chat lock.
-    const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(`timed out after ${MODEL_TIMEOUT/1000} seconds`)),MODEL_TIMEOUT);});
+    const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(new PublicError(`timed out after ${MODEL_TIMEOUT/1000} seconds`)),MODEL_TIMEOUT);});
     try {result=await Promise.race([env.AI.run(model,{messages,max_tokens,temperature:0.2}),timeout]);}
-    catch(error) {throw new Error(`The model request failed: ${String(error?.message||error).slice(0,300)}`);}
+    catch(error) {throw new PublicError(`The model request failed: ${String(error?.message||error).slice(0,300)}`);}
     finally {clearTimeout(timer);}
     const content=typeof result?.response==='string'?result.response:result?.choices?.[0]?.message?.content??(result?.response!==undefined?JSON.stringify(result.response):undefined);
-    if(typeof content!=='string'||!content.trim()) throw new Error('The model returned an empty answer.');
+    if(typeof content!=='string'||!content.trim()) throw new PublicError('The model returned an empty answer.');
     return content;
   }
-  if(env.MODEL_PROVIDER!=='openai-compatible') throw new Error('Unknown MODEL_PROVIDER.');
+  if(env.MODEL_PROVIDER!=='openai-compatible') throw new PublicError('Unknown MODEL_PROVIDER.');
   const base=new URL(env.MODEL_BASE_URL||'about:blank');
-  if(base.protocol!=='https:'||!env.MODEL_API_KEY) throw new Error('Configure MODEL_BASE_URL (HTTPS) and the MODEL_API_KEY secret.');
+  if(base.protocol!=='https:'||!env.MODEL_API_KEY) throw new PublicError('Configure MODEL_BASE_URL (HTTPS) and the MODEL_API_KEY secret.');
   const response=await fetchImpl(`${base.href.replace(/\/$/,'')}/chat/completions`,{method:'POST',headers:{Authorization:`Bearer ${env.MODEL_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,messages,max_tokens,temperature:0.2}),signal:AbortSignal.timeout(MODEL_TIMEOUT)});
-  if(!response.ok) throw new Error(`The model request failed (HTTP ${response.status}).`);
+  if(!response.ok) throw new PublicError(`The model request failed (HTTP ${response.status}).`);
   const data=await response.json(),choice=data.choices?.[0];
-  if(typeof choice?.message?.content!=='string'||!choice.message.content.trim()) throw new Error('The model returned an empty answer.');
+  if(typeof choice?.message?.content!=='string'||!choice.message.content.trim()) throw new PublicError('The model returned an empty answer.');
   return choice.message.content+(choice.finish_reason==='length'?'\n\n[The answer was cut off at the output limit.]':'');
 }
 
