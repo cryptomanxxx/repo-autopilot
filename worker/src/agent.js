@@ -3,9 +3,11 @@ import {PublicError} from './errors.js';
 
 export const DEFAULT_MODEL='@cf/meta/llama-4-scout-17b-16e-instruct';
 export const DEFAULT_CONTEXT_CHARS=60000,MODEL_TIMEOUT=150000;
+const CUT_OFF='\n\n[The answer was cut off at the output limit.]';
 const MAX_FILE_CHARS=100000,MAX_HISTORY=10,MAX_HISTORY_CHARS=6000,MAX_EDITS=12,MAX_CHANGED_FILES=8,MAX_RESULT_CHARS=200000;
 const TEXT_FILE=/\.(js|mjs|cjs|ts|css|html|md|json|jsonc|toml|ya?ml|txt)$/;
-const STOP_WORDS=new Set(['that','this','with','from','have','what','when','where','which','should','would','could','there','their','about','into','them','then','than','also','just','like','make','some','will','your','code','file','files','repo','change','fix','please','och','att','det','som','för','med','inte','till','av','kan','vill','ska','den','har','jag','men','när','nu','så','eller','vara','hur','vad','var','dom','där','alla','ingen','göra','gör','bara','också','sedan','efter','innan','mycket','finns','skulle','borde']);
+const STOP_WORDS=new Set(['that','this','with','from','have','what','when','where','which','should','would','could','there','their','about','into','them','then','than','also','just','like','make','some','will','your','code','file','files','repo','change','please','inte','till','vill','eller','vara','alla','ingen','göra','bara','också','sedan','efter','innan','mycket','finns','skulle','borde']);
+const SCAN_CHARS=20000,MAX_WORDS=30;
 
 // Repository files bundled into this Worker (checked by a test). The agent may never change the
 // code that runs it, so these stay read-only even where the Actions agent may edit them.
@@ -53,15 +55,16 @@ export function textFiles(archive) {
 }
 
 function queryWords(text) {
-  return [...new Set((text.toLowerCase().match(/[\p{L}_][\p{L}\p{N}_-]{3,}/gu)||[]).filter(w=>!STOP_WORDS.has(w)))].slice(0,60);
+  return [...new Set((text.toLowerCase().match(/[\p{L}_][\p{L}\p{N}_-]{3,}/gu)||[]).filter(w=>!STOP_WORDS.has(w)))].slice(0,MAX_WORDS);
 }
 
 // Picks whole files for the prompt: files the owner names first, then files sharing the most
-// words with the recent conversation, until the character budget is used.
+// words with the recent conversation, until the character budget is used. Word matching scans only
+// the start of each file to keep CPU time low on large repositories.
 export function selectContext(files,query,budget=DEFAULT_CONTEXT_CHARS) {
   const lower=query.toLowerCase(),words=queryWords(query);
   const scored=Object.entries(files).map(([path,text])=>{
-    const name=path.split('/').pop().toLowerCase(),content=text.toLowerCase();
+    const name=path.split('/').pop().toLowerCase(),content=text.slice(0,SCAN_CHARS).toLowerCase();
     let score=lower.includes(path.toLowerCase())?1000:lower.includes(name)?500:0;
     for(const word of words) {if(path.toLowerCase().includes(word)) score+=30;if(content.includes(word)) score+=10;}
     if(/^(src|public)\//.test(path)) score+=3;else if(path==='README.md') score+=2;else if(path.startsWith('test/')) score+=1;
@@ -112,13 +115,14 @@ export function applyEdits(edits,files,existingPaths) {
     }
     const source=updated[edit.path]??files[edit.path];
     if(source===undefined) throw new PublicError(`${edit.path} is not a readable file in the repository.`);
-    // The model writes LF. When that text is not found in a file with CRLF line endings, match and
-    // write with CRLF instead, so the file keeps its line endings.
-    const crlf=!source.includes(edit.search)&&source.includes('\r\n'),convert=text=>crlf?text.replace(/\r?\n/g,'\r\n'):text;
-    const search=convert(edit.search),start=source.indexOf(search);
+    // The model writes LF. In a file that mostly uses CRLF, SEARCH may match either way and the
+    // replacement is written with CRLF, so the file keeps its line endings.
+    const crlfFile=(source.match(/\r\n/g)||[]).length>(source.match(/(?<!\r)\n/g)||[]).length;
+    const toCrlf=text=>text.replace(/\r?\n/g,'\r\n');
+    const search=crlfFile&&!source.includes(edit.search)?toCrlf(edit.search):edit.search,start=source.indexOf(search);
     if(start<0) throw new PublicError(`The SEARCH text for ${edit.path} does not match the file exactly.`);
     if(source.indexOf(search,start+1)>=0) throw new PublicError(`The SEARCH text for ${edit.path} matches more than one place; include more surrounding lines.`);
-    updated[edit.path]=source.slice(0,start)+convert(edit.replace)+source.slice(start+search.length);
+    updated[edit.path]=source.slice(0,start)+(crlfFile?toCrlf(edit.replace):edit.replace)+source.slice(start+search.length);
   }
   const changed=Object.entries(updated).map(([path,content])=>({path,content}));
   if(changed.length>MAX_CHANGED_FILES) throw new PublicError(`A change may touch at most ${MAX_CHANGED_FILES} files.`);
@@ -145,16 +149,24 @@ export async function callModel(env,messages,{fetchImpl=fetch}={}) {
     finally {clearTimeout(timer);}
     const content=typeof result?.response==='string'?result.response:result?.choices?.[0]?.message?.content??(result?.response!==undefined?JSON.stringify(result.response):undefined);
     if(typeof content!=='string'||!content.trim()) throw new PublicError('The model returned an empty answer.');
-    return content;
+    return content+(result?.usage?.completion_tokens>=max_tokens?CUT_OFF:'');
   }
   if(env.MODEL_PROVIDER!=='openai-compatible') throw new PublicError('Unknown MODEL_PROVIDER.');
-  const base=new URL(env.MODEL_BASE_URL||'about:blank');
-  if(base.protocol!=='https:'||!env.MODEL_API_KEY) throw new PublicError('Configure MODEL_BASE_URL (HTTPS) and the MODEL_API_KEY secret.');
-  const response=await fetchImpl(`${base.href.replace(/\/$/,'')}/chat/completions`,{method:'POST',headers:{Authorization:`Bearer ${env.MODEL_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,messages,max_tokens,temperature:0.2}),signal:AbortSignal.timeout(MODEL_TIMEOUT)});
-  if(!response.ok) throw new PublicError(`The model request failed (HTTP ${response.status}).`);
-  const data=await response.json(),choice=data.choices?.[0];
+  let base;
+  try {base=new URL(env.MODEL_BASE_URL);} catch {}
+  if(base?.protocol!=='https:'||!env.MODEL_API_KEY) throw new PublicError('Configure MODEL_BASE_URL (HTTPS) and the MODEL_API_KEY secret.');
+  let data;
+  try {
+    const response=await fetchImpl(`${base.href.replace(/\/$/,'')}/chat/completions`,{method:'POST',headers:{Authorization:`Bearer ${env.MODEL_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,messages,max_tokens,temperature:0.2}),signal:AbortSignal.timeout(MODEL_TIMEOUT)});
+    if(!response.ok) throw new PublicError(`The model request failed (HTTP ${response.status}).`);
+    data=await response.json();
+  } catch(error) {
+    if(error instanceof PublicError) throw error;
+    throw new PublicError(error?.name==='TimeoutError'?`The model request failed: timed out after ${MODEL_TIMEOUT/1000} seconds`:'The model request failed: no valid response.');
+  }
+  const choice=data?.choices?.[0];
   if(typeof choice?.message?.content!=='string'||!choice.message.content.trim()) throw new PublicError('The model returned an empty answer.');
-  return choice.message.content+(choice.finish_reason==='length'?'\n\n[The answer was cut off at the output limit.]':'');
+  return choice.message.content+(choice.finish_reason==='length'?CUT_OFF:'');
 }
 
 // Asks the model, and when its edit blocks cannot be applied, gives it one chance to correct them.

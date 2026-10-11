@@ -18,21 +18,21 @@ const sqlite=()=>{const db=new DatabaseSync(':memory:');return {exec:(query,...b
 
 function tar(entries) {
   const blocks=[];
-  const header=(name,size,type)=>{
+  const header=(name,size,type,mode='0000644')=>{
     const h=Buffer.alloc(512);
-    h.write(name.slice(0,100),0);h.write('0000644\0',100);h.write('0000000\0',108);h.write('0000000\0',116);
+    h.write(name.slice(0,100),0);h.write(mode+'\0',100);h.write('0000000\0',108);h.write('0000000\0',116);
     h.write(size.toString(8).padStart(11,'0')+'\0',124);h.write('00000000000\0',136);h.write('        ',148);h.write(type,156);h.write('ustar\0',257);h.write('00',263);
     let sum=0;for(const b of h) sum+=b;h.write(sum.toString(8).padStart(6,'0')+'\0 ',148);return h;
   };
   for(const entry of entries) {
     const data=Buffer.from(entry.content);
-    blocks.push(header(entry.name,data.length,entry.type||'0'),data,Buffer.alloc((512-data.length%512)%512));
+    blocks.push(header(entry.name,data.length,entry.type||'0',entry.mode),data,Buffer.alloc((512-data.length%512)%512));
   }
   blocks.push(Buffer.alloc(1024));
   return Buffer.concat(blocks);
 }
 const pax=path=>{const body=` path=${path}\n`;let length=body.length+2;if(String(length).length+body.length!==length) length=String(length+1).length+body.length;return `${length}${body}`;};
-const repoTar=files=>tar([{name:'pax_global_header',type:'g',content:'52 comment=0123456789012345678901234567890123456789\n'},{name:'owner-repo-0123456/',type:'5',content:''},...Object.entries(files).map(([path,content])=>({name:`owner-repo-0123456/${path}`,content}))]);
+const repoTar=(files,executable=[])=>tar([{name:'pax_global_header',type:'g',content:'52 comment=0123456789012345678901234567890123456789\n'},{name:'owner-repo-0123456/',type:'5',content:''},...Object.entries(files).map(([path,content])=>({name:`owner-repo-0123456/${path}`,content,mode:executable.includes(path)?'0000755':'0000644'}))]);
 
 test('store keeps sessions, locks, exchanges and pull request links consistent',()=>{
   let time=1000;const store=new ChatStoreLogic(sqlite(),()=>time);
@@ -60,9 +60,10 @@ test('store keeps sessions, locks, exchanges and pull request links consistent',
 
 test('archive reader handles GitHub prefixes, pax paths and skips non-files',()=>{
   const long='src/'+'nested/'.repeat(20)+'file.js';
-  const bytes=tar([{name:'pax_global_header',type:'g',content:'52 comment=abc\n'},{name:'repo-sha/',type:'5',content:''},{name:'repo-sha/README.md',content:'# Hi'},{name:'PaxHeader',type:'x',content:pax(`repo-sha/${long}`)},{name:'repo-sha/truncated-name',content:'long'},{name:'repo-sha/link',type:'2',content:''}]);
-  const files=readTar(new Uint8Array(bytes));
+  const bytes=tar([{name:'pax_global_header',type:'g',content:'52 comment=abc\n'},{name:'repo-sha/',type:'5',content:''},{name:'repo-sha/README.md',content:'# Hi'},{name:'PaxHeader',type:'x',content:pax(`repo-sha/${long}`)},{name:'repo-sha/truncated-name',content:'long',mode:'0000755'},{name:'repo-sha/link',type:'2',content:''}]);
+  const {files,executable}=readTar(new Uint8Array(bytes));
   assert.deepEqual([...files.keys()],['README.md',long]);
+  assert.deepEqual([...executable],[long]);
   assert.equal(new TextDecoder().decode(files.get(long)),'long');
   assert.throws(()=>readTar(new Uint8Array(bytes.subarray(0,1100))),/truncated/);
 });
@@ -73,9 +74,10 @@ test('archive reader matches real git archive output, including long paths',()=>
     const paths=['README.md','src/'+'deep-directory-name/'.repeat(8)+'module.js','public/ünïcode.css'];
     for(const path of paths) {mkdirSync(dirname(join(dir,path)),{recursive:true});writeFileSync(join(dir,path),`content of ${path}\n`);}
     const git=(...args)=>execFileSync('git',['-c','user.name=t','-c','user.email=t@example.com','-c','commit.gpgsign=false',...args],{cwd:dir});
-    git('init','-q');git('add','.');git('commit','-qm','x');
-    const files=readTar(new Uint8Array(git('archive','--format=tar','--prefix=owner-repo-abc1234/','HEAD')));
+    git('init','-q');git('add','.');git('update-index','--chmod=+x',paths[1]);git('commit','-qm','x');
+    const {files,executable}=readTar(new Uint8Array(git('archive','--format=tar','--prefix=owner-repo-abc1234/','HEAD')));
     assert.deepEqual([...files.keys()].sort(),[...paths].sort());
+    assert.deepEqual([...executable],[paths[1]]);
     for(const path of paths) assert.equal(new TextDecoder().decode(files.get(path)),`content of ${path}\n`);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
@@ -111,6 +113,8 @@ test('edit blocks are parsed, applied exactly once and limited to allowed paths'
   assert.throws(()=>parseEdits('<<<<<<< SEARCH a.js\nx\n=======\ny\n'),/malformed/);
   const crlf={'public/win.js':'\ufeffa\r\nb\r\nc\r\n'};
   assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/win.js\na\nb\n=======\na\nB\n>>>>>>> REPLACE').edits,crlf,Object.keys(crlf)),[{path:'public/win.js',content:'\ufeffa\r\nB\r\nc\r\n'}],'CRLF files keep their line endings');
+  const windows={'public/w.js':'one();\r\ntwo();\r\n'};
+  assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/w.js\none();\n=======\none();\nextra();\n>>>>>>> REPLACE').edits,windows,['public/w.js']),[{path:'public/w.js',content:'one();\r\nextra();\r\ntwo();\r\n'}],'new lines in a CRLF file use CRLF');
   const mixed={'public/mixed.js':'a\nb\r\nc\n'};
   assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/mixed.js\na\nb\n=======\na\nB\n>>>>>>> REPLACE').edits,mixed,Object.keys(mixed)),[{path:'public/mixed.js',content:'a\nB\r\nc\n'}],'mixed line endings still match LF text');
   for(const path of WORKER_SOURCES) assert.throws(()=>applyEdits(block(path,'x'),{[path]:'x'},[path]),/may not be edited/,path);
@@ -160,6 +164,20 @@ test('a model that never answers times out instead of holding the chat lock',asy
   } finally {mock.timers.reset();}
 });
 
+test('model provider failures and cut-off answers are explained',async()=>{
+  const env={MODEL_PROVIDER:'openai-compatible',MODEL_BASE_URL:'https://models.example/v1',MODEL_API_KEY:'k',MODEL:'m'};
+  await assert.rejects(callModel({...env,MODEL_BASE_URL:'not a url'},[]),/Configure MODEL_BASE_URL/);
+  await assert.rejects(callModel({...env,MODEL_BASE_URL:'http://models.example'},[]),/Configure MODEL_BASE_URL/);
+  await assert.rejects(callModel(env,[],{fetchImpl:async()=>{throw Object.assign(new Error('x'),{name:'TimeoutError'});}}),/timed out after 150 seconds/);
+  await assert.rejects(callModel(env,[],{fetchImpl:async()=>new Response('<html>',{status:200})}),/no valid response/);
+  await assert.rejects(callModel(env,[],{fetchImpl:async()=>new Response('{}',{status:429})}),/HTTP 429/);
+  let sent;
+  assert.match(await callModel(env,[{role:'user',content:'hi'}],{fetchImpl:async(url,options)=>{sent={url,options};return Response.json({choices:[{message:{content:'Hi'},finish_reason:'length'}]});}}),/^Hi\n\n\[The answer was cut off/);
+  assert.equal(sent.url,'https://models.example/v1/chat/completions');assert.equal(sent.options.headers.Authorization,'Bearer k');
+  assert.match(await callModel({AI:{run:async()=>({response:'Long',usage:{completion_tokens:4096}})}},[]),/cut off/);
+  assert.equal(await callModel({AI:{run:async()=>({response:'Short',usage:{completion_tokens:10}})}},[]),'Short');
+});
+
 test('images must be small PNG or JPEG data URLs',()=>{
   const png='data:image/png;base64,'+Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0,0,0,0]).toString('base64');
   const jpeg='data:image/jpeg;base64,'+Buffer.from([0xff,0xd8,0xff,0xe0,0,0,0,0,0]).toString('base64');
@@ -173,7 +191,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,modes={},refStatus=201,pullStatus=201,openPulls=[]}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[]}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -182,9 +200,8 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     const path=url.replace('https://api.github.com/repos/owner/repo','');
     if(path==='') return ok({default_branch:'main',private:false});
     if(path==='/git/ref/heads/main') return ok({object:{sha:head}});
-    if(path===`/tarball/${head}`) return new Response(gzipSync(repoTar(repoFiles)));
+    if(path===`/tarball/${head}`) return new Response(gzipSync(repoTar(repoFiles,executable)));
     if(path===`/git/commits/${head}`) return ok({tree:{sha:'tree0'}});
-    if(path==='/git/trees/tree0?recursive=1') return ok({tree:Object.keys(repoFiles).map(p=>({path:p,mode:modes[p]||'100644',type:'blob'})),truncated:false});
     if(method==='POST'&&path==='/git/trees') return ok({sha:'tree1'},writeStatus);
     if(method==='POST'&&path==='/git/commits') return ok({sha:'commit1'},201);
     if(method==='POST'&&path==='/git/refs') return ok({},refStatus);
@@ -229,15 +246,21 @@ test('sign-in requires the owner, a GitHub App token and the starting browser',a
   assert.equal(store.rows('SELECT token FROM sessions')[0].token,'ghu_user');
   assert.equal(store.rows('SELECT hash FROM sessions')[0].hash.includes(auth.cookie.split('=')[1]),false,'only a hash of the session id is stored');
   const start=await signIn(env,fetchImpl);
-  for(const response of [await start.callback(start.state,'autopilot_login=other'),await start.callback('tampered'),await start.callback(start.state,'')]) assert.equal(response.status,403);
-  for(const options of [{login:'someone-else'},{token:'gho_oauth'}]) {
+  const sessions=()=>store.rows('SELECT COUNT(*) AS n FROM sessions')[0].n;
+  for(const response of [await start.callback(start.state,'autopilot_login=other'),await start.callback('tampered'),await start.callback(start.state,'')]) {
+    assert.equal(response.status,303);assert.equal(response.headers.get('Location'),'/?signin=expired');
+  }
+  assert.equal(sessions(),1,'failed callbacks create no session');
+  const cancelled=await handle(request(`/auth/callback?error=access_denied&state=${encodeURIComponent(start.state)}`,{cookie:`autopilot_login=${start.browser}`}),env,{fetchImpl});
+  assert.equal(cancelled.headers.get('Location'),'/?signin=cancelled');
+  for(const [options,reason] of [[{login:'someone-else'},'owner'],[{token:'gho_oauth'},'app']]) {
     const other=environment(),attempt=await signIn(other.env,github({calls:[],...options}));
     const response=await attempt.callback();
-    assert.equal(response.status,403);assert.equal(other.store.rows('SELECT COUNT(*) AS n FROM sessions')[0].n,0);
+    assert.equal(response.headers.get('Location'),`/?signin=${reason}`);assert.equal(other.store.rows('SELECT COUNT(*) AS n FROM sessions')[0].n,0);
   }
   const expired=environment();let now=1000;
   const late=await signIn(expired.env,fetchImpl,()=>now);now+=601000;
-  assert.equal((await handle(request(`/auth/callback?code=c&state=${encodeURIComponent(late.state)}`,{cookie:`autopilot_login=${late.browser}`}),expired.env,{fetchImpl,now:()=>now})).status,403);
+  assert.equal((await handle(request(`/auth/callback?code=c&state=${encodeURIComponent(late.state)}`,{cookie:`autopilot_login=${late.browser}`}),expired.env,{fetchImpl,now:()=>now})).headers.get('Location'),'/?signin=expired');
 });
 
 test('API rejects missing sessions, foreign origins and missing CSRF tokens',async()=>{
@@ -297,16 +320,21 @@ test('pull requests keep file modes and can be retried after a partial failure',
   const auth=await session(env,github({calls}));
   const {conversation}=await (await handle(post('/api/chat',auth,{text:'Change it'}),env,{fetchImpl:github({calls})})).json();
   const message=store.getConversation(conversation).messages[1].id;
-  const failed=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,pullStatus:502,modes:{'public/app.js':'100755'}})});
+  const failed=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,pullStatus:502,executable:['public/app.js']})});
   assert.equal(failed.status,500);assert.match((await failed.json()).error,/HTTP 502/);
   assert.equal(JSON.parse(calls.findLast(c=>c.url.endsWith('/git/trees')&&c.method==='POST').options.body).tree[0].mode,'100755','executable files stay executable');
-  const firstBranch=JSON.parse(calls.findLast(c=>c.url.endsWith('/git/refs')).options.body).ref;
+  const branch=JSON.parse(calls.findLast(c=>c.url.endsWith('/git/refs')).options.body).ref.replace('refs/heads/','');
+  // Leftover branch without a pull request: it is moved to the new commit and the PR is opened.
   calls.length=0;
-  const retried=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422,pullStatus:422,openPulls:[{html_url:'https://github.com/owner/repo/pull/8'}]})});
-  assert.deepEqual(await retried.json(),{url:'https://github.com/owner/repo/pull/8'});
+  const retried=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422})});
+  assert.deepEqual(await retried.json(),{url:'https://github.com/owner/repo/pull/7'});
   const patch=calls.find(c=>c.method==='PATCH');
-  assert.equal(`refs/heads/${patch.url.split('/git/refs/heads/')[1]}`,firstBranch,'the retry reuses the same branch');
-  assert.equal(JSON.parse(patch.options.body).force,true);
+  assert.equal(patch.url.split('/git/refs/heads/')[1],branch,'the retry reuses the same branch');assert.equal(JSON.parse(patch.options.body).force,true);
+  // A pull request that exists but was never recorded is reused without touching its branch.
+  store.sql.exec('UPDATE messages SET pr_url = NULL');calls.length=0;
+  const reused=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422,openPulls:[{html_url:'https://github.com/owner/repo/pull/8'}]})});
+  assert.deepEqual(await reused.json(),{url:'https://github.com/owner/repo/pull/8'});
+  assert.equal(calls.some(c=>c.method==='PATCH'||c.url.endsWith('/pulls')),false,'commits pushed to an open pull request are never overwritten');
   assert.equal(store.getMessage(conversation,message).prUrl,'https://github.com/owner/repo/pull/8');
 });
 

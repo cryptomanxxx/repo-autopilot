@@ -37,26 +37,31 @@ export function githubClient({repository,token,fetchImpl=fetch}) {
     },
     // Safe to repeat for the same branch: a retry after a partial failure moves the branch to the
     // new commit and reuses an open pull request instead of creating another.
-    async createPullRequest({base,parent,files,branch,title,body}) {
+    // Safe to repeat for the same branch after a partial failure: an open pull request for the
+    // branch is reused untouched; a leftover branch without one is moved to the new commit.
+    async createPullRequest({base,parent,files,executable,branch,title,body}) {
+      const openPull=async()=>(await api(`pulls?state=open&head=${encodeURIComponent(`${repository.split('/')[0]}:${branch}`)}`))[0];
+      const pullUrl=pull=>{
+        if(typeof pull?.html_url!=='string'||!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(pull.html_url)) throw new PublicError('GitHub returned an unexpected pull request URL.');
+        return pull.html_url;
+      };
       const commit=await api(`git/commits/${parent}`);
-      const current=await api(`git/trees/${commit.tree.sha}?recursive=1`);
-      const modes=new Map((current.tree||[]).map(entry=>[entry.path,entry.mode]));
-      const tree=await api('git/trees',{method:'POST',body:{base_tree:commit.tree.sha,tree:files.map(f=>({path:f.path,mode:modes.get(f.path)==='100755'?'100755':'100644',type:'blob',content:f.content}))}});
+      const tree=await api('git/trees',{method:'POST',body:{base_tree:commit.tree.sha,tree:files.map(f=>({path:f.path,mode:executable.has(f.path)?'100755':'100644',type:'blob',content:f.content}))}});
       const next=await api('git/commits',{method:'POST',body:{message:title,tree:tree.sha,parents:[parent]}});
       try {await api('git/refs',{method:'POST',body:{ref:`refs/heads/${branch}`,sha:next.sha}});}
       catch(error) {
         if(!(error instanceof GitHubError&&error.status===422)) throw error;
+        const existing=await openPull();
+        if(existing) return pullUrl(existing);
         await api(`git/refs/heads/${branch}`,{method:'PATCH',body:{sha:next.sha,force:true}});
       }
-      let pull;
-      try {pull=await api('pulls',{method:'POST',body:{title,head:branch,base,body}});}
+      try {return pullUrl(await api('pulls',{method:'POST',body:{title,head:branch,base,body}}));}
       catch(error) {
         if(!(error instanceof GitHubError&&error.status===422)) throw error;
-        [pull]=await api(`pulls?state=open&head=${encodeURIComponent(`${repository.split('/')[0]}:${branch}`)}`);
-        if(!pull) throw error;
+        const existing=await openPull();
+        if(!existing) throw error;
+        return pullUrl(existing);
       }
-      if(typeof pull.html_url!=='string'||!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(pull.html_url)) throw new PublicError('GitHub returned an unexpected pull request URL.');
-      return pull.html_url;
     }
   };
 }
@@ -75,10 +80,10 @@ export async function readLimited(stream,limit) {
   return bytes;
 }
 
-// Minimal reader for the ustar/pax archives GitHub produces with `git archive`. Returns
-// {path: Uint8Array} for regular files with the leading `<owner>-<repo>-<sha>/` folder removed.
+// Minimal reader for the ustar/pax archives GitHub produces with `git archive`. Returns the regular
+// files (path -> bytes, without the leading `<owner>-<repo>-<sha>/` folder) and the executable paths.
 export function readTar(bytes) {
-  const files=new Map(),utf8=new TextDecoder();
+  const files=new Map(),executable=new Set(),utf8=new TextDecoder();
   const field=(header,start,length)=>{let end=start;while(end<start+length&&header[end]!==0) end++;return utf8.decode(header.subarray(start,end));};
   let offset=0,paxPath=null,ended=false;
   while(offset+512<=bytes.length) {
@@ -100,7 +105,11 @@ export function readTar(bytes) {
         const prefix=field(header,257,6)==='ustar'?field(header,345,155):'';
         const name=paxPath??(prefix?`${prefix}/${field(header,0,100)}`:field(header,0,100));
         const slash=name.indexOf('/');
-        if(slash>0&&slash<name.length-1) files.set(name.slice(slash+1),bytes.subarray(start,end));
+        if(slash>0&&slash<name.length-1) {
+          const path=name.slice(slash+1);
+          files.set(path,bytes.subarray(start,end));
+          if(parseInt(field(header,100,8).trim()||'0',8)&0o111) executable.add(path);
+        }
       }
       if(type!=='g') paxPath=null;
     }
@@ -108,5 +117,5 @@ export function readTar(bytes) {
   }
   // A complete archive ends with zero blocks; anything else means files may be missing.
   if(!ended) throw new PublicError('Repository archive is truncated.');
-  return files;
+  return {files,executable};
 }

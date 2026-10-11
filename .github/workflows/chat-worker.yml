@@ -62,9 +62,20 @@ jobs:
           OWNER: ${{ vars.AUTOPILOT_TASK_USER || github.repository_owner }}
           CLIENT_ID: ${{ vars.AUTOPILOT_CHAT_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.AUTOPILOT_CHAT_CLIENT_SECRET }}
+          MODEL_API_KEY: ${{ secrets.AUTOPILOT_CHAT_MODEL_API_KEY }}
           MODEL: ${{ vars.AUTOPILOT_CHAT_MODEL }}
+          MODEL_PROVIDER: ${{ vars.AUTOPILOT_CHAT_MODEL_PROVIDER }}
+          MODEL_BASE_URL: ${{ vars.AUTOPILOT_CHAT_MODEL_BASE_URL }}
+          CONTEXT_CHARS: ${{ vars.AUTOPILOT_CHAT_CONTEXT_CHARS }}
+        # Every setting comes from repository variables: a deploy replaces the Worker's variables, so
+        # values typed into the Cloudflare dashboard would be lost. Secrets ship with the same version.
         run: |
           args=(--config worker/wrangler.jsonc --var "REPOSITORY:$REPOSITORY" --var "AUTOPILOT_USER:$OWNER" --var "GITHUB_CLIENT_ID:$CLIENT_ID")
-          if [ -n "$MODEL" ]; then args+=(--var "MODEL:$MODEL"); fi
-          npx --yes "wrangler@$WRANGLER_VERSION" deploy "${args[@]}"
-          printf '%s' "$CLIENT_SECRET" | npx --yes "wrangler@$WRANGLER_VERSION" secret put GITHUB_CLIENT_SECRET --config worker/wrangler.jsonc
+          for name in MODEL MODEL_PROVIDER MODEL_BASE_URL CONTEXT_CHARS; do
+            if [ -n "${!name}" ]; then args+=(--var "$name:${!name}"); fi
+          done
+          umask 077
+          secrets="$RUNNER_TEMP/chat-secrets.json"
+          node -e 'const s={GITHUB_CLIENT_SECRET:process.env.CLIENT_SECRET};if(process.env.MODEL_API_KEY) s.MODEL_API_KEY=process.env.MODEL_API_KEY;require("fs").writeFileSync(process.argv[1],JSON.stringify(s))' "$secrets"
+          trap 'rm -f "$secrets"' EXIT
+          npx --yes "wrangler@$WRANGLER_VERSION" deploy "${args[@]}" --secrets-file "$secrets"

@@ -117,18 +117,21 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     return redirect(target.href,[cookie('autopilot_login',browser,{path:'/auth',maxAge:600})]);
   }
   if(request.method==='GET'&&url.pathname==='/auth/callback') {
+    // Sign-in problems return to the chat page, which explains them, instead of showing raw JSON.
+    const failed=reason=>redirect(`/?signin=${reason}`,[cookie('autopilot_login','',{path:'/auth'})]);
+    if(url.searchParams.get('error')==='access_denied') return failed('cancelled');
     const pending=await openState(env.GITHUB_CLIENT_SECRET,url.searchParams.get('state'),now());
     const code=url.searchParams.get('code');
-    if(!pending||pending.browser!==cookies(request).autopilot_login||!code) throw new UserError(403,'The sign-in expired or did not start in this browser. Sign in again.');
+    if(!pending||pending.browser!==cookies(request).autopilot_login||!code) return failed('expired');
     const exchange=await fetchImpl('https://github.com/login/oauth/access_token',{method:'POST',redirect:'manual',headers:{Accept:'application/json','Content-Type':'application/json','User-Agent':'repo-autopilot-chat'},body:JSON.stringify({client_id:env.GITHUB_CLIENT_ID,client_secret:env.GITHUB_CLIENT_SECRET,code,redirect_uri:callback,code_verifier:pending.verifier}),signal:AbortSignal.timeout(20000)});
-    const token=exchange.ok?await exchange.json():{};
-    if(!token.access_token||token.error) throw new UserError(403,'GitHub sign-in failed. Try again.');
+    const token=exchange.ok?await exchange.json().catch(()=>({})):{};
+    if(!token.access_token||token.error) return failed('failed');
     // GitHub App user tokens (ghu_ prefix) carry no OAuth scopes and only reach repositories where
     // the app is installed, with the app's permissions. Anything else means an OAuth app was configured.
-    if(!token.access_token.startsWith('ghu_')||token.scope) throw new UserError(403,'Use the client ID and secret of a GitHub App, not an OAuth app.');
+    if(!token.access_token.startsWith('ghu_')||token.scope) return failed('app');
     const userResponse=await fetchImpl('https://api.github.com/user',{redirect:'manual',headers:{Authorization:`Bearer ${token.access_token}`,Accept:'application/vnd.github+json','User-Agent':'repo-autopilot-chat'},signal:AbortSignal.timeout(20000)});
-    const user=userResponse.ok?await userResponse.json():{};
-    if(typeof user.login!=='string'||user.login.toLowerCase()!==config.owner) throw new UserError(403,'Sign in with the repository owner account.');
+    const user=userResponse.ok?await userResponse.json().catch(()=>({})):{};
+    if(typeof user.login!=='string'||user.login.toLowerCase()!==config.owner) return failed('owner');
     const id=randomHex(),lifetime=Number.isFinite(token.expires_in)&&token.expires_in>0?token.expires_in*1000:8*HOUR;
     await store.createSession({hash:hex(await sha256(id)),token:token.access_token,csrf:randomHex(),login:user.login,expires:now()+Math.min(lifetime,8*HOUR)});
     return redirect('/',[cookie(sessionCookie,id),cookie('autopilot_login','',{path:'/auth'})]);
@@ -181,7 +184,7 @@ async function chat(body,{env,store,github,config,fetchImpl}) {
   // Longer than the worst case below: GitHub reads plus two model calls of at most 150 s each.
   if(!await store.acquireLock('model',lock,420000)) throw new UserError(429,'The agent is still answering another message. Wait until it has finished.');
   try {
-    const client=github(),head=await client.head(),archive=await client.archive(head.sha),files=textFiles(archive);
+    const client=github(),head=await client.head(),archive=(await client.archive(head.sha)).files,files=textFiles(archive);
     const history=conversation?.messages||[];
     const query=[...history.filter(m=>m.role==='user').slice(-2).map(m=>m.content),text].join('\n');
     const context=selectContext(files,query,Number(env.CONTEXT_CHARS)||DEFAULT_CONTEXT_CHARS);
@@ -189,7 +192,7 @@ async function chat(body,{env,store,github,config,fetchImpl}) {
     const result=await answer(env,{messages,files,existingPaths:[...archive.keys()],fetchImpl});
     const content=result.error?`${result.reply}\n\n⚠ The proposed change could not be applied: ${result.error} Ask the agent to try again.`:result.reply;
     const id=conversation?.id||randomHex(16);
-    await store.saveExchange({conversation:id,title:conversation?null:text.replace(/\s+/g,' ').slice(0,80),user:{content:text,hasImage:Boolean(image)},assistant:{content,proposal:result.proposal?{...result.proposal,baseSha:head.sha}:null}});
+    await store.saveExchange({conversation:id,title:conversation?null:text.replace(/\s+/g,' ').slice(0,80),user:{content:text,hasImage:Boolean(image)},assistant:{content,proposal:result.proposal}});
     return json(200,{conversation:id});
   } finally {await store.releaseLock('model',lock);}
 }
@@ -202,7 +205,7 @@ async function pullRequest(body,{store,github}) {
     const message=await store.getMessage(body.conversation,body.message);
     if(!message||message.role!=='assistant'||!message.proposal) throw new UserError(404,'This message has no proposed change.');
     if(message.prUrl) return json(200,{url:message.prUrl});
-    const client=github(),head=await client.head(),archive=await client.archive(head.sha);
+    const client=github(),head=await client.head(),{files:archive,executable}=await client.archive(head.sha);
     const edited=new Set(message.proposal.edits.map(e=>e.path));
     let files;
     try {files=applyEdits(message.proposal.edits,textFiles(new Map([...archive].filter(([path])=>edited.has(path)))),[...archive.keys()]);}
@@ -210,7 +213,7 @@ async function pullRequest(body,{store,github}) {
     const title=message.proposal.title||await store.getTitle(body.conversation)||'Change from the agent chat';
     const description=`${displayText(message.content).slice(0,4000)}\n\n---\nCreated from the Repo Autopilot chat on ${head.sha.slice(0,10)}. Agent-generated: review the diff and CI before merging.`;
     let url;
-    try {url=await client.createPullRequest({base:head.branch,parent:head.sha,files,branch:`autopilot/chat-${body.conversation.slice(0,12)}-${body.message}`,title,body:description});}
+    try {url=await client.createPullRequest({base:head.branch,parent:head.sha,files,executable,branch:`autopilot/chat-${body.conversation.slice(0,12)}-${body.message}`,title,body:description});}
     catch(error) {
       if(error instanceof GitHubError&&[403,404].includes(error.status)) throw new UserError(403,`GitHub refused to create the pull request (HTTP ${error.status}). Check that the GitHub App is installed on this repository with Contents and Pull requests set to Read and write.`);
       throw error;

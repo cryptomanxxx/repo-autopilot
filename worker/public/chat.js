@@ -78,12 +78,12 @@ async function openConversation(id) {
     const conversation=await api(`/api/conversations/${id}`);
     if(state.conversation!==id) return;
     $('conversation-title').textContent=conversation.title;renderMessages(conversation.messages);
-    await loadConversations();
   } catch(error) {
     // Keep sending to the conversation that is actually on screen.
     if(state.conversation===id) {state.conversation=previous;history.replaceState(null,'',previous?`#${previous}`:location.pathname);}
     status(error.message);
   }
+  try {await loadConversations();} catch(error) {status(error.message);}
 }
 
 async function createPullRequest(message,button) {
@@ -155,9 +155,12 @@ $('composer').onsubmit=async event=>{
 $('new-conversation').onclick=()=>{if(!state.busy) {status('');openConversation(null);$('message').focus();}};
 $('logout').onclick=async()=>{try {await api('/api/logout',{});} catch {} location.replace('/');};
 
+const SIGN_IN_PROBLEMS={cancelled:'Sign-in was cancelled.',expired:'The sign-in expired or started in another browser. Try again.',failed:'GitHub sign-in failed. Try again.',app:'The chat must use the client ID and secret of a GitHub App, not an OAuth app.',owner:'Only the repository owner account can use this chat.'};
+const signInProblem=SIGN_IN_PROBLEMS[new URLSearchParams(location.search).get('signin')];
+if(location.search) history.replaceState(null,'',location.pathname+location.hash);
 try {
   const session=await api('/api/session');
-  if(!session.login) showSignedOut(`Sign in with the owner account of ${session.repository}.`);
+  if(!session.login) showSignedOut(signInProblem?`${signInProblem} Sign in with the owner account of ${session.repository}.`:`Sign in with the owner account of ${session.repository}.`);
   else {
     state.csrf=session.csrf;
     $('account').textContent=`${session.repository} · ${session.login} · model ${session.model}`;
