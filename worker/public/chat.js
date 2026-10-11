@@ -70,7 +70,7 @@ async function loadConversations() {
 
 async function openConversation(id) {
   if(state.busy) return;
-  const previous=state.conversation;
+  const previous=state.conversation;let failed=false;
   state.conversation=id;
   if(!id) {history.replaceState(null,'',location.pathname);$('conversation-title').textContent='New conversation';renderMessages([]);await loadConversations();return;}
   history.replaceState(null,'',`#${id}`);
@@ -81,9 +81,9 @@ async function openConversation(id) {
   } catch(error) {
     // Keep sending to the conversation that is actually on screen.
     if(state.conversation===id) {state.conversation=previous;history.replaceState(null,'',previous?`#${previous}`:location.pathname);}
-    status(error.message);
+    status(error.message);failed=true;
   }
-  try {await loadConversations();} catch(error) {status(error.message);}
+  try {await loadConversations();} catch(error) {if(!failed) status(error.message);}
 }
 
 async function createPullRequest(message,button) {
@@ -155,7 +155,7 @@ $('composer').onsubmit=async event=>{
 $('new-conversation').onclick=()=>{if(!state.busy) {status('');openConversation(null);$('message').focus();}};
 $('logout').onclick=async()=>{try {await api('/api/logout',{});} catch {} location.replace('/');};
 
-const SIGN_IN_PROBLEMS={cancelled:'Sign-in was cancelled.',expired:'The sign-in expired or started in another browser. Try again.',failed:'GitHub sign-in failed. Try again.',app:'The chat must use the client ID and secret of a GitHub App, not an OAuth app.',owner:'Only the repository owner account can use this chat.'};
+const SIGN_IN_PROBLEMS={cancelled:'Sign-in was cancelled.',expired:'The sign-in expired or started in another browser. Try again.',failed:'GitHub sign-in failed. Try again.',app:'The chat must use the client ID and secret of a GitHub App, not an OAuth app.',owner:'Only the repository owner account can use this chat.',github:'GitHub rejected the sign-in. Check the GitHub App\'s callback URL and client ID.'};
 const signInProblem=SIGN_IN_PROBLEMS[new URLSearchParams(location.search).get('signin')];
 if(location.search) history.replaceState(null,'',location.pathname+location.hash);
 try {

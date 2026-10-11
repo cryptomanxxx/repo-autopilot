@@ -104,6 +104,25 @@ export function parseEdits(answer) {
   return {edits,title};
 }
 
+// The model writes LF. SEARCH matches the file as written or with CRLF line endings, and must match
+// exactly once in total. The replacement uses the line ending found where it matched, so every
+// part of a file keeps its line endings, also in files that mix them.
+function locate(source,search,path) {
+  const matches=[];
+  for(const variant of search.includes('\n')?[search,search.replace(/\n/g,'\r\n')]:[search]) {
+    for(let i=source.indexOf(variant);i>=0&&matches.length<2;i=source.indexOf(variant,i+1)) matches.push({start:i,length:variant.length,crlf:variant!==search});
+  }
+  if(!matches.length) throw new PublicError(`The SEARCH text for ${path} does not match the file exactly.`);
+  if(matches.length>1) throw new PublicError(`The SEARCH text for ${path} matches more than one place; include more surrounding lines.`);
+  const match=matches[0];
+  if(!search.includes('\n')) {
+    // A single-line match takes the ending of its own line (or, on a last line without one, the line before).
+    const next=source.indexOf('\n',match.start),previous=source.lastIndexOf('\n',match.start);
+    match.crlf=next>=0?source[next-1]==='\r':previous>0&&source[previous-1]==='\r';
+  }
+  return match;
+}
+
 // Applies search/replace edits to the current files. Throws a message the model can act on.
 export function applyEdits(edits,files,existingPaths) {
   const updated={},existing=new Set(existingPaths);
@@ -115,14 +134,8 @@ export function applyEdits(edits,files,existingPaths) {
     }
     const source=updated[edit.path]??files[edit.path];
     if(source===undefined) throw new PublicError(`${edit.path} is not a readable file in the repository.`);
-    // The model writes LF. In a file that mostly uses CRLF, SEARCH may match either way and the
-    // replacement is written with CRLF, so the file keeps its line endings.
-    const crlfFile=(source.match(/\r\n/g)||[]).length>(source.match(/(?<!\r)\n/g)||[]).length;
-    const toCrlf=text=>text.replace(/\r?\n/g,'\r\n');
-    const search=crlfFile&&!source.includes(edit.search)?toCrlf(edit.search):edit.search,start=source.indexOf(search);
-    if(start<0) throw new PublicError(`The SEARCH text for ${edit.path} does not match the file exactly.`);
-    if(source.indexOf(search,start+1)>=0) throw new PublicError(`The SEARCH text for ${edit.path} matches more than one place; include more surrounding lines.`);
-    updated[edit.path]=source.slice(0,start)+(crlfFile?toCrlf(edit.replace):edit.replace)+source.slice(start+search.length);
+    const {start,length,crlf}=locate(source,edit.search,edit.path);
+    updated[edit.path]=source.slice(0,start)+(crlf?edit.replace.replace(/\n/g,'\r\n'):edit.replace)+source.slice(start+length);
   }
   const changed=Object.entries(updated).map(([path,content])=>({path,content}));
   if(changed.length>MAX_CHANGED_FILES) throw new PublicError(`A change may touch at most ${MAX_CHANGED_FILES} files.`);
@@ -152,6 +165,7 @@ export async function callModel(env,messages,{fetchImpl=fetch}={}) {
     return content+(result?.usage?.completion_tokens>=max_tokens?CUT_OFF:'');
   }
   if(env.MODEL_PROVIDER!=='openai-compatible') throw new PublicError('Unknown MODEL_PROVIDER.');
+  if(model.startsWith('@cf/')) throw new PublicError('Set AUTOPILOT_CHAT_MODEL to a model name of your provider.');
   let base;
   try {base=new URL(env.MODEL_BASE_URL);} catch {}
   if(base?.protocol!=='https:'||!env.MODEL_API_KEY) throw new PublicError('Configure MODEL_BASE_URL (HTTPS) and the MODEL_API_KEY secret.');

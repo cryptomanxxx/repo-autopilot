@@ -35,8 +35,6 @@ export function githubClient({repository,token,fetchImpl=fetch}) {
       if(!response.ok) throw new GitHubError(response.status,'tarball');
       return readTar(await readLimited(response.body.pipeThrough(new DecompressionStream('gzip')),MAX_ARCHIVE_BYTES));
     },
-    // Safe to repeat for the same branch: a retry after a partial failure moves the branch to the
-    // new commit and reuses an open pull request instead of creating another.
     // Safe to repeat for the same branch after a partial failure: an open pull request for the
     // branch is reused untouched; a leftover branch without one is moved to the new commit.
     async createPullRequest({base,parent,files,executable,branch,title,body}) {
@@ -45,14 +43,14 @@ export function githubClient({repository,token,fetchImpl=fetch}) {
         if(typeof pull?.html_url!=='string'||!/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(pull.html_url)) throw new PublicError('GitHub returned an unexpected pull request URL.');
         return pull.html_url;
       };
+      const open=await openPull();
+      if(open) return pullUrl(open);
       const commit=await api(`git/commits/${parent}`);
       const tree=await api('git/trees',{method:'POST',body:{base_tree:commit.tree.sha,tree:files.map(f=>({path:f.path,mode:executable.has(f.path)?'100755':'100644',type:'blob',content:f.content}))}});
       const next=await api('git/commits',{method:'POST',body:{message:title,tree:tree.sha,parents:[parent]}});
       try {await api('git/refs',{method:'POST',body:{ref:`refs/heads/${branch}`,sha:next.sha}});}
       catch(error) {
         if(!(error instanceof GitHubError&&error.status===422)) throw error;
-        const existing=await openPull();
-        if(existing) return pullUrl(existing);
         await api(`git/refs/heads/${branch}`,{method:'PATCH',body:{sha:next.sha,force:true}});
       }
       try {return pullUrl(await api('pulls',{method:'POST',body:{title,head:branch,base,body}}));}

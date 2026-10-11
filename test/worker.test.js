@@ -115,6 +115,12 @@ test('edit blocks are parsed, applied exactly once and limited to allowed paths'
   assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/win.js\na\nb\n=======\na\nB\n>>>>>>> REPLACE').edits,crlf,Object.keys(crlf)),[{path:'public/win.js',content:'\ufeffa\r\nB\r\nc\r\n'}],'CRLF files keep their line endings');
   const windows={'public/w.js':'one();\r\ntwo();\r\n'};
   assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/w.js\none();\n=======\none();\nextra();\n>>>>>>> REPLACE').edits,windows,['public/w.js']),[{path:'public/w.js',content:'one();\r\nextra();\r\ntwo();\r\n'}],'new lines in a CRLF file use CRLF');
+  const apply=(source,search,replace)=>applyEdits(parseEdits(`<<<<<<< SEARCH public/m.js\n${search}\n=======\n${replace}\n>>>>>>> REPLACE`).edits,{'public/m.js':source},['public/m.js'])[0].content;
+  assert.equal(apply('a\nb\nc\nx\r\ny\r\n','x\ny','x\nY\nz'),'a\nb\nc\nx\r\nY\r\nz\r\n','a CRLF region of a mostly-LF file matches and stays CRLF');
+  assert.equal(apply('A\r\nB\r\np\nq\nC\r\n','p\nq','p\nQ'),'A\r\nB\r\np\nQ\nC\r\n','an LF region of a CRLF file stays LF');
+  assert.equal(apply('one\ntwo\r\nthree\n','two','two\n2b'),'one\ntwo\r\n2b\r\nthree\n','a single-line match uses its own line ending');
+  assert.equal(apply('one\r\nlast','last','last\nmore'),'one\r\nlast\r\nmore','a last line without an ending uses the previous line');
+  assert.throws(()=>apply('p\nq\r\np\r\nq','p\nq','x'),/more than one place/,'matches across both line endings are ambiguous');
   const mixed={'public/mixed.js':'a\nb\r\nc\n'};
   assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/mixed.js\na\nb\n=======\na\nB\n>>>>>>> REPLACE').edits,mixed,Object.keys(mixed)),[{path:'public/mixed.js',content:'a\nB\r\nc\n'}],'mixed line endings still match LF text');
   for(const path of WORKER_SOURCES) assert.throws(()=>applyEdits(block(path,'x'),{[path]:'x'},[path]),/may not be edited/,path);
@@ -167,6 +173,7 @@ test('a model that never answers times out instead of holding the chat lock',asy
 test('model provider failures and cut-off answers are explained',async()=>{
   const env={MODEL_PROVIDER:'openai-compatible',MODEL_BASE_URL:'https://models.example/v1',MODEL_API_KEY:'k',MODEL:'m'};
   await assert.rejects(callModel({...env,MODEL_BASE_URL:'not a url'},[]),/Configure MODEL_BASE_URL/);
+  await assert.rejects(callModel({...env,MODEL:undefined},[]),/AUTOPILOT_CHAT_MODEL/);
   await assert.rejects(callModel({...env,MODEL_BASE_URL:'http://models.example'},[]),/Configure MODEL_BASE_URL/);
   await assert.rejects(callModel(env,[],{fetchImpl:async()=>{throw Object.assign(new Error('x'),{name:'TimeoutError'});}}),/timed out after 150 seconds/);
   await assert.rejects(callModel(env,[],{fetchImpl:async()=>new Response('<html>',{status:200})}),/no valid response/);
@@ -258,6 +265,14 @@ test('sign-in requires the owner, a GitHub App token and the starting browser',a
     const response=await attempt.callback();
     assert.equal(response.headers.get('Location'),`/?signin=${reason}`);assert.equal(other.store.rows('SELECT COUNT(*) AS n FROM sessions')[0].n,0);
   }
+  const network=environment(),attempt=await signIn(network.env,fetchImpl);
+  const offline=async url=>{if(url.includes('access_token')) throw Object.assign(new Error('reset'),{name:'TimeoutError'});return fetchImpl(url);};
+  const dropped=await handle(request(`/auth/callback?code=c&state=${encodeURIComponent(attempt.state)}`,{cookie:`autopilot_login=${attempt.browser}`}),network.env,{fetchImpl:offline});
+  assert.equal(dropped.headers.get('Location'),'/?signin=failed','network failures return to the chat page');
+  const misconfigured=await handle(request(`/auth/callback?error=redirect_uri_mismatch&state=${encodeURIComponent(attempt.state)}`,{cookie:`autopilot_login=${attempt.browser}`}),network.env,{fetchImpl});
+  assert.equal(misconfigured.headers.get('Location'),'/?signin=github');
+  const forged=await handle(request('/auth/callback?error=access_denied',{cookie:`autopilot_login=${attempt.browser}`}),network.env,{fetchImpl});
+  assert.equal(forged.headers.get('Location'),'/?signin=expired');assert.equal(forged.headers.get('Set-Cookie'),null,'another page cannot cancel a pending sign-in');
   const expired=environment();let now=1000;
   const late=await signIn(expired.env,fetchImpl,()=>now);now+=601000;
   assert.equal((await handle(request(`/auth/callback?code=c&state=${encodeURIComponent(late.state)}`,{cookie:`autopilot_login=${late.browser}`}),expired.env,{fetchImpl,now:()=>now})).headers.get('Location'),'/?signin=expired');
@@ -334,7 +349,7 @@ test('pull requests keep file modes and can be retried after a partial failure',
   store.sql.exec('UPDATE messages SET pr_url = NULL');calls.length=0;
   const reused=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422,openPulls:[{html_url:'https://github.com/owner/repo/pull/8'}]})});
   assert.deepEqual(await reused.json(),{url:'https://github.com/owner/repo/pull/8'});
-  assert.equal(calls.some(c=>c.method==='PATCH'||c.url.endsWith('/pulls')),false,'commits pushed to an open pull request are never overwritten');
+  assert.equal(calls.some(c=>c.method!=='GET'),false,'an open pull request is reused without any write, so its commits are never overwritten');
   assert.equal(store.getMessage(conversation,message).prUrl,'https://github.com/owner/repo/pull/8');
 });
 
