@@ -13,8 +13,9 @@ export async function collectTasks(repository,{token,authorizedUser,fetchImpl=fe
     const latest=replies.at(-1);
     const status=pendingTaskReply(comments,owner) ? 'queued' : latest?.body.match(/\*\*Agent: (working|ready for PR|needs input|failed|stopped)\*\*/)?.[1] || 'queued';
     const compare=latest?.body.match(/\[Review changes and create PR\]\((https:\/\/github\.com\/[^\s)]+)\)/)?.[1];
+    const pull=latest?.body.match(/\[Open pull request\]\((https:\/\/github\.com\/[^\s)]+)\)/)?.[1];
     tasks.push({number:issue.number,title:issue.title.slice(TASK_PREFIX.length),url:issue.html_url,state:issue.state,status:issue.state==='closed' ? 'closed' : status,updatedAt:issue.updated_at,
-      messages:[{role:'you',text:issue.body.slice(TASK_MARKER.length).trim().slice(0,6000)},...comments.filter(c=>(c.user?.login==='github-actions[bot]' && c.body?.startsWith(AGENT_MARKER)) || (c.user?.login?.toLowerCase()===owner && c.body?.startsWith(REPLY_MARKER))).slice(-12).map(c=>({role:c.body.startsWith(REPLY_MARKER)?'you':'agent',text:c.body.slice(c.body.startsWith(REPLY_MARKER)?REPLY_MARKER.length:AGENT_MARKER.length).replace(/<!-- repo-autopilot-attempt:\d+ -->/g,'').trim().slice(0,3000)}))],compareUrl:compare?.startsWith(`https://github.com/${repository}/compare/`) ? compare : null});
+      messages:[{role:'you',text:issue.body.slice(TASK_MARKER.length).trim().slice(0,6000)},...comments.filter(c=>(c.user?.login==='github-actions[bot]' && c.body?.startsWith(AGENT_MARKER)) || (c.user?.login?.toLowerCase()===owner && c.body?.startsWith(REPLY_MARKER))).slice(-12).map(c=>({role:c.body.startsWith(REPLY_MARKER)?'you':'agent',text:c.body.slice(c.body.startsWith(REPLY_MARKER)?REPLY_MARKER.length:AGENT_MARKER.length).replace(/<!-- repo-autopilot-attempt:\d+ -->/g,'').trim().slice(0,3000)}))],compareUrl:compare?.startsWith(`https://github.com/${repository}/compare/`) ? compare : null,pullUrl:/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(pull||'') && pull.startsWith(`https://github.com/${repository}/pull/`) ? pull : null});
   }
   return tasks;
 }

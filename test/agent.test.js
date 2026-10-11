@@ -48,6 +48,24 @@ test('owner task generates a reviewable branch and no pull request or merge',asy
   assert.equal(JSON.parse(model.body).model,'openai/gpt-oss-120b');assert.equal(JSON.parse(model.body).reasoning_effort,'low');assert.equal(JSON.parse(model.body).max_completion_tokens,1500);
   const last=h.calls.filter(c=>c.url.endsWith('/comments')).at(-1);assert.match(JSON.parse(last.body).body,/ready for PR/);assert.match(JSON.parse(last.body).body,/Tests have not run yet/);
 });
+test('configured GitHub App opens the pull request with its own token, never merges',async()=>{
+  const h=harness();
+  await runAgent({...config,appToken:'app-secret',fetchImpl:(url,options)=>url.endsWith('/pulls')?(h.calls.push({url,...options}),Promise.resolve({ok:true,json:async()=>({html_url:'https://github.com/owner/project/pull/7'})})):h.fetchImpl(url,options)});
+  const pull=h.calls.find(c=>c.url.endsWith('/pulls'));
+  assert.equal(pull.headers.Authorization,'Bearer app-secret');assert.deepEqual({head:JSON.parse(pull.body).head,base:JSON.parse(pull.body).base},{head:'autopilot/task-1',base:'main'});
+  for(const path of ['/git/trees','/git/commits','/git/refs']) assert.equal(h.calls.find(c=>c.url.endsWith(path)).headers.Authorization,'Bearer app-secret',path);
+  assert.equal(h.calls.some(c=>/merge/.test(c.url)),false);
+  const comments=h.calls.filter(c=>c.url.endsWith('/comments'));
+  assert.ok(comments.every(c=>c.headers.Authorization==='Bearer github-secret'));
+  assert.match(JSON.parse(comments.at(-1).body).body,/\[Open pull request\]\(https:\/\/github\.com\/owner\/project\/pull\/7\)/);
+  assert.equal(h.calls.find(c=>c.url.startsWith('https://api.groq.com/')).body.includes('app-secret'),false);
+});
+test('a failed automatic pull request falls back to the compare link',async()=>{
+  const h=harness();
+  await runAgent({...config,appToken:'app-secret',fetchImpl:(url,options)=>url.endsWith('/pulls')?Promise.resolve({ok:false,status:422}):h.fetchImpl(url,options)});
+  const body=JSON.parse(h.calls.filter(c=>c.url.endsWith('/comments')).at(-1).body).body;
+  assert.match(body,/Agent: ready for PR/);assert.match(body,/Review changes and create PR/);assert.equal(body.includes('Open pull request'),false);
+});
 test('notification failure after branch publication retains ready status and compare link',async()=>{
   const h=harness();let notifications=0;
   await runAgent({...config,fetchImpl:async(url,options)=>{
@@ -182,5 +200,12 @@ test('ineligible replies preserve working and ready status in snapshots',async()
     assert.equal(pendingTaskReply(history,'owner'),false);
     const tasks=await collectTasks('owner/project',{token:'x',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments?')?history:[{number:1,state:'open',user:{login:'owner'},title:'Autopilot task: x',body:TASK_MARKER+'\nx'}]})});
     assert.equal(tasks[0].status,status);
+  }
+});
+test('task history exposes an app-opened pull request link only for this repository',async()=>{
+  const task={number:1,state:'open',user:{login:'owner'},title:'Autopilot task: x',body:TASK_MARKER+'\nx'};
+  for(const [link,expected] of [['https://github.com/owner/project/pull/7','https://github.com/owner/project/pull/7'],['https://github.com/evil/project/pull/7',null],['https://github.com/owner/project/pull/7/files',null]]) {
+    const tasks=await collectTasks('owner/project',{token:'x',fetchImpl:async url=>({ok:true,json:async()=>url.includes('/comments?')?[{id:1,user:{login:'github-actions[bot]'},body:AGENT_MARKER+`\n**Agent: ready for PR**\n[Open pull request](${link})`}]:[task]})});
+    assert.equal(tasks[0].pullUrl,expected);assert.equal(tasks[0].status,'ready for PR');
   }
 });

@@ -16,7 +16,7 @@ export function renderTasks(container,tasks=[]) {
       const p=document.createElement('p');p.className='task-message';
       const label=document.createElement('strong');label.textContent=message.role==='you' ? 'You: ' : 'Agent: ';p.append(label,document.createTextNode(message.text));row.append(p);
     }
-    for(const [text,url] of [['Open task / close to stop',task.url],['Review changes and create PR',task.compareUrl]]) {
+    for(const [text,url] of [['Open task / close to stop',task.url],['Open pull request',task.pullUrl],['Review changes and create PR',task.pullUrl ? null : task.compareUrl]]) {
       if(!url || !url.startsWith('https://github.com/')) continue;
       const a=document.createElement('a');a.textContent=text;a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.className='task-link';row.append(a);
     }
