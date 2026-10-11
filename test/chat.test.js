@@ -28,7 +28,7 @@ test('OAuth browser binding, server-only tokens, CSRF and logout',async t=>{
   const calls=[];
   const remote=async(url,options)=>{
     calls.push({url,...options});
-    let data=url.endsWith('/access_token')?{access_token:'private-token'}:url.endsWith('/user')?{login:'owner'}:url.endsWith('/issues')?{number:22,html_url:'https://github.com/owner/repo/issues/22'}:{private:false};
+    let data=url.endsWith('/access_token')?{access_token:'ghu_private-token'}:url.endsWith('/user')?{login:'owner'}:url.endsWith('/issues')?{number:22,html_url:'https://github.com/owner/repo/issues/22'}:{private:false};
     return {ok:true,json:async()=>data};
   };
   const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'private-secret',fetchImpl:remote});
@@ -75,7 +75,7 @@ test('queued replies block another send before any image processing or comment w
 
 test('OAuth states do not consume a global login quota and expire safely',async t=>{
   let time=1000000,remoteCalls=0;
-  const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'secret',now:()=>time,fetchImpl:async url=>{remoteCalls++;return {ok:true,json:async()=>url.endsWith('/access_token')?{access_token:'token'}:{login:'owner'}};}});
+  const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'secret',now:()=>time,fetchImpl:async url=>{remoteCalls++;return {ok:true,json:async()=>url.endsWith('/access_token')?{access_token:'ghu_token'}:{login:'owner'}};}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
   const base='http://127.0.0.1:'+server.address().port;
   let login;
@@ -91,7 +91,7 @@ test('task writes are locked across separate authenticated sessions',async t=>{
   let release,arrived,historyReads=0;const gate=new Promise(resolve=>release=resolve),started=new Promise(resolve=>arrived=resolve);
   const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'secret',fetchImpl:async(url,options)=>{
     let data;
-    if(url.endsWith('/access_token')) data={access_token:'token'};
+    if(url.endsWith('/access_token')) data={access_token:'ghu_token'};
     else if(url.endsWith('/user')) data={login:'owner'};
     else if(url.endsWith('/repos/owner/repo')) data={private:false};
     else if(url.includes('/comments?')) {historyReads++;arrived();await gate;data=[{id:1,user:{login:'github-actions[bot]'},body:'<!-- repo-autopilot-agent -->\n**Agent: needs input**'}];}
@@ -132,8 +132,12 @@ test('sign-in rejects scoped OAuth-app tokens and ends sessions with the app tok
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
   const url='http://127.0.0.1:'+server.address().port;
   const signIn=async()=>{const login=await fetch(url+'/auth/login',{redirect:'manual'});const state=new URL(login.headers.get('location')).searchParams.get('state');return fetch(url+'/auth/callback?code=x&state='+state,{headers:{Cookie:login.headers.getSetCookie()[0].split(';')[0]},redirect:'manual'});};
-  let r=await signIn();assert.equal(r.status,403);assert.equal(r.headers.getSetCookie().some(c=>c.startsWith('autopilot_session=')),false);
-  tokenResponse={access_token:'app-user-token',scope:'',expires_in:60};
+  for(const response of [{access_token:'gho_oauth-token',scope:'public_repo'},{access_token:'gho_fresh-oauth-token',scope:''},{access_token:'ghu_token',scope:'repo'}]) {
+    tokenResponse=response;
+    const r=await signIn();assert.equal(r.status,403);assert.equal(r.headers.getSetCookie().some(c=>c.startsWith('autopilot_session=')),false);
+  }
+  tokenResponse={access_token:'ghu_app-user-token',scope:'',expires_in:60};
+  let r;
   r=await signIn();assert.equal(r.status,303);
   const cookie=r.headers.getSetCookie().find(c=>c.startsWith('autopilot_session=')).split(';')[0];
   assert.equal((await (await fetch(url+'/api/session',{headers:{Cookie:cookie}})).json()).login,'owner');

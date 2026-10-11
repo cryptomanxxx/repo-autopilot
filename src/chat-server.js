@@ -46,9 +46,9 @@ export function createChatServer({origin,repository,authorizedUser,clientId,clie
         if(!pending||pending.browser!==cookies(req).autopilot_login||!url.searchParams.get('code')) return json(res,403,{error:'Login expired or did not match this browser. Sign in again.'});
         const token=await remote('https://github.com/login/oauth/access_token',{method:'POST',headers:{Accept:'application/json','Content-Type':'application/json'},body:JSON.stringify({client_id:clientId,client_secret:clientSecret,code:url.searchParams.get('code'),redirect_uri:base.origin+'/auth/callback',code_verifier:pending.verifier})});
         if(!token.access_token||token.error) throw new Error('GitHub authentication failed.');
-        // GitHub App user tokens carry no OAuth scopes: they can only act where the app is installed, with the
-        // app's permissions. A non-empty scope means an OAuth app was configured, which could reach every repository.
-        if(token.scope) return json(res,403,{error:'GitHub App credentials are required. Configure the GitHub App client ID and secret, not an OAuth app.'});
+        // GitHub App user tokens (documented ghu_ prefix) carry no OAuth scopes: they can only act where the app is
+        // installed, with the app's permissions. Anything else means an OAuth app was configured by mistake.
+        if(!token.access_token.startsWith('ghu_')||token.scope) return json(res,403,{error:'GitHub App credentials are required. Configure the GitHub App client ID and secret, not an OAuth app.'});
         const user=await remote('https://api.github.com/user',{headers:{Authorization:`Bearer ${token.access_token}`,Accept:'application/vnd.github+json','User-Agent':'repo-autopilot-chat/0.1'}});
         if(user.login?.toLowerCase()!==owner) return json(res,403,{error:'Sign in with the configured repository owner account.'});
         if(sessions.size>=100) return json(res,429,{error:'Please try again later.'});
