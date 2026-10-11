@@ -28,7 +28,7 @@ test('OAuth browser binding, server-only tokens, CSRF and logout',async t=>{
   const calls=[];
   const remote=async(url,options)=>{
     calls.push({url,...options});
-    let data=url.endsWith('/access_token')?{access_token:'private-token'}:url.endsWith('/user')?{login:'owner'}:url.endsWith('/issues')?{number:22,html_url:'https://github.com/owner/repo/issues/22'}:{private:false};
+    let data=url.endsWith('/access_token')?{access_token:'ghu_private-token'}:url.endsWith('/user')?{login:'owner'}:url.endsWith('/issues')?{number:22,html_url:'https://github.com/owner/repo/issues/22'}:{private:false};
     return {ok:true,json:async()=>data};
   };
   const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'private-secret',fetchImpl:remote});
@@ -36,7 +36,7 @@ test('OAuth browser binding, server-only tokens, CSRF and logout',async t=>{
   const url='http://127.0.0.1:'+server.address().port;
   const login=await fetch(url+'/auth/login',{redirect:'manual'}),target=new URL(login.headers.get('location'));
   const loginCookie=login.headers.getSetCookie()[0].split(';')[0];
-  assert.equal(target.searchParams.get('scope'),'public_repo');assert.equal(target.searchParams.get('code_challenge_method'),'S256');
+  assert.equal(target.searchParams.has('scope'),false);assert.equal(target.searchParams.get('code_challenge_method'),'S256');
   let r=await fetch(url+'/auth/callback?code=x&state='+target.searchParams.get('state'),{headers:{Cookie:'autopilot_login=wrong'},redirect:'manual'});assert.equal(r.status,403);assert.equal(calls.length,0);
   const again=await fetch(url+'/auth/login',{redirect:'manual'}),newTarget=new URL(again.headers.get('location'));
   r=await fetch(url+'/auth/callback?code=x&state='+newTarget.searchParams.get('state'),{headers:{Cookie:again.headers.getSetCookie()[0].split(';')[0]},redirect:'manual'});
@@ -75,7 +75,7 @@ test('queued replies block another send before any image processing or comment w
 
 test('OAuth states do not consume a global login quota and expire safely',async t=>{
   let time=1000000,remoteCalls=0;
-  const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'secret',now:()=>time,fetchImpl:async url=>{remoteCalls++;return {ok:true,json:async()=>url.endsWith('/access_token')?{access_token:'token'}:{login:'owner'}};}});
+  const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'secret',now:()=>time,fetchImpl:async url=>{remoteCalls++;return {ok:true,json:async()=>url.endsWith('/access_token')?{access_token:'ghu_token'}:{login:'owner'}};}});
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
   const base='http://127.0.0.1:'+server.address().port;
   let login;
@@ -91,7 +91,7 @@ test('task writes are locked across separate authenticated sessions',async t=>{
   let release,arrived,historyReads=0;const gate=new Promise(resolve=>release=resolve),started=new Promise(resolve=>arrived=resolve);
   const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'secret',fetchImpl:async(url,options)=>{
     let data;
-    if(url.endsWith('/access_token')) data={access_token:'token'};
+    if(url.endsWith('/access_token')) data={access_token:'ghu_token'};
     else if(url.endsWith('/user')) data={login:'owner'};
     else if(url.endsWith('/repos/owner/repo')) data={private:false};
     else if(url.includes('/comments?')) {historyReads++;arrived();await gate;data=[{id:1,user:{login:'github-actions[bot]'},body:'<!-- repo-autopilot-agent -->\n**Agent: needs input**'}];}
@@ -125,4 +125,22 @@ test('chat transcript excludes foreign authors and incorrectly marked owner or b
   ];
   const chat=createChat({repository:'owner/repo',token:'x',fetchImpl:async url=>({ok:true,json:async()=>url.endsWith('/repos/owner/repo')?{private:false}:url.includes('/comments?')?history:{number:21,state:'open',user:{login:'owner'},title:'Autopilot task: x',body:TASK_MARKER+'\nx'}})});
   assert.deepEqual((await chat.messages(21)).comments.map(c=>c.id),[1,2]);
+});
+test('sign-in rejects scoped OAuth-app tokens and ends sessions with the app token',async t=>{
+  let time=1_000_000,tokenResponse={access_token:'oauth-token',scope:'public_repo'};
+  const server=createChatServer({origin:'https://chat.example',repository:'owner/repo',clientId:'client',clientSecret:'secret',now:()=>time,fetchImpl:async url=>({ok:true,json:async()=>url.endsWith('/access_token')?tokenResponse:{login:'owner'}})});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
+  const url='http://127.0.0.1:'+server.address().port;
+  const signIn=async()=>{const login=await fetch(url+'/auth/login',{redirect:'manual'});const state=new URL(login.headers.get('location')).searchParams.get('state');return fetch(url+'/auth/callback?code=x&state='+state,{headers:{Cookie:login.headers.getSetCookie()[0].split(';')[0]},redirect:'manual'});};
+  for(const response of [{access_token:'gho_oauth-token',scope:'public_repo'},{access_token:'gho_fresh-oauth-token',scope:''},{access_token:'ghu_token',scope:'repo'}]) {
+    tokenResponse=response;
+    const r=await signIn();assert.equal(r.status,403);assert.equal(r.headers.getSetCookie().some(c=>c.startsWith('autopilot_session=')),false);
+  }
+  tokenResponse={access_token:'ghu_app-user-token',scope:'',expires_in:60};
+  let r;
+  r=await signIn();assert.equal(r.status,303);
+  const cookie=r.headers.getSetCookie().find(c=>c.startsWith('autopilot_session=')).split(';')[0];
+  assert.equal((await (await fetch(url+'/api/session',{headers:{Cookie:cookie}})).json()).login,'owner');
+  time+=61_000;
+  assert.equal((await (await fetch(url+'/api/session',{headers:{Cookie:cookie}})).json()).login,null);
 });

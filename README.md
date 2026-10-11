@@ -107,13 +107,13 @@ Deploy the supplied Dockerfile on a host with HTTPS, or run `npm run chat` with 
 | `CHAT_ORIGIN` | Public HTTPS origin, e.g. `https://chat.example.com`, with no path. Use `http://127.0.0.1:3001` for local development. |
 | `GITHUB_REPOSITORY` | Fixed public repository, e.g. `cryptomanxxx/repo-autopilot`. |
 | `AUTOPILOT_TASK_USER` | Allowed GitHub login; defaults to the repository owner. Match the Actions variable if configured. |
-| `GITHUB_CLIENT_ID` | GitHub OAuth app client ID. |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret, stored only on the server. |
+| `GITHUB_CLIENT_ID` | Client ID of the repository's GitHub App (see the GitHub App section). |
+| `GITHUB_CLIENT_SECRET` | A client secret generated for that GitHub App, stored only on the server. |
 | `GROQ_API_KEY` | Server-side key for screenshot interpretation. The Actions coding worker still uses its repository secret. |
 | `HOST`, `PORT` | Listener settings; Docker defaults to `0.0.0.0:3001`. |
 
-Create a GitHub OAuth app with callback `<CHAT_ORIGIN>/auth/callback`. The app requests `public_repo` and admits only the configured owner login. OAuth tokens stay in server memory; the browser receives an opaque HttpOnly session cookie. OAuth uses browser-bound encrypted stateless state and PKCE; unauthenticated login requests do not fill a global state map. Follow-up writes are locked per task across all sessions in the server process. Writes require an exact origin and session CSRF token. Sessions expire after eight hours and are lost on restart; run one server instance. Do not put OAuth secrets or API keys in a Pages variable or browser code.
+Sign-in uses the same GitHub App as the task agent, through GitHub's user authorization flow. In the app's settings add the callback URL `<CHAT_ORIGIN>/auth/callback`, keep **Expire user authorization tokens** enabled and generate a client secret. The resulting user token carries no OAuth scopes: it works only on repositories where the app is installed and only with the app's permissions (Contents, Issues, Pull requests), so a leaked session token cannot reach your other repositories. The server accepts only GitHub App user tokens (`ghu_` prefix, no OAuth scopes), so an OAuth app cannot be configured by mistake, and it admits only the configured owner login. Sessions end when the eight-hour user token expires. OAuth tokens stay in server memory; the browser receives an opaque HttpOnly session cookie. OAuth uses browser-bound encrypted stateless state and PKCE; unauthenticated login requests do not fill a global state map. Follow-up writes are locked per task across all sessions in the server process. Writes require an exact origin and session CSRF token. Sessions expire after eight hours and are lost on restart; run one server instance. Do not put OAuth secrets or API keys in a Pages variable or browser code.
 
 Once the server is running, set the repository Actions variable `AUTOPILOT_CHAT_URL` to its HTTPS chat URL and run the Pages workflow. Only this public URL is inserted into the static build. The dashboard keeps the GitHub confirmation route until this variable is configured.
 
-References: [GitHub OAuth web flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps), [Groq vision](https://console.groq.com/docs/vision).
+References: [GitHub App user access tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app), [Groq vision](https://console.groq.com/docs/vision).
