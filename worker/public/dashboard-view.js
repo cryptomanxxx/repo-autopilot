@@ -1,4 +1,4 @@
-// Dashboard rendering shared by the Repo Autopilot app (Worker) and the public GitHub Pages dashboard.
+// Dashboard rendering for the Repo Autopilot app.
 // It only builds DOM nodes from dashboard data and never fetches anything itself.
 export function el(tag,text,className) {const node=document.createElement(tag);node.textContent=text;if(className) node.className=className;return node;}
 export function link(text,url) {const node=el('a',text);if(typeof url==='string'&&url.startsWith('https://github.com/')) {node.href=url;node.target='_blank';node.rel='noopener noreferrer';}return node;}

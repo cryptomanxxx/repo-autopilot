@@ -113,6 +113,7 @@ test('edit blocks are parsed, applied exactly once and limited to allowed paths'
   assert.throws(()=>applyEdits(block('.github/workflows/ci.yml',''),files,Object.keys(files)),/may not be edited/);
   assert.throws(()=>applyEdits(block('public/app.js',''),files,Object.keys(files)),/already exists/);
   assert.throws(()=>parseEdits('<<<<<<< SEARCH a.js\nx\n=======\ny\n'),/malformed/);
+  assert.equal(parseEdits('<<<<<<< SEARCH docs/release.md\nPR-TITLE: old\n=======\nPR-TITLE: new\n>>>>>>> REPLACE').title,null,'a PR-TITLE line changed by an edit is not the title');
   const crlf={'public/win.js':'\ufeffa\r\nb\r\nc\r\n'};
   assert.deepEqual(applyEdits(parseEdits('<<<<<<< SEARCH public/win.js\na\nb\n=======\na\nB\n>>>>>>> REPLACE').edits,crlf,Object.keys(crlf)),[{path:'public/win.js',content:'\ufeffa\r\nB\r\nc\r\n'}],'CRLF files keep their line endings');
   const windows={'public/w.js':'one();\r\ntwo();\r\n'};

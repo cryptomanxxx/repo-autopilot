@@ -6,6 +6,26 @@ Repo Autopilot is one app on Cloudflare Workers with GitHub sign-in: a live dash
 
 Automatic merge is **off**. The coding agent proposes changes as pull requests; it does not execute generated code or merge changes. A successful CI indicator is informational: it does not establish branch protection, resolved conversations, current review approval, or merge eligibility.
 
+## Screenshots
+
+<p align="center"><img src="docs/screenshots/dashboard.png" width="860" alt="Dashboard tab: repository picker, the six most recently updated pull requests with merge readiness, CI and Codex status, and recent GitHub Actions runs"></p>
+
+**Dashboard.** Pick a repository, then see at a glance which pull requests are ready to merge, which have failing CI or open Codex findings, and what GitHub Actions is running. It updates within seconds when GitHub reports a change.
+
+<p align="center"><img src="docs/screenshots/activity.png" width="860" alt="An expanded pull request showing its activity chain: opened, Codex review requested, findings, code changed, review completed and Codex thumbs-up"></p>
+
+**PR activity.** Expand a pull request to follow its history as a chain: review requests, Codex findings, new commits, completed reviews and the final 👍.
+
+<p align="center"><img src="docs/screenshots/chat.png" width="860" alt="Agent chat tab: a question about checkout totals, the agent's explanation and exact code edits, and a Create pull request button"></p>
+
+**Agent chat.** Ask about the code or describe a change, with an optional screenshot. The agent reads the repository's current files, answers with exact edits, and opens a pull request when you press **Create pull request**.
+
+<p align="center"><img src="docs/screenshots/mobile.png" width="300" alt="The dashboard on a phone, with each pull request shown as a card"></p>
+
+**Phone and tablet.** The layout adapts to small screens, and the controls are sized for touch.
+
+<sub>The screenshots use invented demo data.</sub>
+
 ## Development
 
 Requires Node.js 22 or later. There are no dependencies.
