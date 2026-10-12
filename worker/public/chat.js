@@ -1,5 +1,5 @@
-import {startDashboard,showDashboard,showPull} from './dashboard.js';
-const state={csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:''};
+import {startDashboard,showDashboard,showPull,setRepository} from './dashboard.js';
+const state={csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',conversationRequest:0};
 const $=id=>document.getElementById(id);
 const status=text=>{$('status').textContent=text;};
 const MAX_SIDE=1600,MAX_DATA_URL=1400000;
@@ -14,7 +14,7 @@ async function api(path,body,timeout=30000) {
 
 function showSignedOut(message) {
   $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;
-  for(const id of ['tabs','chat','dashboard-view']) $(id).hidden=true;
+  for(const id of ['tabs','chat','dashboard-view','repo-bar']) $(id).hidden=true;
 }
 
 // The address keeps the open tab: #dashboard, #pr-<number>, #chat and #chat/<conversation>.
@@ -77,9 +77,49 @@ function renderMessages(messages) {
   container.lastElementChild?.scrollIntoView({block:'end'});
 }
 
+// The repository picker. The choice is remembered on this device; conversations belong to a repository.
+const sameRepo=(a,b)=>a.toLowerCase()===b.toLowerCase();
+function repoLabel(name) {
+  const [owner,repo]=name.split('/');
+  return sameRepo(owner,state.home.split('/')[0])?repo:name;
+}
+function showAccount() {$('account').textContent=`${state.login} · model ${state.model}`;}
+function addRepoOption(name) {
+  const picker=$('repo-picker');
+  if(![...picker.options].some(option=>sameRepo(option.value,name))) picker.append(new Option(repoLabel(name),name));
+  picker.value=[...picker.options].find(option=>sameRepo(option.value,name)).value;
+}
+function fillRepos(repositories) {
+  const picker=$('repo-picker');
+  picker.replaceChildren(...repositories.map(r=>new Option(`${repoLabel(r.fullName)}${r.private?' · private':''}`,r.fullName)));
+  // A repository the app no longer reaches (uninstalled or renamed) gives way to the app's own.
+  if(repositories.some(r=>sameRepo(r.fullName,state.repository))) addRepoOption(state.repository);
+  else selectRepository(state.home);
+}
+async function loadRepos(fresh=false) {
+  const {repositories}=await api(`/api/repos${fresh?'?fresh=1':''}`);
+  return repositories;
+}
+// keepConversation: the open conversation already belongs to the new repository.
+function selectRepository(name,{keepConversation=false}={}) {
+  addRepoOption(name);
+  if(sameRepo(name,state.repository)) return;
+  state.repository=name;
+  try {localStorage.setItem('autopilot-repo',name);} catch {}
+  setRepository();
+  if(state.tab==='dashboard') history.replaceState(null,'','#dashboard');
+  if(!keepConversation) {status('');openConversation(null);}
+}
+const setBusy=busy=>{state.busy=busy;$('repo-picker').disabled=busy;$('repo-reload').disabled=busy;};
+
 async function loadConversations() {
-  const {conversations}=await api('/api/conversations');
-  const list=$('conversations');list.replaceChildren();
+  const repository=state.repository,request=++state.conversationRequest,list=$('conversations');
+  // Another repository's conversations are removed at once, not when (or if) the new list arrives.
+  if(list.dataset.repository!==repository) {list.replaceChildren();list.dataset.repository=repository;}
+  const {conversations}=await api(`/api/conversations?repo=${encodeURIComponent(repository)}`);
+  // A slower answer for an earlier repository must not replace the current list.
+  if(request!==state.conversationRequest) return;
+  list.replaceChildren();
   for(const conversation of conversations) {
     const item=document.createElement('li'),button=document.createElement('button');
     button.className='conversation'+(conversation.id===state.conversation?' active':'');
@@ -94,10 +134,15 @@ async function openConversation(id) {
   const previous=state.conversation;let failed=false;
   state.conversation=id;
   if(state.tab==='chat') history.replaceState(null,'',chatHash());
-  if(!id) {$('conversation-title').textContent='New conversation';renderMessages([]);await loadConversations();return;}
+  if(!id) {
+    $('conversation-title').textContent='New conversation';renderMessages([]);
+    try {await loadConversations();} catch(error) {status(error.message);}
+    return;
+  }
   try {
     const conversation=await api(`/api/conversations/${id}`);
     if(state.conversation!==id) return;
+    if(conversation.repository) selectRepository(conversation.repository,{keepConversation:true});
     $('conversation-title').textContent=conversation.title;renderMessages(conversation.messages);
   } catch(error) {
     // Keep sending to the conversation that is actually on screen.
@@ -109,13 +154,13 @@ async function openConversation(id) {
 
 async function createPullRequest(message,button) {
   if(state.busy) return;
-  state.busy=true;button.disabled=true;status('Creating pull request…');
+  setBusy(true);button.disabled=true;status('Creating pull request…');
   try {
     await api('/api/pull-request',{conversation:state.conversation,message},250000);
     status('Pull request created. CI runs on GitHub.');
-    state.busy=false;await openConversation(state.conversation);
+    setBusy(false);await openConversation(state.conversation);
   } catch(error) {status(error.message);button.disabled=false;}
-  finally {state.busy=false;}
+  finally {setBusy(false);}
 }
 
 // Screenshots are scaled down in the browser and sent as JPEG, which keeps uploads small and fast.
@@ -159,19 +204,19 @@ $('composer').onsubmit=async event=>{
   if(state.busy) return;
   if(state.preparing) {status('Wait until the image is ready.');return;}
   const text=$('message').value.trim();if(!text) return;
-  state.busy=true;$('send').disabled=true;$('message').disabled=true;$('image').disabled=true;
+  setBusy(true);$('send').disabled=true;$('message').disabled=true;$('image').disabled=true;
   const container=$('messages');container.querySelector('.empty')?.remove();
   container.append(renderMessage({role:'user',content:text,hasImage:Boolean(state.image)}));
   const thinking=document.createElement('p');thinking.className='muted thinking';thinking.textContent='The agent is reading the code and writing an answer…';container.append(thinking);thinking.scrollIntoView({block:'end'});
   status('');
   try {
-    const result=await api('/api/chat',{conversation:state.conversation,text,image:state.image},430000);
+    const result=await api('/api/chat',{conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image},430000);
     $('message').value='';clearImage();thinking.remove();
-    state.busy=false;state.conversation=result.conversation;await openConversation(result.conversation);
+    setBusy(false);state.conversation=result.conversation;await openConversation(result.conversation);
   } catch(error) {
     thinking.remove();container.lastElementChild?.remove();
     status(error.name==='TimeoutError'?'The agent did not answer in time. Try again.':error.message);
-  } finally {state.busy=false;$('send').disabled=false;$('message').disabled=false;$('image').disabled=false;}
+  } finally {setBusy(false);$('send').disabled=false;$('message').disabled=false;$('image').disabled=false;}
 };
 $('new-conversation').onclick=()=>{if(!state.busy) {status('');openConversation(null);$('message').focus();}};
 $('logout').onclick=async()=>{try {await api('/api/logout',{});} catch {} location.replace('/');};
@@ -181,14 +226,28 @@ const signInProblem=SIGN_IN_PROBLEMS[new URLSearchParams(location.search).get('s
 if(location.search) history.replaceState(null,'',location.pathname+location.hash);
 $('tab-dashboard').onclick=()=>showTab('dashboard');
 $('tab-chat').onclick=()=>showTab('chat');
+$('repo-picker').onchange=()=>{if(state.busy) $('repo-picker').value=state.repository;else selectRepository($('repo-picker').value);};
+$('repo-reload').onclick=async()=>{
+  setBusy(true);status('Reloading repositories…');
+  let repositories=null;
+  try {repositories=await loadRepos(true);status('');} catch(error) {status(error.message);}
+  finally {setBusy(false);}
+  if(repositories) fillRepos(repositories);
+};
 try {
   const session=await api('/api/session');
   if(!session.login) showSignedOut(signInProblem?`${signInProblem} Sign in with the owner account of ${session.repository}.`:`Sign in with the owner account of ${session.repository}.`);
   else {
-    state.csrf=session.csrf;state.repository=session.repository;
-    $('account').textContent=`${session.repository} · ${session.login} · model ${session.model}`;
-    $('logout').hidden=false;$('tabs').hidden=false;
-    startDashboard(api,{isVisible:()=>state.tab==='dashboard'});
+    Object.assign(state,{csrf:session.csrf,home:session.repository,repository:session.repository,login:session.login,model:session.model});
+    showAccount();
+    // The remembered repository is used when it is still reachable; otherwise the app's own.
+    let repositories=[{fullName:session.repository,private:false}],remembered=null;
+    try {repositories=await loadRepos();} catch(error) {status(error.message);}
+    try {remembered=localStorage.getItem('autopilot-repo');} catch {}
+    state.repository=repositories.find(r=>remembered&&sameRepo(r.fullName,remembered))?.fullName||session.repository;
+    fillRepos(repositories);
+    $('logout').hidden=false;$('tabs').hidden=false;$('repo-bar').hidden=false;
+    startDashboard(api,{isVisible:()=>state.tab==='dashboard',selected:()=>state.repository});
     // Older chat links used #<conversation>; they still open the chat.
     const hash=location.hash,conversation=/^#(?:chat\/)?([0-9a-f]{32})$/.exec(hash)?.[1]||null,pull=/^#pr-([1-9]\d{0,8})$/.exec(hash)?.[1];
     let saved=null;try {saved=localStorage.getItem('autopilot-tab');} catch {}

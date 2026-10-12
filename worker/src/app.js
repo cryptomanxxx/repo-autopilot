@@ -2,13 +2,13 @@ import {githubClient,GitHubError,readLimited} from './github.js';
 import {repositoryName,createGitHub} from '../../src/github.js';
 import {PublicError,UserError} from './errors.js';
 export {UserError};
-import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
+import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
 
 const encoder=new TextEncoder();
 const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
 // Each dashboard request stays far below the Workers subrequest limit: the overview needs three GitHub
 // calls and each pull request is loaded by its own request with at most ten.
-export const DASHBOARD_PULLS=6,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR,ERROR_CACHE_MS=30000;
+export const DASHBOARD_PULLS=6,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR,ERROR_CACHE_MS=30000,REPOS_CACHE_MS=300000,WEBHOOK_MAX_BYTES=5000000;
 const hex=bytes=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
 const randomHex=(bytes=32)=>hex(crypto.getRandomValues(new Uint8Array(bytes)));
 const base64url=bytes=>{let s='';for(const b of bytes) s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
@@ -86,6 +86,8 @@ async function readJson(request) {
   throw new UserError(400,'Invalid request.');
 }
 
+const chatStore=env=>env.CHAT.get(env.CHAT.idFromName('main'));
+
 export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
   const config=settings(env,request);
   const url=new URL(request.url);
@@ -95,6 +97,8 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
       if(!env.ASSETS) return withHeaders(new Response('Not found',{status:404}),secure);
       return withHeaders(await env.ASSETS.fetch(request),secure);
     }
+    // GitHub signs webhook deliveries, so they need neither the app's settings nor its browser origin.
+    if(url.pathname==='/api/webhook') return withHeaders(await webhook(request,env,chatStore(env)),secure);
     if(config.error) return withHeaders(json(503,{error:config.error}),secure);
     if(!config.sameOrigin) return withHeaders(json(404,{error:'Not found.'}),secure);
     return withHeaders(await route(request,env,config,url,{fetchImpl,now}),secure);
@@ -107,7 +111,7 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
 }
 
 async function route(request,env,config,url,{fetchImpl,now}) {
-  const store=env.CHAT.get(env.CHAT.idFromName('main'));
+  const store=chatStore(env);
   const sessionCookie=config.secure?'__Host-autopilot_session':'autopilot_session';
   const cookie=(name,value,{path='/',maxAge}={})=>`${name}=${value}; Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${maxAge??(value?28800:0)}${config.secure?'; Secure':''}`;
   const callback=`${config.origin}/auth/callback`;
@@ -146,13 +150,15 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     return redirect('/',[cookie(sessionCookie,id),cookie('autopilot_login','',{path:'/auth'})]);
   }
 
+
   const sessionId=cookies(request)[sessionCookie];
   const hash=sessionId&&/^[0-9a-f]{64}$/.test(sessionId)?hex(await sha256(sessionId)):null;
   const session=hash?await store.getSession(hash):null;
   if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:env.MODEL||DEFAULT_MODEL}:{login:null,repository:config.repository});
   if(!session) throw new UserError(401,'Sign in to chat.');
 
-  const github=()=>githubClient({repository:config.repository,token:session.token,fetchImpl});
+  const github=repository=>githubClient({repository,token:session.token,fetchImpl});
+  const access={store,session,hash,config,fetchImpl};
   const run=async work=>{
     try {return await work();}
     catch(error) {
@@ -160,13 +166,26 @@ async function route(request,env,config,url,{fetchImpl,now}) {
       throw error;
     }
   };
-  if(request.method==='GET'&&(url.pathname==='/api/dashboard'||url.pathname.startsWith('/api/dashboard/'))) return run(()=>dashboard(url,{store,config,session,fetchImpl}));
-  if(request.method==='GET'&&url.pathname==='/api/conversations') return json(200,{conversations:await store.listConversations()});
+  if(request.method==='GET'&&url.pathname==='/api/repos') return run(async()=>{
+    const repositories=await accessibleRepos({...access,fresh:url.searchParams.get('fresh')==='1'});
+    const home=repositories.some(r=>r.fullName.toLowerCase()===config.repository.toLowerCase())?[]:[{fullName:config.repository,private:false,pushedAt:null}];
+    return json(200,{home:config.repository,repositories:[...home,...repositories]});
+  });
+  // The version is only a counter moved by webhooks, so it needs no GitHub request.
+  if(request.method==='GET'&&url.pathname==='/api/dashboard/version') {
+    let repository;try {repository=repositoryName(url.searchParams.get('repo')||config.repository);} catch {throw new UserError(400,'Invalid repository.');}
+    return json(200,{version:await store.getVersion(repository)});
+  }
+  if(request.method==='GET'&&(url.pathname==='/api/dashboard'||url.pathname.startsWith('/api/dashboard/'))) return run(async()=>dashboard(url,{store,session,fetchImpl,repository:await resolveRepository(url.searchParams.get('repo'),access)}));
+  if(request.method==='GET'&&url.pathname==='/api/conversations') return run(async()=>{
+    const repository=await resolveRepository(url.searchParams.get('repo'),access);
+    return json(200,{conversations:await store.listConversations(repository,{home:repository.toLowerCase()===config.repository.toLowerCase()})});
+  });
   const conversationPath=/^\/api\/conversations\/([0-9a-f]{32})$/.exec(url.pathname);
   if(request.method==='GET'&&conversationPath) {
     const conversation=await store.getConversation(conversationPath[1]);
     if(!conversation) throw new UserError(404,'Conversation not found.');
-    return json(200,{...conversation,messages:conversation.messages.map(m=>({id:m.id,role:m.role,content:m.content,hasImage:m.hasImage,created:m.created,prUrl:m.prUrl,proposal:m.proposal?{title:m.proposal.title,paths:[...new Set(m.proposal.edits.map(e=>e.path))]}:null}))});
+    return json(200,{...conversation,repository:conversation.repository||config.repository,messages:conversation.messages.map(m=>({id:m.id,role:m.role,content:m.content,hasImage:m.hasImage,created:m.created,prUrl:m.prUrl,proposal:m.proposal?{title:m.proposal.title,paths:[...new Set(m.proposal.edits.map(e=>e.path))]}:null}))});
   }
   if(request.method!=='POST') throw new UserError(405,'Unsupported request.');
   if(request.headers.get('Origin')!==config.origin||request.headers.get('X-CSRF-Token')!==session.csrf) throw new UserError(403,'The request could not be verified. Reload the page.');
@@ -175,31 +194,112 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     return json(200,{ok:true},{'Set-Cookie':cookie(sessionCookie,'')});
   }
   const body=await readJson(request);
-  if(url.pathname==='/api/chat') return run(()=>chat(body,{env,store,github,config,fetchImpl}));
-  if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github}));
+  if(url.pathname==='/api/chat') return run(()=>chat(body,{env,store,github,config,access,fetchImpl}));
+  if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github,config,access}));
   throw new UserError(404,'Not found.');
+}
+
+// Repositories the owner can open: those where the GitHub App is installed, which are the only ones a
+// GitHub App user token reaches. Cached per session for a few minutes; most recently pushed first.
+async function accessibleRepos({store,session,hash,fetchImpl,fresh=false}) {
+  const key=`repos:${hash}`;
+  if(!fresh) {const cached=await store.getCache(key);if(cached) return cached;}
+  const get=async path=>{
+    const response=await fetchImpl(`https://api.github.com${path}`,{headers:{Authorization:`Bearer ${session.token}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'repo-autopilot-chat'},signal:AbortSignal.timeout(20000)});
+    if(!response.ok) throw new GitHubError(response.status,path);
+    return response.json();
+  };
+  const found=new Map();
+  const {installations=[]}=await get('/user/installations?per_page=100');
+  // At most 11 GitHub calls, so a request that reads the list twice stays within the subrequest limit.
+  for(const installation of installations.slice(0,5)) {
+    if(!Number.isSafeInteger(installation?.id)) continue;
+    for(let page=1;page<=2;page++) {
+      const {repositories=[]}=await get(`/user/installations/${installation.id}/repositories?per_page=100&page=${page}`);
+      for(const repo of repositories) if(typeof repo?.full_name==='string') found.set(repo.full_name.toLowerCase(),{fullName:repo.full_name,private:Boolean(repo.private),pushedAt:repo.pushed_at||null});
+      if(repositories.length<100) break;
+    }
+  }
+  const list=[...found.values()].sort((a,b)=>String(b.pushedAt).localeCompare(String(a.pushedAt))||a.fullName.localeCompare(b.fullName));
+  await store.setCache(key,list,REPOS_CACHE_MS);
+  return list;
+}
+
+// The repository a request works on: the requested one if the owner can reach it, else the app's own.
+// A repository the app was just installed on is found by reading the list again once.
+async function resolveRepository(requested,access) {
+  let name=access.config.repository;
+  if(requested!==null&&requested!==undefined&&requested!=='') {
+    try {name=repositoryName(requested);} catch {throw new UserError(400,'Invalid repository.');}
+  }
+  // The app's own repository is always allowed and needs no lookup, as before repository selection.
+  if(name.toLowerCase()===access.config.repository.toLowerCase()) return access.config.repository;
+  const find=list=>list.find(r=>r.fullName.toLowerCase()===name.toLowerCase())?.fullName;
+  const found=find(await accessibleRepos(access))||find(await accessibleRepos({...access,fresh:true}));
+  if(!found) throw new UserError(403,`Repo Autopilot cannot reach ${name}. Install the GitHub App on that repository.`);
+  return found;
+}
+
+// Which cached data a GitHub webhook event makes stale. null: the event changes nothing shown.
+// Check and status events name a commit; it is matched with the head commits of loaded pull requests, so
+// events for other branches (such as pushes to the default branch) cause no reload.
+export function webhookTargets(event,payload) {
+  const numbers=list=>Array.isArray(list)?list.map(item=>item?.number).filter(n=>Number.isSafeInteger(n)&&n>0):[];
+  const commit=sha=>typeof sha==='string'&&/^[0-9a-f]{40}$/.test(sha)?sha:null;
+  switch(event) {
+    case 'pull_request': case 'pull_request_review': case 'pull_request_review_comment': case 'pull_request_review_thread':
+      return {overview:true,pulls:numbers([payload.pull_request])};
+    case 'issue_comment': return payload.issue?.pull_request?{overview:true,pulls:numbers([payload.issue])}:null;
+    case 'check_run': case 'check_suite':
+      return {overview:false,pulls:numbers(payload[event]?.pull_requests),sha:commit(payload[event]?.head_sha)};
+    case 'status': return {overview:false,pulls:[],sha:commit(payload.sha)};
+    case 'workflow_run': return {overview:true,pulls:numbers(payload.workflow_run?.pull_requests)};
+    default: return null;
+  }
+}
+
+// GitHub App webhook: verifies GitHub's HMAC signature, then drops the cached data the event affects.
+// Open dashboards notice the new version within seconds and reload only what changed.
+async function webhook(request,env,store) {
+  if(!env.WEBHOOK_SECRET) throw new UserError(404,'Not found.');
+  if(request.method!=='POST') throw new UserError(405,'Unsupported request.');
+  const signature=/^sha256=([0-9a-f]{64})$/.exec(request.headers.get('X-Hub-Signature-256')||'');
+  if(!signature||!request.body) throw new UserError(401,'Invalid signature.');
+  if(Number(request.headers.get('Content-Length')||0)>WEBHOOK_MAX_BYTES) throw new UserError(413,'Payload too large.');
+  let body;
+  try {body=await readLimited(request.body,WEBHOOK_MAX_BYTES);} catch {throw new UserError(413,'Payload too large.');}
+  const key=await crypto.subtle.importKey('raw',encoder.encode(env.WEBHOOK_SECRET),{name:'HMAC',hash:'SHA-256'},false,['verify']);
+  const expected=Uint8Array.from(signature[1].match(/../g),pair=>parseInt(pair,16));
+  if(!await crypto.subtle.verify('HMAC',key,expected,body)) throw new UserError(401,'Invalid signature.');
+  let payload;
+  try {payload=JSON.parse(new TextDecoder().decode(body));} catch {throw new UserError(400,'Invalid payload.');}
+  const targets=webhookTargets(request.headers.get('X-GitHub-Event')||'',payload||{});
+  const repository=payload?.repository?.full_name;
+  if(targets&&typeof repository==='string'&&/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) await store.invalidate(repository,targets);
+  return new Response(null,{status:204,headers:{'Cache-Control':'no-store'}});
 }
 
 // Live dashboard data from GitHub, cached briefly so several tabs and refreshes share requests.
 // The client passes each pull request's updatedAt, so new commits or comments bypass the cache.
-async function dashboard(url,{store,config,session,fetchImpl}) {
+async function dashboard(url,{store,session,fetchImpl,repository}) {
   const client=createGitHub({token:session.token,fetchImpl,pullLimit:DASHBOARD_PULLS,userAgent:'repo-autopilot-chat'});
   const fresh=url.searchParams.get('fresh')==='1';
   const pull=/^\/api\/dashboard\/pulls\/([1-9]\d{0,8})$/.exec(url.pathname);
   if(url.pathname!=='/api/dashboard'&&!pull) throw new UserError(404,'Not found.');
   const updated=url.searchParams.get('updated')||'';
   if(updated.length>40) throw new UserError(400,'Invalid request.');
-  const key=pull?`pull:${pull[1]}:${updated}`:'overview';
+  const repo=repository.toLowerCase(),key=pull?`pull:${repo}:${pull[1]}:${updated}`:`overview:${repo}`;
   const cached=fresh?null:await store.getCache(key);
   if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
   if(cached) return json(200,cached);
+  const load=await store.startDashboardLoad(repository);
   let value,changed=false;
   try {
     if(pull) {
-      const {item,warnings,changed:moved}=await client.pullDetails(config.repository,await client.pull(config.repository,Number(pull[1])));
+      const {item,warnings,changed:moved}=await client.pullDetails(repository,await client.pull(repository,Number(pull[1])));
       value={...item,warnings};changed=moved;
     } else {
-      const {repo,pulls,...rest}=await client.overview(config.repository);
+      const {repo:ignored,pulls,...rest}=await client.overview(repository);
       value={...rest,pulls:pulls.map(p=>({number:p.number,title:p.title,url:p.html_url,state:p.merged_at?'merged':p.state,updatedAt:p.updated_at}))};
     }
   } catch(error) {
@@ -217,11 +317,11 @@ async function dashboard(url,{store,config,session,fetchImpl}) {
   }
   // A result with a failed part is cached only briefly, so a transient GitHub error does not stick. A pull
   // request that changed while loading is not cached at all: the next load should read it again.
-  if(!changed) await store.setCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS);
+  if(!changed) await store.setDashboardCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS,{repository,...load,pull:pull?{number:Number(pull[1]),sha:value.headSha}:null});
   return json(200,value);
 }
 
-async function chat(body,{env,store,github,config,fetchImpl}) {
+async function chat(body,{env,store,github,config,access,fetchImpl}) {
   const text=typeof body.text==='string'?body.text.trim():'';
   if(!text||text.length>MAX_TEXT) throw new UserError(400,`Write a message between 1 and ${MAX_TEXT} characters.`);
   const image=validateImage(body.image);
@@ -231,24 +331,28 @@ async function chat(body,{env,store,github,config,fetchImpl}) {
     conversation=await store.getConversation(body.conversation);
     if(!conversation) throw new UserError(404,'Conversation not found.');
   }
+  // A conversation stays with the repository it started in; a new one uses the selected repository.
+  const saved=conversation?conversation.repository||config.repository:null;
+  if(saved&&body.repo&&String(body.repo).toLowerCase()!==saved.toLowerCase()) throw new UserError(409,`This conversation belongs to ${saved}. Start a new conversation for another repository.`);
+  const repository=await resolveRepository(saved||body.repo,access),policy=editPolicy(repository,config.repository);
   const lock=randomHex(16);
   // Longer than the worst case below: GitHub reads plus two model calls of at most 150 s each.
   if(!await store.acquireLock('model',lock,420000)) throw new UserError(429,'The agent is still answering another message. Wait until it has finished.');
   try {
-    const client=github(),head=await client.head(),archive=(await client.archive(head.sha)).files,files=textFiles(archive);
+    const client=github(repository),head=await client.head(),archive=(await client.archive(head.sha)).files,files=textFiles(archive);
     const history=conversation?.messages||[];
     const query=[...history.filter(m=>m.role==='user').slice(-2).map(m=>m.content),text].join('\n');
     const context=selectContext(files,query,Number(env.CONTEXT_CHARS)||DEFAULT_CONTEXT_CHARS);
-    const messages=buildMessages({repository:config.repository,head,context,history,text,image});
-    const result=await answer(env,{messages,files,existingPaths:[...archive.keys()],fetchImpl});
+    const messages=buildMessages({repository,head,context,history,text,image,rule:policy.rule});
+    const result=await answer(env,{messages,files,existingPaths:[...archive.keys()],allowed:policy.allowed,fetchImpl});
     const content=result.error?`${result.reply}\n\n⚠ The proposed change could not be applied: ${result.error} Ask the agent to try again.`:result.reply;
     const id=conversation?.id||randomHex(16);
-    await store.saveExchange({conversation:id,title:conversation?null:text.replace(/\s+/g,' ').slice(0,80),user:{content:text,hasImage:Boolean(image)},assistant:{content,proposal:result.proposal}});
+    await store.saveExchange({conversation:id,title:conversation?null:text.replace(/\s+/g,' ').slice(0,80),repository:conversation?null:repository,user:{content:text,hasImage:Boolean(image)},assistant:{content,proposal:result.proposal}});
     return json(200,{conversation:id});
   } finally {await store.releaseLock('model',lock);}
 }
 
-async function pullRequest(body,{store,github}) {
+async function pullRequest(body,{store,github,config,access}) {
   if(typeof body.conversation!=='string'||!/^[0-9a-f]{32}$/.test(body.conversation)||!Number.isSafeInteger(body.message)||body.message<1) throw new UserError(400,'Invalid request.');
   const lock=randomHex(16);
   if(!await store.acquireLock('pull-request',lock,240000)) throw new UserError(429,'A pull request is already being created. Wait a moment.');
@@ -256,12 +360,14 @@ async function pullRequest(body,{store,github}) {
     const message=await store.getMessage(body.conversation,body.message);
     if(!message||message.role!=='assistant'||!message.proposal) throw new UserError(404,'This message has no proposed change.');
     if(message.prUrl) return json(200,{url:message.prUrl});
-    const client=github(),head=await client.head(),{files:archive,executable}=await client.archive(head.sha);
+    const info=await store.getConversationInfo(body.conversation);
+    const repository=await resolveRepository(info?.repository||config.repository,access),policy=editPolicy(repository,config.repository);
+    const client=github(repository),head=await client.head(),{files:archive,executable}=await client.archive(head.sha);
     const edited=new Set(message.proposal.edits.map(e=>e.path));
     let files;
-    try {files=applyEdits(message.proposal.edits,textFiles(new Map([...archive].filter(([path])=>edited.has(path)))),[...archive.keys()]);}
+    try {files=applyEdits(message.proposal.edits,textFiles(new Map([...archive].filter(([path])=>edited.has(path)))),[...archive.keys()],policy.allowed);}
     catch(error) {throw new UserError(409,`The change no longer applies to the current code: ${error.message} Ask the agent to redo it.`);}
-    const title=message.proposal.title||await store.getTitle(body.conversation)||'Change from the agent chat';
+    const title=message.proposal.title||info?.title||'Change from the agent chat';
     const description=`${displayText(message.content).slice(0,4000)}\n\n---\nCreated from the Repo Autopilot chat on ${head.sha.slice(0,10)}. Agent-generated: review the diff and CI before merging.`;
     let url;
     try {url=await client.createPullRequest({base:head.branch,parent:head.sha,files,executable,branch:`autopilot/chat-${body.conversation.slice(0,12)}-${body.message}`,title,body:description});}

@@ -10,14 +10,18 @@ export class ChatStore extends DurableObject {
   deleteSession(hash) {return this.logic.deleteSession(hash);}
   acquireLock(name,owner,ms) {return this.logic.acquireLock(name,owner,ms);}
   releaseLock(name,owner) {return this.logic.releaseLock(name,owner);}
-  listConversations() {return this.logic.listConversations();}
+  listConversations(repository,options) {return this.logic.listConversations(repository,options);}
   getConversation(id) {return this.logic.getConversation(id);}
   getMessage(conversation,id) {return this.logic.getMessage(conversation,id);}
-  getTitle(id) {return this.logic.getTitle(id);}
+  getConversationInfo(id) {return this.logic.getConversationInfo(id);}
   saveExchange(exchange) {return this.logic.saveExchange(exchange);}
   setPullRequest(conversation,id,url) {return this.logic.setPullRequest(conversation,id,url);}
   getCache(key) {return this.logic.getCache(key);}
+  invalidate(repository,targets) {return this.logic.invalidate(repository,targets);}
+  getVersion(repository) {return this.logic.getVersion(repository);}
   setCache(key,value,ms) {return this.logic.setCache(key,value,ms);}
+  startDashboardLoad(repository) {return this.logic.startDashboardLoad(repository);}
+  setDashboardCache(key,value,ms,options) {return this.logic.setDashboardCache(key,value,ms,options);}
 }
 
 export default {fetch:(request,env)=>handle(request,env)};
