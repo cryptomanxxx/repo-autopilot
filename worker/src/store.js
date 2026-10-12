@@ -16,6 +16,7 @@ export class ChatStoreLogic {
     sql.exec(`CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS versions (repository TEXT PRIMARY KEY, version INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS heads (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY (repository, number))`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS commit_events (repository TEXT NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL)`);
     // Conversations from before repository selection have no repository; they belong to the app's own one.
     try {sql.exec('SELECT repository FROM conversations LIMIT 0');}
     catch {sql.exec('ALTER TABLE conversations ADD COLUMN repository TEXT');}
@@ -55,16 +56,24 @@ export class ChatStoreLogic {
     this.sql.exec('INSERT OR REPLACE INTO cache (key, value, expires) VALUES (?, ?, ?)',key,JSON.stringify(value),this.now()+ms);
   }
 
+  // Called before dashboard data is read from GitHub; its result is passed to setDashboardCache.
+  startDashboardLoad(repository) {return {version:this.getVersion(repository),started:this.now()};}
   // Dashboard data from GitHub. It is not cached when a webhook moved the repository's version on while it
   // was loading, because it may predate that event. The head commit of each pull request is remembered so
   // check and status events, which name a commit, find their pull request.
-  setDashboardCache(key,value,ms,{repository,version,pull=null}) {
+  setDashboardCache(key,value,ms,{repository,version,started=this.now(),pull=null}) {
     const repo=repository.toLowerCase();
     // Stale data must not replace a newer head commit either, or later events for it would be missed.
     if(this.getVersion(repo)!==version) return;
-    if(pull&&/^[0-9a-f]{40}$/.test(pull.sha||'')) this.sql.exec('INSERT OR REPLACE INTO heads (repository, number, sha) VALUES (?, ?, ?)',repo,pull.number,pull.sha);
+    if(pull&&/^[0-9a-f]{40}$/.test(pull.sha||'')) {
+      this.sql.exec('INSERT OR REPLACE INTO heads (repository, number, sha) VALUES (?, ?, ?)',repo,pull.number,pull.sha);
+      // A check or status event for this commit arrived while it was loaded for the first time: the data
+      // may predate it, so it is not cached and open dashboards reload once.
+      if(this.rows('DELETE FROM commit_events WHERE repository = ? AND sha = ? AND at >= ? RETURNING sha',repo,pull.sha,started).length) {this.bump(repo);return;}
+    }
     this.setCache(key,value,ms);
   }
+  bump(repo) {this.sql.exec('INSERT INTO versions (repository, version) VALUES (?, 1) ON CONFLICT (repository) DO UPDATE SET version = version + 1',repo);}
 
   // GitHub data is cached under keys that start with the repository (`overview:owner/repo`,
   // `pull:owner/repo:<number>:<updatedAt>`). A webhook event drops the affected entries and moves the
@@ -73,10 +82,17 @@ export class ChatStoreLogic {
     const repo=repository.toLowerCase(),like=value=>value.replace(/[\\%_]/g,'\\$&');
     const numbers=new Set(pulls);
     if(sha) for(const {number} of this.rows('SELECT number FROM heads WHERE repository = ? AND sha = ?',repo,sha)) numbers.add(number);
-    if(!overview&&!numbers.size) return null;
+    if(!overview&&!numbers.size) {
+      // No loaded pull request has this commit yet; one being loaded right now may, see setDashboardCache.
+      if(sha) {
+        this.sql.exec('DELETE FROM commit_events WHERE at < ?',this.now()-600000);
+        this.sql.exec('INSERT INTO commit_events (repository, sha, at) VALUES (?, ?, ?)',repo,sha,this.now());
+      }
+      return null;
+    }
     if(overview) this.sql.exec('DELETE FROM cache WHERE key = ?',`overview:${repo}`);
     for(const number of numbers) this.sql.exec("DELETE FROM cache WHERE key LIKE ? ESCAPE '\\'",`pull:${like(repo)}:${number}:%`);
-    this.sql.exec('INSERT INTO versions (repository, version) VALUES (?, 1) ON CONFLICT (repository) DO UPDATE SET version = version + 1',repo);
+    this.bump(repo);
     return this.getVersion(repo);
   }
   getVersion(repository) {return this.rows('SELECT version FROM versions WHERE repository = ?',repository.toLowerCase())[0]?.version||0;}

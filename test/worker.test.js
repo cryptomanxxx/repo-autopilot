@@ -532,6 +532,14 @@ test('store adds the repository column to conversations saved before repository 
   assert.deepEqual(store.rows('SELECT sha FROM heads WHERE number = 5').map(r=>r.sha),['d'.repeat(40)],'nor does it replace a newer head commit');
   store.setDashboardCache('pull:owner/repo:7:x',{},60000,{repository:'owner/repo',version:2});
   assert.deepEqual(store.getCache('pull:owner/repo:7:x'),{});
+  const first=store.startDashboardLoad('owner/repo'),late='1'.repeat(40);
+  assert.equal(store.invalidate('owner/repo',{sha:late}),null,'a status for a commit not loaded yet changes nothing at once');
+  store.setDashboardCache('pull:owner/repo:8:x',{},60000,{repository:'owner/repo',...first,pull:{number:8,sha:late}});
+  assert.equal(store.getCache('pull:owner/repo:8:x'),null,'a first load that overlapped a status for its commit is not cached');
+  assert.equal(store.getVersion('owner/repo'),3,'and open dashboards reload once');
+  store.setDashboardCache('pull:owner/repo:8:x',{},60000,{repository:'owner/repo',...store.startDashboardLoad('owner/repo'),pull:{number:8,sha:late}});
+  assert.deepEqual(store.getCache('pull:owner/repo:8:x'),{},'the reload is cached');
+  assert.equal(store.invalidate('owner/repo',{sha:late}),4,'later events for the commit find the pull request');
 });
 
 test('the repository list shows where the app is installed and limits every API call to it',async()=>{

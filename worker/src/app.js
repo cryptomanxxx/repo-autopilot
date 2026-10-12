@@ -289,7 +289,7 @@ async function dashboard(url,{store,session,fetchImpl,repository}) {
   const cached=fresh?null:await store.getCache(key);
   if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
   if(cached) return json(200,cached);
-  const version=await store.getVersion(repository);
+  const load=await store.startDashboardLoad(repository);
   let value,changed=false;
   try {
     if(pull) {
@@ -314,7 +314,7 @@ async function dashboard(url,{store,session,fetchImpl,repository}) {
   }
   // A result with a failed part is cached only briefly, so a transient GitHub error does not stick. A pull
   // request that changed while loading is not cached at all: the next load should read it again.
-  if(!changed) await store.setDashboardCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS,{repository,version,pull:pull?{number:Number(pull[1]),sha:value.headSha}:null});
+  if(!changed) await store.setDashboardCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS,{repository,...load,pull:pull?{number:Number(pull[1]),sha:value.headSha}:null});
   return json(200,value);
 }
 
