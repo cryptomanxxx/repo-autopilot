@@ -20,20 +20,20 @@ export const WORKER_SOURCES=['src/agent.js','src/codex.js','src/github.js','src/
 export const editablePath=path=>allowedAgentPath(path)&&!WORKER_SOURCES.includes(path);
 
 // Manifests and build or test-runner configuration: they change what CI installs and runs.
-const BUILD_FILE=/\.(config|workspace)\.|\.conf\.js$|^(setup|conftest|noxfile|conf|manage)\.py$|(requirements|constraints)[^/]*\.txt$|^(cmakelists\.txt|build\.rs|(gulpfile|gruntfile)\.[^.]+|webpack\..*\.js)$/i;
+const BUILD_FILE=/\.(config|workspace)\.|\.conf\.js$|^(setup|conftest|noxfile|conf|manage)\.py$|(requirements|constraints)[^/]*\.txt$|^(cmakelists\.txt|build\.rs|build\.clj|project\.clj|mix\.exs|package\.swift|setup\.hs|conanfile\.py|fabfile\.py|magefile\.go|(premake5|xmake)\.lua|(gulpfile|gruntfile)\.[^.]+|webpack\..*\.js)$/i;
 // Other repositories: source, style, page and documentation files outside hidden folders, installed or
 // generated code. Workflows, manifests, lockfiles, environment files and build configuration stay read-only.
 export function generalEditablePath(path) {
   if(typeof path!=='string'||path.length>300||path.includes('\\')||!SOURCE_FILE.test(path)) return false;
   const parts=path.split('/');
-  return parts.every(p=>p&&p!=='..'&&p!=='.'&&!p.startsWith('.')&&!SKIPPED_DIRS.has(p))&&!BUILD_FILE.test(parts.at(-1))&&!parts.slice(0,-1).some(p=>p.toLowerCase()==='requirements');
+  return parts.every(p=>p&&p!=='..'&&p!=='.'&&!p.startsWith('.')&&!SKIPPED_DIRS.has(p))&&!BUILD_FILE.test(parts.at(-1))&&!parts.slice(0,-1).some(p=>p.toLowerCase()==='requirements')&&!(parts[0]==='project'&&parts.at(-1).endsWith('.scala'));
 }
 
 // The edit rules for a repository: the app's own repository keeps the stricter list that protects the
 // agent's code; any other repository uses the general one.
 export function editPolicy(repository,home) {
   if(repository.toLowerCase()===home.toLowerCase()) return {allowed:editablePath,rule:`Only these paths may be edited: README.md and .js, .css, .html or .md files under src/, public/ or test/. Never edit the agent itself (worker/, ${WORKER_SOURCES.join(', ')}), workflows, dependencies or credentials.`};
-  return {allowed:generalEditablePath,rule:'Only source, style, page and documentation files may be edited (for example .js, .ts, .tsx, .css, .html, .md, .py, .go, .rs, .java, .cs, .rb, .php), never files in hidden folders such as .github, never package manifests (package.json, requirements.txt, setup.py), lockfiles, environment files, build output, or build and test-runner configuration (*.config.*, conftest.py, webpack files).'};
+  return {allowed:generalEditablePath,rule:'Only source, style, page and documentation files may be edited (for example .js, .ts, .tsx, .css, .html, .md, .py, .go, .rs, .java, .cs, .rb, .php), never files in hidden folders such as .github, never package manifests (package.json, requirements.txt, setup.py), lockfiles, environment files, build output, or build and test-runner configuration (*.config.*, conftest.py, build.rs, Package.swift, mix.exs, project.clj, webpack files).'};
 }
 
 const SYSTEM_PROMPT=`You are the coding agent for a GitHub repository, talking with its owner in a chat.

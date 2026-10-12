@@ -62,7 +62,7 @@ The **Agent chat** tab lets you talk to the coding agent directly. You sign in w
 
 When the agent proposes a change it adds exact search/replace blocks. The Worker checks them against the current files, and each search text must match exactly once. Which files may be edited depends on the repository:
 
-- **Other repositories:** source, style, page and documentation files (for example `.js`, `.ts`, `.tsx`, `.css`, `.html`, `.md`, `.py`, `.go`, `.rs`, `.java`, `.cs`, `.rb`, `.php`). Never files in hidden folders such as `.github`, package manifests (`package.json`, `requirements*.txt`, `setup.py`), lockfiles, environment files, `node_modules`, build output, or build and test-runner configuration (`*.config.*`, `conftest.py`, `build.rs`, webpack, gulp and Grunt files).
+- **Other repositories:** source, style, page and documentation files (for example `.js`, `.ts`, `.tsx`, `.css`, `.html`, `.md`, `.py`, `.go`, `.rs`, `.java`, `.cs`, `.rb`, `.php`). Never files in hidden folders such as `.github`, package manifests (`package.json`, `requirements*.txt`, `setup.py`), lockfiles, environment files, `node_modules`, build output, or build and test-runner configuration (`*.config.*`, `conftest.py`, `build.rs`, `Package.swift`, `mix.exs`, `project.clj`, webpack, gulp and Grunt files).
 - **Repo Autopilot itself:** only README and `.js`, `.css`, `.html` and `.md` files under `src/`, `public/` and `test/`, minus the files the Worker runs on (see *Limits*).
 
  
