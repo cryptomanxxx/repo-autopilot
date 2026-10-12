@@ -36,6 +36,8 @@ function followPull(url) {
 
 // Splits text into prose and code: ``` fences and SEARCH/REPLACE edit blocks are shown as code.
 function renderContent(text) {
+  // The PR-TITLE line is shown with the proposed change instead.
+  text=text.replace(/^PR-TITLE:.*(?:\r?\n|$)/gm,'');
   const fragment=document.createDocumentFragment();
   const pattern=/```[^\n]*\n([\s\S]*?)```|^<<<<<<< SEARCH[^\n]*\n[\s\S]*?^>>>>>>> REPLACE[ \t]*$/gm;
   let last=0;
@@ -56,7 +58,7 @@ function renderMessage(message) {
   item.append(renderContent(message.content));
   if(message.proposal) {
     const box=document.createElement('div');box.className='proposal';
-    const files=document.createElement('p');files.textContent=`Proposed change: ${message.proposal.paths.join(', ')}`;box.append(files);
+    const files=document.createElement('p');files.textContent=`Proposed change${message.proposal.title?`: ${message.proposal.title}`:''} · ${message.proposal.paths.join(', ')}`;box.append(files);
     if(message.prUrl) {
       const link=document.createElement('a');link.href=message.prUrl;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open pull request';box.append(link);
       const number=followPull(message.prUrl);
