@@ -22,7 +22,7 @@ export const editablePath=path=>allowedAgentPath(path)&&!WORKER_SOURCES.includes
 // .NET writes build output to bin/Debug and bin/Release; other bin folders often hold real scripts.
 const generated=parts=>parts.slice(0,-1).some((p,i)=>SKIPPED_DIRS.has(p.toLowerCase())||p.toLowerCase()==='bin'&&/^(debug|release)$/i.test(parts[i+1]||''));
 // Manifests and build or test-runner configuration: they change what CI installs and runs.
-const BUILD_FILE=/\.(config|workspace)\.|\.conf\.[^.]+$|^(setup|conftest|noxfile|conf|manage)\.py$|(requirements|constraints)[^/]*\.txt$|^(cmakelists\.txt|build\.rs|build\.clj|project\.clj|mix\.exs|package\.swift|setup\.hs|conanfile\.py|fabfile\.py|magefile\.go|(premake5|xmake)\.lua|(gulpfile|gruntfile)\.[^.]+|webpack\..*\.js)$/i;
+const BUILD_FILE=/\.(config|workspace)\.|\.conf\.[^.]+$|^(setup|conftest|noxfile|conf|manage)\.py$|(requirements|constraints)[^/]*\.txt$|^(cmakelists\.txt|build\.rs|build\.clj|project\.clj|mix\.exs|package\.swift|setup\.hs|conanfile\.py|fabfile\.py|magefile\.go|(premake5|xmake)\.lua|(gulpfile|gruntfile|webpack|rollup)\..+)$/i;
 // Other repositories: source, style, page and documentation files outside hidden folders, installed or
 // generated code. Workflows, manifests, lockfiles, environment files and build configuration stay read-only.
 export function generalEditablePath(path) {
