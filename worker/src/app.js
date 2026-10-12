@@ -86,6 +86,8 @@ async function readJson(request) {
   throw new UserError(400,'Invalid request.');
 }
 
+const chatStore=env=>env.CHAT.get(env.CHAT.idFromName('main'));
+
 export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
   const config=settings(env,request);
   const url=new URL(request.url);
@@ -95,6 +97,8 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
       if(!env.ASSETS) return withHeaders(new Response('Not found',{status:404}),secure);
       return withHeaders(await env.ASSETS.fetch(request),secure);
     }
+    // GitHub signs webhook deliveries, so they need neither the app's settings nor its browser origin.
+    if(url.pathname==='/api/webhook') return withHeaders(await webhook(request,env,chatStore(env)),secure);
     if(config.error) return withHeaders(json(503,{error:config.error}),secure);
     if(!config.sameOrigin) return withHeaders(json(404,{error:'Not found.'}),secure);
     return withHeaders(await route(request,env,config,url,{fetchImpl,now}),secure);
@@ -107,7 +111,7 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
 }
 
 async function route(request,env,config,url,{fetchImpl,now}) {
-  const store=env.CHAT.get(env.CHAT.idFromName('main'));
+  const store=chatStore(env);
   const sessionCookie=config.secure?'__Host-autopilot_session':'autopilot_session';
   const cookie=(name,value,{path='/',maxAge}={})=>`${name}=${value}; Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${maxAge??(value?28800:0)}${config.secure?'; Secure':''}`;
   const callback=`${config.origin}/auth/callback`;
@@ -146,7 +150,6 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     return redirect('/',[cookie(sessionCookie,id),cookie('autopilot_login','',{path:'/auth'})]);
   }
 
-  if(url.pathname==='/api/webhook') return webhook(request,env,store);
 
   const sessionId=cookies(request)[sessionCookie];
   const hash=sessionId&&/^[0-9a-f]{64}$/.test(sessionId)?hex(await sha256(sessionId)):null;

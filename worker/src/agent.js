@@ -9,7 +9,7 @@ const MAX_FILE_CHARS=100000,MAX_HISTORY=10,MAX_HISTORY_CHARS=6000,MAX_EDITS=12,M
 const LANGUAGES='js|mjs|cjs|jsx|ts|mts|cts|tsx|css|scss|sass|less|html|md|mdx|txt|py|vue|svelte|astro|sql|prisma|graphql|gql|go|rs|java|kt|swift|c|h|cc|cpp|cxx|hpp|hh|cs|rb|php|scala|dart|lua|ex|exs|erl|hs|clj|r';
 const TEXT_FILE=new RegExp(`\\.(${LANGUAGES}|json|jsonc|toml|ya?ml|xml|gradle|kts|sh)$`,'i');
 // Folders with installed or generated code, and lockfiles: never read or edited.
-const SKIPPED_DIRS=new Set(['node_modules','dist','build','out','coverage','vendor']),LOCKFILES=new Set(['package-lock.json','yarn.lock','pnpm-lock.yaml','npm-shrinkwrap.json']);
+const SKIPPED_DIRS=new Set(['node_modules','bower_components','dist','build','_build','out','coverage','vendor','target','obj','deriveddata','pods','deps','__pycache__','venv','site-packages']),LOCKFILES=new Set(['package-lock.json','yarn.lock','pnpm-lock.yaml','npm-shrinkwrap.json']);
 const SOURCE_FILE=new RegExp(`\\.(${LANGUAGES})$`,'i');
 const STOP_WORDS=new Set(['that','this','with','from','have','what','when','where','which','should','would','could','there','their','about','into','them','then','than','also','just','like','make','some','will','your','code','file','files','repo','change','please','inte','till','vill','eller','vara','alla','ingen','göra','bara','också','sedan','efter','innan','mycket','finns','skulle','borde']);
 const SCAN_CHARS=20000,MAX_WORDS=30;
@@ -19,6 +19,8 @@ const SCAN_CHARS=20000,MAX_WORDS=30;
 export const WORKER_SOURCES=['src/agent.js','src/codex.js','src/github.js','src/progress.js'];
 export const editablePath=path=>allowedAgentPath(path)&&!WORKER_SOURCES.includes(path);
 
+// .NET writes build output to bin/Debug and bin/Release; other bin folders often hold real scripts.
+const generated=parts=>parts.slice(0,-1).some((p,i)=>SKIPPED_DIRS.has(p.toLowerCase())||p.toLowerCase()==='bin'&&/^(debug|release)$/i.test(parts[i+1]||''));
 // Manifests and build or test-runner configuration: they change what CI installs and runs.
 const BUILD_FILE=/\.(config|workspace)\.|\.conf\.[^.]+$|^(setup|conftest|noxfile|conf|manage)\.py$|(requirements|constraints)[^/]*\.txt$|^(cmakelists\.txt|build\.rs|build\.clj|project\.clj|mix\.exs|package\.swift|setup\.hs|conanfile\.py|fabfile\.py|magefile\.go|(premake5|xmake)\.lua|(gulpfile|gruntfile)\.[^.]+|webpack\..*\.js)$/i;
 // Other repositories: source, style, page and documentation files outside hidden folders, installed or
@@ -26,7 +28,7 @@ const BUILD_FILE=/\.(config|workspace)\.|\.conf\.[^.]+$|^(setup|conftest|noxfile
 export function generalEditablePath(path) {
   if(typeof path!=='string'||path.length>300||path.includes('\\')||!SOURCE_FILE.test(path)) return false;
   const parts=path.split('/');
-  return parts.every(p=>p&&p!=='..'&&p!=='.'&&!p.startsWith('.')&&!SKIPPED_DIRS.has(p))&&!BUILD_FILE.test(parts.at(-1))&&!parts.slice(0,-1).some(p=>p.toLowerCase()==='requirements')&&!(parts[0]==='project'&&parts.at(-1).endsWith('.scala'));
+  return parts.every(p=>p&&p!=='..'&&p!=='.'&&!p.startsWith('.'))&&!generated(parts)&&!BUILD_FILE.test(parts.at(-1))&&!parts.slice(0,-1).some(p=>p.toLowerCase()==='requirements')&&!(parts[0]==='project'&&parts.at(-1).endsWith('.scala'));
 }
 
 // The edit rules for a repository: the app's own repository keeps the stricter list that protects the
@@ -60,7 +62,7 @@ Only include edit blocks when the owner wants code changed. The owner reviews th
 export function readableFile(path,size) {
   if(size>MAX_FILE_CHARS||!TEXT_FILE.test(path)) return false;
   const parts=path.split('/');
-  if(LOCKFILES.has(parts.at(-1))||parts.some(p=>SKIPPED_DIRS.has(p))) return false;
+  if(LOCKFILES.has(parts.at(-1))||generated(parts)) return false;
   if(parts.some(p=>p.startsWith('.'))) return /^\.github\/workflows\/[^/]+\.ya?ml$/.test(path);
   return true;
 }
