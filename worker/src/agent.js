@@ -124,7 +124,8 @@ export function parseEdits(answer) {
   const opened=(text.match(/^<<<<<<< SEARCH/gm)||[]).length;
   if(opened!==edits.length) throw new PublicError('An edit block is incomplete or malformed.');
   if(edits.length>MAX_EDITS) throw new PublicError(`Too many edit blocks (maximum ${MAX_EDITS}).`);
-  const title=/^PR-TITLE:[ \t]*(.+)$/m.exec(text)?.[1].trim().slice(0,100)||null;
+  // The title line is read outside the edit blocks, so a PR-TITLE line that an edit changes is not taken for it.
+  const title=/^PR-TITLE:[ \t]*(.+)$/m.exec(text.replace(BLOCK,''))?.[1].trim().slice(0,100)||null;
   return {edits,title};
 }
 

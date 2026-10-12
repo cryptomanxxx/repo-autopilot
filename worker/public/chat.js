@@ -35,18 +35,22 @@ function followPull(url) {
 }
 
 // Splits text into prose and code: ``` fences and SEARCH/REPLACE edit blocks are shown as code.
-function renderContent(text) {
+// hideTitle drops the first PR-TITLE line found in the prose, never one inside code or an edit.
+function renderContent(text,{hideTitle=false}={}) {
   const fragment=document.createDocumentFragment();
   const pattern=/```[^\n]*\n([\s\S]*?)```|^<<<<<<< SEARCH[^\n]*\n[\s\S]*?^>>>>>>> REPLACE[ \t]*$/gm;
   let last=0;
   for(const match of text.matchAll(pattern)) {
-    if(match.index>last) {const p=document.createElement('p');p.textContent=text.slice(last,match.index).trim();if(p.textContent) fragment.append(p);}
+    if(match.index>last) prose(text.slice(last,match.index));
     const pre=document.createElement('pre');pre.textContent=match[1]??match[0];fragment.append(pre);
     last=match.index+match[0].length;
   }
-  const rest=text.slice(last).trim();
-  if(rest) {const p=document.createElement('p');p.textContent=rest;fragment.append(p);}
+  prose(text.slice(last));
   return fragment;
+  function prose(part) {
+    if(hideTitle&&/^PR-TITLE:/m.test(part)) {part=part.replace(/^PR-TITLE:.*(?:\r?\n|$)/m,'');hideTitle=false;}
+    const p=document.createElement('p');p.textContent=part.trim();if(p.textContent) fragment.append(p);
+  }
 }
 
 function renderMessage(message) {
@@ -54,7 +58,7 @@ function renderMessage(message) {
   const label=document.createElement('strong');label.textContent=message.role==='user'?'You':'Agent';item.append(label);
   if(message.hasImage) {const note=document.createElement('span');note.className='muted small';note.textContent=' · image attached';item.append(note);}
   // An answer's PR-TITLE line is shown with its proposed change instead.
-  item.append(renderContent(message.role==='assistant'&&message.proposal?.title?message.content.replace(/^PR-TITLE:.*(?:\r?\n|$)/m,''):message.content));
+  item.append(renderContent(message.content,{hideTitle:message.role==='assistant'&&Boolean(message.proposal?.title)}));
   if(message.proposal) {
     const box=document.createElement('div');box.className='proposal';
     const files=document.createElement('p');files.textContent=`Proposed change${message.proposal.title?`: ${message.proposal.title}`:''} · ${message.proposal.paths.join(', ')}`;box.append(files);
