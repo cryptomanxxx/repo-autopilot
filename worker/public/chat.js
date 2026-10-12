@@ -92,7 +92,9 @@ function addRepoOption(name) {
 function fillRepos(repositories) {
   const picker=$('repo-picker');
   picker.replaceChildren(...repositories.map(r=>new Option(`${repoLabel(r.fullName)}${r.private?' · private':''}`,r.fullName)));
-  addRepoOption(state.repository);
+  // A repository the app no longer reaches (uninstalled or renamed) gives way to the app's own.
+  if(repositories.some(r=>sameRepo(r.fullName,state.repository))) addRepoOption(state.repository);
+  else selectRepository(state.home);
 }
 async function loadRepos(fresh=false) {
   const {repositories}=await api(`/api/repos${fresh?'?fresh=1':''}`);
@@ -227,8 +229,10 @@ $('tab-chat').onclick=()=>showTab('chat');
 $('repo-picker').onchange=()=>{if(state.busy) $('repo-picker').value=state.repository;else selectRepository($('repo-picker').value);};
 $('repo-reload').onclick=async()=>{
   setBusy(true);status('Reloading repositories…');
-  try {fillRepos(await loadRepos(true));status('');} catch(error) {status(error.message);}
+  let repositories=null;
+  try {repositories=await loadRepos(true);status('');} catch(error) {status(error.message);}
   finally {setBusy(false);}
+  if(repositories) fillRepos(repositories);
 };
 try {
   const session=await api('/api/session');
