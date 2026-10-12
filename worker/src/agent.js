@@ -5,10 +5,12 @@ export const DEFAULT_MODEL='@cf/meta/llama-4-scout-17b-16e-instruct';
 export const DEFAULT_CONTEXT_CHARS=60000,MODEL_TIMEOUT=150000;
 const CUT_OFF='\n\n[The answer was cut off at the output limit.]';
 const MAX_FILE_CHARS=100000,MAX_HISTORY=10,MAX_HISTORY_CHARS=6000,MAX_EDITS=12,MAX_CHANGED_FILES=8,MAX_RESULT_CHARS=200000;
-const TEXT_FILE=/\.(js|mjs|cjs|jsx|ts|mts|cts|tsx|css|scss|sass|less|html|md|mdx|json|jsonc|toml|ya?ml|txt|py|vue|svelte|astro|sql|prisma|graphql|gql|sh)$/;
+// Source code in common languages; SOURCE_FILE is the editable part, TEXT_FILE adds read-only formats.
+const LANGUAGES='js|mjs|cjs|jsx|ts|mts|cts|tsx|css|scss|sass|less|html|md|mdx|txt|py|vue|svelte|astro|sql|prisma|graphql|gql|go|rs|java|kt|swift|c|h|cc|cpp|cxx|hpp|hh|cs|rb|php|scala|dart|lua|ex|exs|erl|hs|clj|r';
+const TEXT_FILE=new RegExp(`\\.(${LANGUAGES}|json|jsonc|toml|ya?ml|xml|gradle|kts|sh)$`);
 // Folders with installed or generated code, and lockfiles: never read or edited.
 const SKIPPED_DIRS=new Set(['node_modules','dist','build','out','coverage','vendor']),LOCKFILES=new Set(['package-lock.json','yarn.lock','pnpm-lock.yaml','npm-shrinkwrap.json']);
-const SOURCE_FILE=/\.(js|mjs|cjs|jsx|ts|mts|cts|tsx|css|scss|sass|less|html|md|mdx|txt|py|vue|svelte|astro|sql|prisma|graphql|gql)$/;
+const SOURCE_FILE=new RegExp(`\\.(${LANGUAGES})$`);
 const STOP_WORDS=new Set(['that','this','with','from','have','what','when','where','which','should','would','could','there','their','about','into','them','then','than','also','just','like','make','some','will','your','code','file','files','repo','change','please','inte','till','vill','eller','vara','alla','ingen','göra','bara','också','sedan','efter','innan','mycket','finns','skulle','borde']);
 const SCAN_CHARS=20000,MAX_WORDS=30;
 
@@ -18,7 +20,7 @@ export const WORKER_SOURCES=['src/agent.js','src/codex.js','src/github.js','src/
 export const editablePath=path=>allowedAgentPath(path)&&!WORKER_SOURCES.includes(path);
 
 // Manifests and build or test-runner configuration: they change what CI installs and runs.
-const BUILD_FILE=/\.(config|workspace)\.|\.conf\.js$|^(setup|conftest|noxfile|conf|manage)\.py$|(requirements|constraints)[^/]*\.txt$|^(cmakelists\.txt|(gulpfile|gruntfile)\.[^.]+|webpack\..*\.js)$/i;
+const BUILD_FILE=/\.(config|workspace)\.|\.conf\.js$|^(setup|conftest|noxfile|conf|manage)\.py$|(requirements|constraints)[^/]*\.txt$|^(cmakelists\.txt|build\.rs|(gulpfile|gruntfile)\.[^.]+|webpack\..*\.js)$/i;
 // Other repositories: source, style, page and documentation files outside hidden folders, installed or
 // generated code. Workflows, manifests, lockfiles, environment files and build configuration stay read-only.
 export function generalEditablePath(path) {
@@ -31,7 +33,7 @@ export function generalEditablePath(path) {
 // agent's code; any other repository uses the general one.
 export function editPolicy(repository,home) {
   if(repository.toLowerCase()===home.toLowerCase()) return {allowed:editablePath,rule:`Only these paths may be edited: README.md and .js, .css, .html or .md files under src/, public/ or test/. Never edit the agent itself (worker/, ${WORKER_SOURCES.join(', ')}), workflows, dependencies or credentials.`};
-  return {allowed:generalEditablePath,rule:'Only source, style, page and documentation files may be edited (for example .js, .ts, .tsx, .css, .html, .md, .py), never files in hidden folders such as .github, never package manifests (package.json, requirements.txt, setup.py), lockfiles, environment files, build output, or build and test-runner configuration (*.config.*, conftest.py, webpack files).'};
+  return {allowed:generalEditablePath,rule:'Only source, style, page and documentation files may be edited (for example .js, .ts, .tsx, .css, .html, .md, .py, .go, .rs, .java, .cs, .rb, .php), never files in hidden folders such as .github, never package manifests (package.json, requirements.txt, setup.py), lockfiles, environment files, build output, or build and test-runner configuration (*.config.*, conftest.py, webpack files).'};
 }
 
 const SYSTEM_PROMPT=`You are the coding agent for a GitHub repository, talking with its owner in a chat.

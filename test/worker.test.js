@@ -497,9 +497,9 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
 });
 
 test('other repositories use the general edit rules; the app\'s own repository keeps the strict ones',()=>{
-  for(const path of ['src/App.tsx','app/page.tsx','lib/util.ts','styles/main.scss','docs/guide.md','server/main.py','index.html','components/Card.vue'])
+  for(const path of ['src/App.tsx','app/page.tsx','lib/util.ts','styles/main.scss','docs/guide.md','server/main.py','index.html','components/Card.vue','cmd/server/main.go','src/lib.rs','app/src/main/java/App.java','Program.cs','lib/thing.rb','src/Kernel.php','src/main.cpp'])
     assert.equal(generalEditablePath(path),true,path);
-  for(const path of ['.github/workflows/ci.yml','.env','src/.env.local','package.json','package-lock.json','tsconfig.json','vite.config.ts','next.config.mjs','requirements.txt','api/requirements-dev.txt','setup.py','node_modules/x/index.js','dist/app.js','src/../x.ts','/abs.ts','a//b.ts','deploy.sh','src\\a.ts','src/data.json','dev-requirements.txt','requirements/base.txt','constraints.txt','CMakeLists.txt','tests/conftest.py','noxfile.py','docs/conf.py','gulpfile.js','Gruntfile.js','karma.conf.js','webpack.prod.js','vitest.workspace.ts','Vite.Config.ts','vite.config.prod.ts',42])
+  for(const path of ['.github/workflows/ci.yml','.env','src/.env.local','package.json','package-lock.json','tsconfig.json','vite.config.ts','next.config.mjs','requirements.txt','api/requirements-dev.txt','setup.py','node_modules/x/index.js','dist/app.js','src/../x.ts','/abs.ts','a//b.ts','deploy.sh','src\\a.ts','src/data.json','dev-requirements.txt','requirements/base.txt','constraints.txt','CMakeLists.txt','tests/conftest.py','noxfile.py','docs/conf.py','gulpfile.js','Gruntfile.js','karma.conf.js','webpack.prod.js','vitest.workspace.ts','Vite.Config.ts','vite.config.prod.ts','build.rs','build.gradle.kts','pom.xml','go.mod','Cargo.toml',42])
     assert.equal(generalEditablePath(path),false,String(path));
   assert.equal(editPolicy('Owner/Repo','owner/repo').allowed('src/App.tsx'),false,'the home repository keeps its strict list');
   assert.equal(editPolicy('owner/other','owner/repo').allowed('src/App.tsx'),true);
