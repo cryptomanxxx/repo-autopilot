@@ -528,6 +528,8 @@ test('store adds the repository column to conversations saved before repository 
   assert.equal(store.getVersion('OWNER/REPO'),2);assert.equal(store.getVersion('owner/other'),0);
   store.setDashboardCache('pull:owner/repo:7:x',{},60000,{repository:'owner/repo',version:1});
   assert.equal(store.getCache('pull:owner/repo:7:x'),null,'data loaded before a webhook event is not cached');
+  store.setDashboardCache('pull:owner/repo:5:y',{},60000,{repository:'owner/repo',version:1,pull:{number:5,sha:'f'.repeat(40)}});
+  assert.deepEqual(store.rows('SELECT sha FROM heads WHERE number = 5').map(r=>r.sha),['d'.repeat(40)],'nor does it replace a newer head commit');
   store.setDashboardCache('pull:owner/repo:7:x',{},60000,{repository:'owner/repo',version:2});
   assert.deepEqual(store.getCache('pull:owner/repo:7:x'),{});
 });

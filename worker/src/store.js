@@ -60,8 +60,10 @@ export class ChatStoreLogic {
   // check and status events, which name a commit, find their pull request.
   setDashboardCache(key,value,ms,{repository,version,pull=null}) {
     const repo=repository.toLowerCase();
+    // Stale data must not replace a newer head commit either, or later events for it would be missed.
+    if(this.getVersion(repo)!==version) return;
     if(pull&&/^[0-9a-f]{40}$/.test(pull.sha||'')) this.sql.exec('INSERT OR REPLACE INTO heads (repository, number, sha) VALUES (?, ?, ?)',repo,pull.number,pull.sha);
-    if(this.getVersion(repo)===version) this.setCache(key,value,ms);
+    this.setCache(key,value,ms);
   }
 
   // GitHub data is cached under keys that start with the repository (`overview:owner/repo`,
