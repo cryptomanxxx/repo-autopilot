@@ -210,7 +210,7 @@ export async function callModel(env,messages,{fetchImpl=fetch}={}) {
 }
 
 // Asks the model, and when its edit blocks cannot be applied, gives it one chance to correct them.
-export async function answer(env,{messages,files,existingPaths,allowed=editablePath,fetchImpl}) {
+export async function answer(env,{messages,files,existingPaths,allowed=editablePath,fetchImpl,onStep=()=>{}}) {
   let result=await callModel(env,messages,{fetchImpl});
   for(let attempt=0;;attempt++) {
     const reply=result.truncated?result.text+CUT_OFF:result.text;
@@ -220,10 +220,12 @@ export async function answer(env,{messages,files,existingPaths,allowed=editableP
     try {
       const {edits,title}=parseEdits(reply);
       if(!edits.length) return {reply,proposal:null,error:null};
+      onStep(`Checking ${edits.length} proposed edit${edits.length===1?'':'s'} against the current files…`);
       applyEdits(edits,files,existingPaths,allowed);
       return {reply,proposal:{edits,title},error:null};
     } catch(error) {
       if(attempt>0) return {reply,proposal:null,error:error.message};
+      onStep(`An edit did not apply (${error.message}) Asking the model to correct it…`);
       try {result=await callModel(env,[...messages,{role:'assistant',content:reply},{role:'user',content:`Your edit blocks could not be applied: ${error.message} Send your complete answer again with corrected edit blocks. Copy SEARCH text exactly from the supplied file contents.`}],{fetchImpl});}
       catch {return {reply,proposal:null,error:error.message};}
     }

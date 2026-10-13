@@ -4,12 +4,34 @@ const $=id=>document.getElementById(id);
 const status=text=>{$('status').textContent=text;};
 const MAX_SIDE=1600,MAX_DATA_URL=1400000;
 
-async function api(path,body,timeout=30000) {
-  const response=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-CSRF-Token':state.csrf}:{},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(timeout)});
+const request=(path,body,timeout)=>fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-CSRF-Token':state.csrf}:{},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(timeout)});
+async function readResponse(response,path) {
   let value={};try {value=await response.json();} catch {}
   if(response.status===401&&path!=='/api/session') {showSignedOut(value.error||'Sign in again.');throw new Error(value.error||'Sign in again.');}
   if(!response.ok) throw new Error(value.error||`Request failed (HTTP ${response.status}).`);
   return value;
+}
+async function api(path,body,timeout=30000) {return readResponse(await request(path,body,timeout),path);}
+
+// The chat answer arrives as lines of JSON: progress steps, then a done or an error line.
+async function chatStream(body,onStep) {
+  const response=await request('/api/chat',body,430000);
+  if(!(response.headers.get('Content-Type')||'').includes('ndjson')) return readResponse(response,'/api/chat');
+  const reader=response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer='',last=null;
+  for(;;) {
+    const {value,done}=await reader.read();
+    if(done) break;
+    buffer+=value;
+    for(let end=buffer.indexOf('\n');end>=0;end=buffer.indexOf('\n')) {
+      const line=buffer.slice(0,end).trim();buffer=buffer.slice(end+1);
+      if(!line) continue;
+      const event=JSON.parse(line);
+      if(event.type==='step') onStep(event.text);else last=event;
+    }
+  }
+  if(last?.type==='done') return last;
+  throw new Error(last?.error||'The connection to the agent was lost. Open the conversation again to see whether the answer was saved.');
 }
 
 function showSignedOut(message) {
@@ -53,20 +75,43 @@ function renderContent(text,{hideTitle=false}={}) {
   }
 }
 
+const shortSha=sha=>sha.slice(0,7);
+// Which code an answer is based on; marked when the branch has moved on since.
+function renderMeta(meta) {
+  const line=document.createElement('p');line.className='meta muted small';
+  line.textContent=`${meta.repository} · ${meta.branch} @ ${shortSha(meta.sha)} · read ${meta.read} of ${meta.files} files`;
+  line.dataset.sha=meta.sha;line.dataset.branch=meta.branch;
+  const stale=document.createElement('span');stale.className='stale';stale.hidden=true;line.append(stale);
+  return line;
+}
+const ciText={success:'✅ CI passed',failure:'❌ CI failed',pending:'⏳ CI running'};
+const codexText={clear:'👍 Codex clear',findings:'⚠ Codex findings',running:'🔄 Codex reviewing',requested:'🔄 Codex reviewing'};
+function pullStatusText(pr) {
+  if(pr.state==='merged') return `PR #${pr.number} · merged`;
+  if(pr.state==='closed') return `PR #${pr.number} · closed without merge`;
+  return [`PR #${pr.number}`,ciText[pr.ci]||'CI unknown',codexText[pr.codex?.state]||'Codex not reviewed yet',pr.readiness?.label].filter(Boolean).join(' · ');
+}
+
 function renderMessage(message) {
   const item=document.createElement('article');item.className=`message ${message.role}`;
   const label=document.createElement('strong');label.textContent=message.role==='user'?'You':'Agent';item.append(label);
   if(message.hasImage) {const note=document.createElement('span');note.className='muted small';note.textContent=' · image attached';item.append(note);}
+  if(message.role==='assistant'&&message.meta) item.append(renderMeta(message.meta));
   // An answer's PR-TITLE line is shown with its proposed change instead.
   item.append(renderContent(message.content,{hideTitle:message.role==='assistant'&&Boolean(message.proposal?.title)}));
   if(message.proposal) {
     const box=document.createElement('div');box.className='proposal';
     const files=document.createElement('p');files.textContent=`Proposed change${message.proposal.title?`: ${message.proposal.title}`:''} · ${message.proposal.paths.join(', ')}`;box.append(files);
     if(message.prUrl) {
-      const link=document.createElement('a');link.href=message.prUrl;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open pull request';box.append(link);
       const number=followPull(message.prUrl);
+      if(number) {const badge=document.createElement('p');badge.className='pr-status';badge.dataset.number=String(number);badge.textContent=`PR #${number}`;box.append(badge);}
+      const link=document.createElement('a');link.href=message.prUrl;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open pull request';box.append(link);
       if(number) {const follow=document.createElement('button');follow.type='button';follow.className='secondary';follow.textContent='Follow in dashboard';follow.onclick=()=>{showTab('dashboard',{hash:`#pr-${number}`});showPull(number);};box.append(follow);}
     } else if(message.id) {
+      // Pull requests are opened from a new branch on the latest default branch (see /api/pull-request).
+      const target=document.createElement('p');target.className='muted small target';
+      target.textContent=`Opens a pull request into ${message.meta?.branch||'the default branch'} from the new branch autopilot/chat-${(state.conversation||'').slice(0,12)}-${message.id}.`;
+      box.append(target);
       const button=document.createElement('button');button.textContent='Create pull request';
       button.onclick=()=>createPullRequest(message.id,button);box.append(button);
     }
@@ -80,7 +125,41 @@ function renderMessages(messages) {
   if(!messages.length) {const p=document.createElement('p');p.className='muted empty';p.textContent='Ask about the code or describe a change. The agent reads the repository\'s current files and can propose edits; you decide whether to open a pull request.';container.append(p);}
   for(const message of messages) container.append(renderMessage(message));
   container.lastElementChild?.scrollIntoView({block:'end'});
+  refreshThread();
 }
+
+// Live details of the open conversation: whether the branch has moved on since each answer, and the
+// status of pull requests opened from it. Webhook events move the repository's version on.
+let threadVersion=null;
+async function refreshThread() {
+  const conversation=state.conversation,repository=state.repository,container=$('messages');
+  const metas=[...container.querySelectorAll('.meta')],pulls=[...container.querySelectorAll('.pr-status')];
+  if(!conversation||(!metas.length&&!pulls.length)) return;
+  const repo=`repo=${encodeURIComponent(repository)}`;
+  const current=()=>state.conversation===conversation&&state.repository===repository;
+  // The version is read first, so an event that arrives during this refresh triggers another one.
+  try {const {version}=await api(`/api/dashboard/version?${repo}`);if(current()) threadVersion=version;} catch {}
+  if(!current()) return;
+  if(metas.length) api(`/api/head?${repo}`).then(head=>{
+    if(!current()) return;
+    for(const line of metas) {
+      const stale=line.querySelector('.stale');stale.hidden=line.dataset.branch!==head.branch||line.dataset.sha===head.sha;
+      stale.textContent=` · ${head.branch} has moved on to ${shortSha(head.sha)}`;
+    }
+    for(const target of container.querySelectorAll('.target')) {
+      const line=target.closest('.message')?.querySelector('.meta');
+      if(line&&!line.querySelector('.stale').hidden) target.textContent=target.textContent.replace(/( The edits are applied to the latest .*)?$/,` The edits are applied to the latest ${head.branch}; if they no longer fit, you will be told.`);
+    }
+  }).catch(()=>{});
+  for(const element of pulls) api(`/api/dashboard/pulls/${element.dataset.number}?${repo}`).then(pr=>{if(current()) element.textContent=pullStatusText(pr);}).catch(()=>{});
+}
+setInterval(async()=>{
+  if(state.tab!=='chat'||document.hidden||!state.conversation||!$('messages').querySelector('.meta,.pr-status')) return;
+  try {
+    const {version}=await api(`/api/dashboard/version?repo=${encodeURIComponent(state.repository)}`);
+    if(version!==threadVersion) refreshThread();
+  } catch {}
+},15000);
 
 // The repository picker. The choice is remembered on this device; conversations belong to a repository.
 const sameRepo=(a,b)=>a.toLowerCase()===b.toLowerCase();
@@ -212,10 +291,13 @@ $('composer').onsubmit=async event=>{
   setBusy(true);$('send').disabled=true;$('message').disabled=true;$('image').disabled=true;
   const container=$('messages');container.querySelector('.empty')?.remove();
   container.append(renderMessage({role:'user',content:text,hasImage:Boolean(state.image)}));
-  const thinking=document.createElement('p');thinking.className='muted thinking';thinking.textContent='The agent is reading the code and writing an answer…';container.append(thinking);thinking.scrollIntoView({block:'end'});
+  // What the agent is doing, step by step; the current step is the last one.
+  const thinking=document.createElement('ol');thinking.className='steps muted';container.append(thinking);
+  const step=text=>{thinking.lastElementChild?.classList.add('done');const item=document.createElement('li');item.textContent=text;thinking.append(item);item.scrollIntoView({block:'end'});};
+  step(`Reading the latest code of ${state.repository}…`);
   status('');
   try {
-    const result=await api('/api/chat',{conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image},430000);
+    const result=await chatStream({conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image},step);
     $('message').value='';clearImage();thinking.remove();
     setBusy(false);state.conversation=result.conversation;await openConversation(result.conversation);
   } catch(error) {
