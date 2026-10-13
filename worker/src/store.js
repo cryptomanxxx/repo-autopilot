@@ -2,8 +2,8 @@
 // (`sql.exec(query, ...bindings)` returning a cursor with `toArray()`), so every method runs
 // atomically inside the Durable Object and can be tested with any SQLite adapter.
 const HOUR=3600000;
-const MESSAGE_COLUMNS='id, role, content, has_image, proposal, pr_url, created';
-const toMessage=m=>({id:m.id,role:m.role,content:m.content,hasImage:Boolean(m.has_image),proposal:m.proposal?JSON.parse(m.proposal):null,prUrl:m.pr_url||null,created:m.created});
+const MESSAGE_COLUMNS='id, role, content, has_image, proposal, pr_url, meta, created';
+const toMessage=m=>({id:m.id,role:m.role,content:m.content,hasImage:Boolean(m.has_image),proposal:m.proposal?JSON.parse(m.proposal):null,prUrl:m.pr_url||null,meta:m.meta?JSON.parse(m.meta):null,created:m.created});
 
 export class ChatStoreLogic {
   constructor(sql,now=Date.now) {
@@ -20,6 +20,9 @@ export class ChatStoreLogic {
     // Conversations from before repository selection have no repository; they belong to the app's own one.
     try {sql.exec('SELECT repository FROM conversations LIMIT 0');}
     catch {sql.exec('ALTER TABLE conversations ADD COLUMN repository TEXT');}
+    // Answers record the repository, branch and commit they were based on; older ones have none.
+    try {sql.exec('SELECT meta FROM messages LIMIT 0');}
+    catch {sql.exec('ALTER TABLE messages ADD COLUMN meta TEXT');}
   }
   rows(query,...bindings) {return this.sql.exec(query,...bindings).toArray();}
 
@@ -78,11 +81,11 @@ export class ChatStoreLogic {
   // GitHub data is cached under keys that start with the repository (`overview:owner/repo`,
   // `pull:owner/repo:<number>:<updatedAt>`). A webhook event drops the affected entries and moves the
   // repository's version on, which tells open dashboards to reload. Returns null when nothing shown changed.
-  invalidate(repository,{overview=false,pulls=[],sha=null}={}) {
+  invalidate(repository,{overview=false,pulls=[],sha=null,head=false}={}) {
     const repo=repository.toLowerCase(),like=value=>value.replace(/[\\%_]/g,'\\$&');
     const numbers=new Set(pulls);
     if(sha) for(const {number} of this.rows('SELECT number FROM heads WHERE repository = ? AND sha = ?',repo,sha)) numbers.add(number);
-    if(!overview&&!numbers.size) {
+    if(!overview&&!head&&!numbers.size) {
       // No loaded pull request has this commit yet; one being loaded right now may, see setDashboardCache.
       if(sha) {
         this.sql.exec('DELETE FROM commit_events WHERE at < ?',this.now()-600000);
@@ -90,6 +93,7 @@ export class ChatStoreLogic {
       }
       return null;
     }
+    if(overview||head) this.sql.exec('DELETE FROM cache WHERE key = ?',`head:${repo}`);
     if(overview) this.sql.exec('DELETE FROM cache WHERE key = ?',`overview:${repo}`);
     for(const number of numbers) this.sql.exec("DELETE FROM cache WHERE key LIKE ? ESCAPE '\\'",`pull:${like(repo)}:${number}:%`);
     this.bump(repo);
@@ -111,9 +115,9 @@ export class ChatStoreLogic {
     const messages=this.rows(`SELECT ${MESSAGE_COLUMNS} FROM messages WHERE conversation = ? ORDER BY id`,id).map(toMessage);
     return {...conversation,messages};
   }
-  addMessage(conversation,{role,content,hasImage=false,proposal=null}) {
+  addMessage(conversation,{role,content,hasImage=false,proposal=null,meta=null}) {
     const now=this.now();
-    const [row]=this.rows('INSERT INTO messages (conversation, role, content, has_image, proposal, created) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',conversation,role,content,hasImage?1:0,proposal?JSON.stringify(proposal):null,now);
+    const [row]=this.rows('INSERT INTO messages (conversation, role, content, has_image, proposal, meta, created) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id',conversation,role,content,hasImage?1:0,proposal?JSON.stringify(proposal):null,meta?JSON.stringify(meta):null,now);
     this.sql.exec('UPDATE conversations SET updated = ? WHERE id = ?',now,conversation);
     return row.id;
   }

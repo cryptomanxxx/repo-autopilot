@@ -8,7 +8,7 @@ const encoder=new TextEncoder();
 const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
 // Each dashboard request stays far below the Workers subrequest limit: the overview needs three GitHub
 // calls and each pull request is loaded by its own request with at most ten.
-export const DASHBOARD_PULLS=6,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR,ERROR_CACHE_MS=30000,REPOS_CACHE_MS=300000,WEBHOOK_MAX_BYTES=5000000;
+export const DASHBOARD_PULLS=6,HEAD_CACHE_MS=60000,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR,ERROR_CACHE_MS=30000,REPOS_CACHE_MS=300000,WEBHOOK_MAX_BYTES=5000000;
 const hex=bytes=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
 const randomHex=(bytes=32)=>hex(crypto.getRandomValues(new Uint8Array(bytes)));
 const base64url=bytes=>{let s='';for(const b of bytes) s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
@@ -185,8 +185,17 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   if(request.method==='GET'&&conversationPath) {
     const conversation=await store.getConversation(conversationPath[1]);
     if(!conversation) throw new UserError(404,'Conversation not found.');
-    return json(200,{...conversation,repository:conversation.repository||config.repository,messages:conversation.messages.map(m=>({id:m.id,role:m.role,content:m.content,hasImage:m.hasImage,created:m.created,prUrl:m.prUrl,proposal:m.proposal?{title:m.proposal.title,paths:[...new Set(m.proposal.edits.map(e=>e.path))]}:null}))});
+    return json(200,{...conversation,repository:conversation.repository||config.repository,messages:conversation.messages.map(m=>({id:m.id,role:m.role,content:m.content,hasImage:m.hasImage,created:m.created,prUrl:m.prUrl,meta:m.meta,proposal:m.proposal?{title:m.proposal.title,paths:[...new Set(m.proposal.edits.map(e=>e.path))]}:null}))});
   }
+  // The default branch's latest commit, so the chat can tell when an answer is based on older code.
+  if(request.method==='GET'&&url.pathname==='/api/head') return run(async()=>{
+    const repository=await resolveRepository(url.searchParams.get('repo'),access),key=`head:${repository.toLowerCase()}`;
+    const cached=await store.getCache(key);
+    if(cached) return json(200,cached);
+    const load=await store.startDashboardLoad(repository),head=await github(repository).head();
+    await store.setDashboardCache(key,head,HEAD_CACHE_MS,{repository,...load});
+    return json(200,head);
+  });
   if(request.method!=='POST') throw new UserError(405,'Unsupported request.');
   if(request.headers.get('Origin')!==config.origin||request.headers.get('X-CSRF-Token')!==session.csrf) throw new UserError(403,'The request could not be verified. Reload the page.');
   if(url.pathname==='/api/logout') {
@@ -254,6 +263,8 @@ export function webhookTargets(event,payload) {
       return {overview:false,pulls:numbers(payload[event]?.pull_requests),sha:commit(payload[event]?.head_sha)};
     case 'status': return {overview:false,pulls:[],sha:commit(payload.sha)};
     case 'workflow_run': return {overview:true,pulls:numbers(payload.workflow_run?.pull_requests)};
+    // A push to the default branch moves the commit that chat answers are compared with.
+    case 'push': return payload.ref&&payload.ref===`refs/heads/${payload.repository?.default_branch}`?{overview:false,pulls:[],head:true}:null;
     default: return null;
   }
 }
@@ -338,18 +349,42 @@ async function chat(body,{env,store,github,config,access,fetchImpl}) {
   const lock=randomHex(16);
   // Longer than the worst case below: GitHub reads plus two model calls of at most 150 s each.
   if(!await store.acquireLock('model',lock,420000)) throw new UserError(429,'The agent is still answering another message. Wait until it has finished.');
+  let streaming=false;
   try {
+    // GitHub is read before the answer starts streaming, so its refusals keep their HTTP status.
+    const load=await store.startDashboardLoad(repository);
     const client=github(repository),head=await client.head(),archive=(await client.archive(head.sha)).files,files=textFiles(archive);
+    // The latest commit just read is also what the chat compares answers with, unless a push arrived meanwhile.
+    await store.setDashboardCache(`head:${repository.toLowerCase()}`,head,HEAD_CACHE_MS,{repository,...load});
     const history=conversation?.messages||[];
     const query=[...history.filter(m=>m.role==='user').slice(-2).map(m=>m.content),text].join('\n');
     const context=selectContext(files,query,Number(env.CONTEXT_CHARS)||DEFAULT_CONTEXT_CHARS);
+    const meta={repository,branch:head.branch,sha:head.sha,read:context.included.length,files:Object.keys(files).length};
     const messages=buildMessages({repository,head,context,history,text,image,rule:policy.rule});
-    const result=await answer(env,{messages,files,existingPaths:[...archive.keys()],allowed:policy.allowed,fetchImpl});
-    const content=result.error?`${result.reply}\n\n⚠ The proposed change could not be applied: ${result.error} Ask the agent to try again.`:result.reply;
-    const id=conversation?.id||randomHex(16);
-    await store.saveExchange({conversation:id,title:conversation?null:text.replace(/\s+/g,' ').slice(0,80),repository:conversation?null:repository,user:{content:text,hasImage:Boolean(image)},assistant:{content,proposal:result.proposal}});
-    return json(200,{conversation:id});
-  } finally {await store.releaseLock('model',lock);}
+    streaming=true;
+    // The answer streams progress steps as lines of JSON, ending with a done or an error line.
+    return progressStream(async send=>{
+      try {
+        send({type:'step',text:`Read ${repository} · ${head.branch} @ ${head.sha.slice(0,7)} · ${meta.files} files`});
+        send({type:'step',text:`Chose ${meta.read} relevant file${meta.read===1?'':'s'}; asking the model…`});
+        const result=await answer(env,{messages,files,existingPaths:[...archive.keys()],allowed:policy.allowed,fetchImpl,onStep:text=>send({type:'step',text})});
+        const content=result.error?`${result.reply}\n\n⚠ The proposed change could not be applied: ${result.error} Ask the agent to try again.`:result.reply;
+        const id=conversation?.id||randomHex(16);
+        await store.saveExchange({conversation:id,title:conversation?null:text.replace(/\s+/g,' ').slice(0,80),repository:conversation?null:repository,user:{content:text,hasImage:Boolean(image)},assistant:{content,proposal:result.proposal,meta}});
+        send({type:'done',conversation:id});
+      } catch(error) {
+        if(!(error instanceof UserError||error instanceof PublicError)) console.error('chat request failed',error?.stack||error);
+        send({type:'error',status:Number.isInteger(error?.status)?error.status:500,error:error instanceof UserError||error instanceof PublicError?error.message:'Request failed. Please try again.'});
+      } finally {await store.releaseLock('model',lock);}
+    });
+  } finally {if(!streaming) await store.releaseLock('model',lock);}
+}
+
+function progressStream(work) {
+  const {readable,writable}=new TransformStream(),writer=writable.getWriter();
+  const send=value=>{writer.write(encoder.encode(JSON.stringify(value)+'\n')).catch(()=>{});};
+  work(send).catch(error=>console.error('chat stream failed',error?.stack||error)).finally(()=>writer.close().catch(()=>{}));
+  return new Response(readable,{status:200,headers:{'Content-Type':'application/x-ndjson; charset=utf-8','Cache-Control':'no-store'}});
 }
 
 async function pullRequest(body,{store,github,config,access}) {

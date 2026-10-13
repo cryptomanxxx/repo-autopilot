@@ -154,8 +154,10 @@ test('messages carry files, history and the current image',()=>{
 test('a failed edit gets one correction round before it is reported',async()=>{
   const replies=['<<<<<<< SEARCH public/a.js\nwrong\n=======\nnew\n>>>>>>> REPLACE','<<<<<<< SEARCH public/a.js\nold\n=======\nnew\n>>>>>>> REPLACE'];
   const calls=[];const env={AI:{run:async(model,input)=>{calls.push(input);return {response:replies.shift()};}}};
-  const result=await answer(env,{messages:[{role:'user',content:'x'}],files:{'public/a.js':'old\n'},existingPaths:['public/a.js']});
+  const steps=[];
+  const result=await answer(env,{messages:[{role:'user',content:'x'}],files:{'public/a.js':'old\n'},existingPaths:['public/a.js'],onStep:text=>steps.push(text)});
   assert.equal(result.error,null);assert.equal(result.proposal.edits[0].search,'old');
+  assert.equal(steps.length,3);assert.match(steps[1],/did not apply .*correct it/,'the correction round is reported as a step');
   assert.match(calls[1].messages.at(-1).content,/does not match/);
   assert.equal(calls[0].max_tokens,4096);
   const failing={AI:{run:async()=>({response:'<<<<<<< SEARCH public/a.js\nwrong\n=======\nnew\n>>>>>>> REPLACE'})}};
@@ -252,6 +254,12 @@ async function session(env,fetchImpl) {
   const info=await (await handle(request('/api/session',{cookie:id}),env,{fetchImpl})).json();
   return {cookie:id,csrf:info.csrf,info};
 }
+// A chat answer streams lines of JSON; this returns its steps and its last (done or error) line.
+async function streamed(response) {
+  assert.match(response.headers.get('Content-Type'),/ndjson/);
+  const events=(await response.text()).split('\n').filter(Boolean).map(line=>JSON.parse(line));
+  return {...events.at(-1),steps:events.filter(e=>e.type==='step').map(e=>e.text)};
+}
 const post=(path,auth,body,headers={})=>request(path,{method:'POST',cookie:auth.cookie,body,headers:{Origin:ORIGIN,'X-CSRF-Token':auth.csrf,...headers}});
 
 test('sign-in requires the owner, a GitHub App token and the starting browser',async()=>{
@@ -318,7 +326,9 @@ test('chat answers from repository files and opens a pull request on request',as
   const auth=await session(env,fetchImpl);
   const sent=await handle(post('/api/chat',auth,{text:'Change the title in public/app.js'}),env,{fetchImpl});
   assert.equal(sent.status,200);
-  const {conversation}=await sent.json();
+  const {conversation,type,steps}=await streamed(sent);
+  assert.equal(type,'done');assert.match(steps[0],/^Read owner\/(repo|other) · main @ aaaaaaa · \d+ files$/);
+  assert.ok(steps.some(step=>/^Checking 1 proposed edit against/.test(step)),steps.join(' | '));
   assert.match(conversation,/^[0-9a-f]{32}$/);
   assert.equal(inputs[0].model,'@cf/meta/llama-4-scout-17b-16e-instruct');
   assert.match(inputs[0].input.messages[0].content,/----- FILE public\/app\.js -----\nconst title="Old";/);
@@ -327,6 +337,20 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.equal(thread.title,'Change the title in public/app.js');
   const reply=thread.messages[1];
   assert.deepEqual(reply.proposal,{title:'New title',paths:['public/app.js']});
+  assert.deepEqual(reply.meta,{repository:'owner/repo',branch:'main',sha:'a'.repeat(40),read:2,files:2},'an answer records the code it was based on');
+  assert.equal(thread.messages[0].meta,null);
+  calls.length=0;
+  const head=await (await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl})).json();
+  assert.deepEqual(head,{branch:'main',sha:'a'.repeat(40)});
+  await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl});
+  assert.equal(calls.length,0,'the commit the chat just read is cached for comparisons');
+  store.rows("DELETE FROM cache WHERE key = 'head:owner/repo'");
+  await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl});await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl});
+  assert.equal(calls.length,2,'the latest commit is read once and cached briefly');
+  store.rows("DELETE FROM cache WHERE key = 'head:owner/repo'");
+  const pushed=async(url,options)=>{if(url.endsWith('/git/ref/heads/main')) store.invalidate('owner/repo',{head:true});return fetchImpl(url,options);};
+  await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl:pushed});
+  assert.equal(store.getCache('head:owner/repo'),null,'a commit read while a push arrived is not cached');
   assert.equal(JSON.stringify(thread).includes('ghu_user'),false);
   const created=await handle(post('/api/pull-request',auth,{conversation,message:reply.id}),env,{fetchImpl});
   assert.deepEqual(await created.json(),{url:'https://github.com/owner/repo/pull/7'});
@@ -345,7 +369,7 @@ test('pull requests keep file modes and can be retried after a partial failure',
   const calls=[],{env,store}=environment();
   env.AI.run=async()=>({response:'<<<<<<< SEARCH public/app.js\nconst title="Old";\n=======\nconst title="New";\n>>>>>>> REPLACE'});
   const auth=await session(env,github({calls}));
-  const {conversation}=await (await handle(post('/api/chat',auth,{text:'Change it'}),env,{fetchImpl:github({calls})})).json();
+  const {conversation}=await streamed(await handle(post('/api/chat',auth,{text:'Change it'}),env,{fetchImpl:github({calls})}));
   const message=store.getConversation(conversation).messages[1].id;
   const failed=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,pullStatus:502,executable:['public/app.js']})});
   assert.equal(failed.status,500);assert.match((await failed.json()).error,/HTTP 502/);
@@ -383,7 +407,7 @@ test('chat reports stale changes, busy agent, expired tokens and refused writes'
   const calls=[],{env,store}=environment();
   env.AI.run=async()=>({response:'<<<<<<< SEARCH public/app.js\nconst title="Old";\n=======\nconst title="New";\n>>>>>>> REPLACE'});
   const auth=await session(env,github({calls}));
-  const {conversation}=await (await handle(post('/api/chat',auth,{text:'Change it'}),env,{fetchImpl:github({calls})})).json();
+  const {conversation}=await streamed(await handle(post('/api/chat',auth,{text:'Change it'}),env,{fetchImpl:github({calls})}));
   const message=store.getConversation(conversation).messages[1].id;
   const moved=github({calls,head:'b'.repeat(40),repoFiles:{'public/app.js':'const title="Changed";\n'}});
   const stale=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:moved});
@@ -399,7 +423,9 @@ test('chat reports stale changes, busy agent, expired tokens and refused writes'
   assert.equal((await handle(post('/api/chat',auth,{text:''}),env,{fetchImpl:github({calls})})).status,400);
   env.AI.run=async()=>{throw new Error('3036: Account limited');};
   const failed=await handle(post('/api/chat',auth,{text:'Hello',conversation}),env,{fetchImpl:github({calls})});
-  assert.equal(failed.status,500);assert.match((await failed.json()).error,/Account limited/);
+  const failure=await streamed(failed);
+  assert.equal(failure.type,'error');assert.match(failure.error,/Account limited/);
+  assert.equal(store.acquireLock('model','t2',1),true,'a failed answer releases the model lock');store.releaseLock('model','t2');
   assert.equal(store.getConversation(conversation).messages.length,2,'a failed answer stores nothing');
   const expiredToken=async(url,options)=>url.startsWith('https://api.github.com/repos/')?new Response('{}',{status:401}):github({calls})(url,options);
   const expired=await handle(post('/api/chat',auth,{text:'Hello',conversation}),env,{fetchImpl:expiredToken});
@@ -533,14 +559,16 @@ test('store adds the repository column to conversations saved before repository 
   assert.deepEqual(store.rows('SELECT sha FROM heads WHERE number = 5').map(r=>r.sha),['d'.repeat(40)],'nor does it replace a newer head commit');
   store.setDashboardCache('pull:owner/repo:7:x',{},60000,{repository:'owner/repo',version:2});
   assert.deepEqual(store.getCache('pull:owner/repo:7:x'),{});
+  store.setCache('head:owner/repo',{sha:'x'},60000);
+  assert.equal(store.invalidate('owner/repo',{head:true}),3);assert.equal(store.getCache('head:owner/repo'),null,'a push drops the cached latest commit');
   const first=store.startDashboardLoad('owner/repo'),late='1'.repeat(40);
   assert.equal(store.invalidate('owner/repo',{sha:late}),null,'a status for a commit not loaded yet changes nothing at once');
   store.setDashboardCache('pull:owner/repo:8:x',{},60000,{repository:'owner/repo',...first,pull:{number:8,sha:late}});
   assert.equal(store.getCache('pull:owner/repo:8:x'),null,'a first load that overlapped a status for its commit is not cached');
-  assert.equal(store.getVersion('owner/repo'),3,'and open dashboards reload once');
+  assert.equal(store.getVersion('owner/repo'),4,'and open dashboards reload once');
   store.setDashboardCache('pull:owner/repo:8:x',{},60000,{repository:'owner/repo',...store.startDashboardLoad('owner/repo'),pull:{number:8,sha:late}});
   assert.deepEqual(store.getCache('pull:owner/repo:8:x'),{},'the reload is cached');
-  assert.equal(store.invalidate('owner/repo',{sha:late}),4,'later events for the commit find the pull request');
+  assert.equal(store.invalidate('owner/repo',{sha:late}),5,'later events for the commit find the pull request');
 });
 
 test('the repository list shows where the app is installed and limits every API call to it',async()=>{
@@ -578,7 +606,9 @@ test('chat in another repository keeps its conversations there and uses the gene
   calls.length=0;
   const sent=await handle(post('/api/chat',auth,{text:'Change the title in src/App.tsx',repo:'owner/other'}),env,{fetchImpl});
   assert.equal(sent.status,200);
-  const {conversation}=await sent.json();
+  const {conversation,type,steps}=await streamed(sent);
+  assert.equal(type,'done');assert.match(steps[0],/^Read owner\/(repo|other) · main @ aaaaaaa · \d+ files$/);
+  assert.ok(steps.some(step=>/^Checking 1 proposed edit against/.test(step)),steps.join(' | '));
   assert.match(inputs[0].messages[0].content,/Repository: owner\/other,/);
   assert.match(inputs[0].messages[0].content,/never files in hidden folders/);
   assert.ok(calls.some(c=>c.url.includes('/repos/owner/other/tarball/')),'the selected repository is read');
@@ -594,7 +624,7 @@ test('chat in another repository keeps its conversations there and uses the gene
   assert.equal(created.status,200);
   assert.ok(calls.some(c=>c.method==='POST'&&c.url==='https://api.github.com/repos/owner/other/pulls'),'the pull request is opened in the conversation\'s repository');
   env.AI.run=async()=>({response:'<<<<<<< SEARCH .github/workflows/ci.yml\non: push\n=======\non: pull_request\n>>>>>>> REPLACE'});
-  const refused=await (await handle(post('/api/chat',auth,{text:'Change CI',repo:'owner/other'}),env,{fetchImpl})).json();
+  const refused=await streamed(await handle(post('/api/chat',auth,{text:'Change CI',repo:'owner/other'}),env,{fetchImpl}));
   const answer=await (await handle(request(`/api/conversations/${refused.conversation}`,{cookie:auth.cookie}),env,{fetchImpl})).json();
   assert.equal(answer.messages[1].proposal,null,'workflows in other repositories cannot be edited');
 });
@@ -647,4 +677,6 @@ test('webhook events map to the dashboard data they change',()=>{
   assert.deepEqual(webhookTargets('status',{sha}),{overview:false,pulls:[],sha});
   assert.deepEqual(webhookTargets('workflow_run',{workflow_run:{pull_requests:[{number:9}]}}),{overview:true,pulls:[9]});
   for(const event of ['ping','push','installation','star']) assert.equal(webhookTargets(event,{}),null,event);
+  assert.deepEqual(webhookTargets('push',{ref:'refs/heads/main',repository:{default_branch:'main'}}),{overview:false,pulls:[],head:true});
+  assert.equal(webhookTargets('push',{ref:'refs/heads/feature',repository:{default_branch:'main'}}),null,'pushes to other branches change nothing shown');
 });
