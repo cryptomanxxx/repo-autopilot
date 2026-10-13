@@ -226,7 +226,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity,codex='clear'}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity,codex='clear',commentStatus=201}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -251,6 +251,7 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(/^\/(pulls\/7\/(reviews|comments|commits)|issues\/7\/(comments|reactions))\?per_page=100$/.test(path)) return ok([],detailStatus);
     if(path===`/commits/${'b'.repeat(40)}/status?per_page=100`) return ok({statuses:[]});
     if(path===`/commits/${'b'.repeat(40)}/check-runs?per_page=100`) return ok({total_count:1,check_runs:[{name:'test',status:'completed',conclusion:mergeCi}]});
+    if(method==='POST'&&path==='/issues/7/comments') return ok({id:1},commentStatus);
     if(method==='PUT'&&path==='/pulls/7/merge') return ok({merged:true},mergeStatus);
     if(method==='DELETE'&&path==='/git/refs/heads/autopilot/chat-abc-2') return new Response(null,{status:204});
     return ok({message:'not found'},404);
@@ -436,6 +437,28 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.equal((await merge({number:8})).status,404,'an unknown pull request is not found');
   for(const extra of [{repository:undefined},{number:'7'},{number:0}]) assert.equal((await merge(extra)).status,400);
 
+});
+
+test('Codex can be asked to fix its findings once per head commit',async()=>{
+  const calls=[],{env,store}=environment(),fetchImpl=github({calls});
+  const auth=await session(env,fetchImpl);
+  const ask=(extra={},fetch=fetchImpl)=>handle(post('/api/codex-fix',auth,{repository:'owner/repo',number:7,sha:'b'.repeat(40),...extra}),env,{fetchImpl:fetch});
+  const asked=await ask();
+  assert.deepEqual(await asked.json(),{asked:true});
+  const comment=calls.find(c=>c.method==='POST'&&c.url.endsWith('/issues/7/comments'));
+  assert.deepEqual(JSON.parse(comment.options.body),{body:'@codex address that feedback'},'the comment Codex acts on');
+  assert.equal(comment.options.headers.Authorization,'Bearer ghu_user','posted with the owner\'s GitHub account');
+  calls.length=0;
+  const again=await ask();
+  assert.equal(again.status,409);assert.match((await again.json()).error,/already asked/);
+  assert.equal(calls.some(c=>c.method==='POST'),false,'asked at most once per commit');
+  assert.equal((await ask({sha:'c'.repeat(40)})).status,409,'only for the head commit that was shown');
+  assert.equal((await ask({number:8})).status,404);
+  for(const extra of [{repository:undefined},{number:'7'},{sha:'b'}]) assert.equal((await ask(extra)).status,400);
+  store.rows("DELETE FROM cache WHERE key LIKE 'codex-fix:%'");
+  const refused=await ask({},github({calls:[],commentStatus:403}));
+  assert.equal(refused.status,403);assert.match((await refused.json()).error,/Pull requests set to Read and write/);
+  assert.equal((await ask()).status,200,'a refused comment can be retried');
 });
 
 test('pull requests keep file modes and can be retried after a partial failure',async()=>{

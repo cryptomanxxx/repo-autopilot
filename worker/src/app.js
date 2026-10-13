@@ -206,6 +206,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   if(url.pathname==='/api/chat') return run(()=>chat(body,{env,store,github,config,access,fetchImpl}));
   if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github,config,access}));
   if(url.pathname==='/api/merge') return run(()=>mergePullRequest(body,{store,github,access}));
+  if(url.pathname==='/api/codex-fix') return run(()=>askCodexFix(body,{store,github,access}));
   throw new UserError(404,'Not found.');
 }
 
@@ -399,6 +400,33 @@ export function pullDescription({request,explanation,changes,sha}) {
     `## Files\n\n${changes.map(file).join('\n')}`,
     `---\nCreated from the Repo Autopilot chat on ${sha.slice(0,10)}. Agent-generated: review the diff and CI before merging.`,
   ].filter(Boolean).join('\n\n');
+}
+
+// Asks Codex, on the pull request, to fix its own review findings; Codex then pushes a commit. The comment
+// is posted with the owner's GitHub account, at most once per head commit, and only for the head shown.
+const CODEX_FIX_COMMENT='@codex address that feedback';
+async function askCodexFix(body,{store,github,access}) {
+  if(typeof body.repository!=='string'||!Number.isSafeInteger(body.number)||body.number<1) throw new UserError(400,'Invalid request.');
+  if(typeof body.sha!=='string'||!/^[0-9a-f]{40}$/.test(body.sha)) throw new UserError(400,'Reload the pull request status first.');
+  const repository=await resolveRepository(body.repository,access),number=body.number,client=github(repository);
+  let pull;
+  try {pull=await client.api(`pulls/${number}`);}
+  catch(error) {if(error instanceof GitHubError&&error.status===404) throw new UserError(404,`PR #${number} was not found.`);throw error;}
+  if(pull.state!=='open'||pull.merged) throw new UserError(409,`PR #${number} is no longer open.`);
+  if(pull.head?.sha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
+  const key=`codex-fix:${repository.toLowerCase()}:${number}:${body.sha}`,lock=randomHex(16);
+  if(!await store.acquireLock(key,lock,30000)) throw new UserError(429,'Codex is already being asked. Wait a moment.');
+  try {
+    if(await store.getCache(key)) throw new UserError(409,`Codex was already asked to fix PR #${number} at this commit. Wait for its new commit.`);
+    try {await client.api(`issues/${number}/comments`,{method:'POST',body:{body:CODEX_FIX_COMMENT}});}
+    catch(error) {
+      if(error instanceof GitHubError&&[403,404].includes(error.status)) throw new UserError(403,`GitHub refused the comment on PR #${number} (HTTP ${error.status}). Check that the GitHub App has Pull requests set to Read and write.`);
+      throw error;
+    }
+    await store.setCache(key,{at:Date.now()},7*24*HOUR);
+    await store.invalidate(repository,{pulls:[number]});
+    return json(200,{asked:true});
+  } finally {await store.releaseLock(key,lock);}
 }
 
 // Merges a pull request from the dashboard, exactly at the head commit the owner saw checked, once Codex
