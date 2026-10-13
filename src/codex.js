@@ -4,9 +4,11 @@ const matchesHead = (sha, head) => typeof sha === 'string' && /^[a-f0-9]{7,40}$/
 const time = value => Date.parse(value) || 0;
 
 // Reactions belong to a PR, not a commit. Require separate current-head evidence.
-export function codexStatus(head, {reviews = [], comments = [], inline = [], reactions = [], truncated = false} = {}) {
+export function codexStatus(head, {reviews = [], comments = [], inline = [], reactions = [], truncated = false, headAt = null} = {}) {
   const result = (state, label, evidence = {}) => ({state, label, ...evidence});
-  if (truncated) return result('unknown', 'Codex: incomplete history');
+  // A history cut off at the page limit may hide a request, a running review or an outcome for this
+  // commit, so it is told apart from finding no review evidence at all.
+  if (truncated) return result('incomplete', 'Codex: incomplete history');
   const events = [];
   for (const r of reviews.filter(isBot)) {
     if (matchesHead(r.commit_id,head) && ['CHANGES_REQUESTED','COMMENTED'].includes(r.state) && /automated review suggestions|CHANGES_REQUESTED/i.test(`${r.body} ${r.state}`)) events.push({state:'findings',label:'Codex: findings',at:time(r.submitted_at),commit:r.commit_id,url:r.html_url});
@@ -32,7 +34,10 @@ export function codexStatus(head, {reviews = [], comments = [], inline = [], rea
   }
   events.sort((a,b)=>b.at-a.at || (a.state === 'findings' ? -1 : 1));
   const latest=events[0];
-  const request=comments.filter(c=>!isBot(c) && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '')).reduce((at,c)=>Math.max(at,time(c.created_at)),0);
+  // Review requests are PR-wide comments; one made before the current head was committed asked about
+  // earlier code, so it does not count as a request for this commit.
+  const since=time(headAt);
+  const request=comments.filter(c=>!isBot(c) && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '') && time(c.created_at)>=since).reduce((at,c)=>Math.max(at,time(c.created_at)),0);
   if(latest && request>latest.at) return result('requested','Codex: review requested (commit unverified)');
   if(latest) {const {at,...event}=latest;return event;}
   if(request) return result('requested','Codex: review requested (commit unverified)');

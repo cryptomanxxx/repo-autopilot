@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mergeBlocker} from '../worker/public/dashboard-view.js';
+import {mergeBlocker,CODEX_ACTIONS} from '../worker/public/dashboard-view.js';
 
 test('the dashboard offers merging only after a Codex 👍 and with no known blocker',()=>{
   const pr={codex:{state:'clear'},readiness:{state:'unknown',reasons:['GitHub merge eligibility is not confirmed']}};
@@ -8,4 +8,11 @@ test('the dashboard offers merging only after a Codex 👍 and with no known blo
   assert.equal(mergeBlocker({...pr,readiness:{state:'ready',reasons:[]}}),'');
   for(const state of ['findings','running','requested','unverified','unknown']) assert.match(mergeBlocker({...pr,codex:{state}}),/Codex 👍/);
   assert.match(mergeBlocker({...pr,readiness:{state:'not_ready',reasons:['CI failed']}}),/Not ready: CI failed/);
+});
+
+test('the dashboard offers to ask Codex to fix findings, or to review code it has not reviewed',()=>{
+  const offered=state=>CODEX_ACTIONS.filter(a=>a.show(state)).map(a=>a.kind);
+  assert.deepEqual(offered('findings'),['fix']);
+  for(const state of ['unknown','unverified']) assert.deepEqual(offered(state),['review']);
+  for(const state of ['clear','running','requested','incomplete']) assert.deepEqual(offered(state),[],'nothing to ask while Codex is busy or done, or its history is cut off');
 });

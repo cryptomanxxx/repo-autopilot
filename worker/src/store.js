@@ -5,6 +5,7 @@ const HOUR=3600000;
 const MESSAGE_COLUMNS='id, role, content, has_image, proposal, pr_url, meta, created';
 const toMessage=m=>({id:m.id,role:m.role,content:m.content,hasImage:Boolean(m.has_image),proposal:m.proposal?JSON.parse(m.proposal):null,prUrl:m.pr_url||null,meta:m.meta?JSON.parse(m.meta):null,created:m.created});
 
+const CODEX_REQUESTS={fix:'codex_fixes',review:'codex_reviews'};
 export class ChatStoreLogic {
   constructor(sql,now=Date.now) {
     this.sql=sql;this.now=now;
@@ -17,8 +18,10 @@ export class ChatStoreLogic {
     sql.exec(`CREATE TABLE IF NOT EXISTS versions (repository TEXT PRIMARY KEY, version INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS heads (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY (repository, number))`);
     sql.exec(`CREATE TABLE IF NOT EXISTS commit_events (repository TEXT NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL)`);
-    // Codex fix requests, one per pull request head commit; kept for good so none is ever posted twice.
+    // Codex fix and review requests, one of each per pull request head commit; kept for good so none is
+    // ever posted twice.
     sql.exec(`CREATE TABLE IF NOT EXISTS codex_fixes (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (repository, number, sha))`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS codex_reviews (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (repository, number, sha))`);
     // Conversations from before repository selection have no repository; they belong to the app's own one.
     try {sql.exec('SELECT repository FROM conversations LIMIT 0');}
     catch {sql.exec('ALTER TABLE conversations ADD COLUMN repository TEXT');}
@@ -138,15 +141,15 @@ export class ChatStoreLogic {
   setPullRequest(conversation,id,url) {
     this.sql.exec('UPDATE messages SET pr_url = ? WHERE conversation = ? AND id = ? AND pr_url IS NULL',url,conversation,id);
   }
-  // Records a Codex fix request for this head commit; false when one was already recorded.
-  claimCodexFix(repository,number,sha) {
-    const repo=repository.toLowerCase();
-    if(this.rows('SELECT 1 FROM codex_fixes WHERE repository = ? AND number = ? AND sha = ?',repo,number,sha).length) return false;
-    this.sql.exec('INSERT INTO codex_fixes (repository, number, sha, at) VALUES (?, ?, ?, ?)',repo,number,sha,this.now());
+  // Records a Codex request ('fix' or 'review') for this head commit; false when one was already recorded.
+  claimCodexRequest(kind,repository,number,sha) {
+    const table=CODEX_REQUESTS[kind],repo=repository.toLowerCase();
+    if(this.rows(`SELECT 1 FROM ${table} WHERE repository = ? AND number = ? AND sha = ?`,repo,number,sha).length) return false;
+    this.sql.exec(`INSERT INTO ${table} (repository, number, sha, at) VALUES (?, ?, ?, ?)`,repo,number,sha,this.now());
     return true;
   }
-  hasCodexFix(repository,number,sha) {return this.rows('SELECT 1 FROM codex_fixes WHERE repository = ? AND number = ? AND sha = ?',repository.toLowerCase(),number,sha).length>0;}
-  releaseCodexFix(repository,number,sha) {this.sql.exec('DELETE FROM codex_fixes WHERE repository = ? AND number = ? AND sha = ?',repository.toLowerCase(),number,sha);}
+  hasCodexRequest(kind,repository,number,sha) {return this.rows(`SELECT 1 FROM ${CODEX_REQUESTS[kind]} WHERE repository = ? AND number = ? AND sha = ?`,repository.toLowerCase(),number,sha).length>0;}
+  releaseCodexRequest(kind,repository,number,sha) {this.sql.exec(`DELETE FROM ${CODEX_REQUESTS[kind]} WHERE repository = ? AND number = ? AND sha = ?`,repository.toLowerCase(),number,sha);}
   // Whether a pull request was opened from a chat answer, so only its own branch is cleaned up.
   isChatPullRequest(url) {return this.rows('SELECT 1 FROM messages WHERE lower(pr_url) = lower(?) LIMIT 1',url).length>0;}
 }
