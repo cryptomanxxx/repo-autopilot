@@ -108,8 +108,6 @@ function renderMessage(message) {
       if(number) {const badge=document.createElement('p');badge.className='pr-status';badge.dataset.number=String(number);badge.textContent=`PR #${number}`;box.append(badge);}
       const link=document.createElement('a');link.href=message.prUrl;link.target='_blank';link.rel='noopener noreferrer';link.textContent='Open pull request';box.append(link);
       if(number) {const follow=document.createElement('button');follow.type='button';follow.className='secondary';follow.textContent='Follow in dashboard';follow.onclick=()=>{showTab('dashboard',{hash:`#pr-${number}`});showPull(number);};box.append(follow);}
-      // Shown once the pull request's status is known; see refreshThread.
-      if(number&&message.id) {const merge=document.createElement('button');merge.type='button';merge.className='merge';merge.textContent='Merge';merge.hidden=true;merge.dataset.message=String(message.id);box.append(merge);}
     } else if(message.id) {
       // Pull requests are opened from a new branch on the latest default branch (see /api/pull-request).
       const target=document.createElement('p');target.className='muted small target';
@@ -159,7 +157,7 @@ async function refreshThread() {
       target.textContent=targetText(head.branch,target.dataset.branch,Boolean(line&&!line.querySelector('.stale').hidden));
     }
   }).catch(()=>{});
-  for(const element of pulls) api(`/api/dashboard/pulls/${element.dataset.number}?${repo}`).then(pr=>{if(current()) {element.textContent=pullStatusText(pr);showMerge(element.parentElement.querySelector('.merge'),pr);}}).catch(()=>{});
+  for(const element of pulls) api(`/api/dashboard/pulls/${element.dataset.number}?${repo}`).then(pr=>{if(current()) element.textContent=pullStatusText(pr);}).catch(()=>{});
 }
 setInterval(async()=>{
   if(state.tab!=='chat'||document.hidden||!state.conversation||!$('messages').querySelector('.meta,.pr-status,.target')) return;
@@ -242,30 +240,6 @@ async function openConversation(id) {
     status(error.message);failed=true;
   }
   try {await loadConversations();} catch(error) {if(!failed) status(error.message);}
-}
-
-// The Merge button follows the pull request's status: hidden once merged or closed, disabled while
-// GitHub reports a blocker, and always confirmed first. GitHub still enforces its branch rules.
-function showMerge(button,pr) {
-  if(!button) return;
-  button.hidden=pr.state!=='open';
-  const blocked=pr.readiness?.state==='not_ready';
-  button.disabled=blocked||state.busy;button.title=blocked?pr.readiness.reasons.join('; '):'';
-  button.onclick=()=>mergePullRequest(Number(button.dataset.message),pr,button);
-}
-async function mergePullRequest(message,pr,button) {
-  if(state.busy) return;
-  const unverified=pr.readiness?.state==='ready'?'':`\n\nNot everything is verified:\n- ${(pr.readiness?.reasons||['Merge readiness is unknown.']).join('\n- ')}`;
-  if(!confirm(`Merge PR #${pr.number} "${pr.title}" into the default branch?${unverified}`)) return;
-  setBusy(true);button.disabled=true;status(`Merging PR #${pr.number}…`);
-  try {
-    // The server merges only if the unverified items it finds are the ones confirmed here.
-    const confirmed=pr.readiness?.state==='ready'?[]:pr.readiness?.reasons||[];
-    await api('/api/merge',{conversation:state.conversation,message,sha:pr.headSha,confirmed},60000);
-    status(`PR #${pr.number} merged.`);
-    setBusy(false);await openConversation(state.conversation);
-  } catch(error) {status(error.message);button.disabled=false;refreshThread();}
-  finally {setBusy(false);}
 }
 
 async function createPullRequest(message,button) {

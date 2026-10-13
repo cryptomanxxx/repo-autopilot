@@ -8,7 +8,24 @@ export function renderSummary(container,data) {
   container.replaceChildren(el('strong',data.repository),el('span',`Snapshot: ${new Date(data.fetchedAt).toLocaleString()}`),el('span',`${data.pulls.filter(p=>p.state==='open').length} open in recent PRs`));
 }
 
-export function renderPull(pr,{open=false}={}) {
+// Merging is offered for open pull requests once Codex has cleared the current code and GitHub reports
+// no blocker; the button stays visible but disabled until then, saying why.
+export function mergeBlocker(pr) {
+  if(pr.codex?.state!=='clear') return 'Waiting for a Codex 👍 on the current code.';
+  if(pr.readiness?.state==='not_ready') return `Not ready: ${pr.readiness.reasons.join('; ')}.`;
+  return '';
+}
+function mergeBar(pr,onMerge) {
+  const bar=el('div','','merge-bar'),button=el('button','Merge','merge');
+  const blocker=mergeBlocker(pr);
+  button.type='button';button.disabled=Boolean(blocker);
+  if(!blocker) button.classList.add('merge-ready');
+  button.onclick=()=>onMerge(pr,button);
+  bar.append(button,el('span',blocker||'Codex 👍 on the current code. Squash-merges into the default branch after you confirm.','muted'));
+  return bar;
+}
+
+export function renderPull(pr,{open=false,onMerge}={}) {
   const node=el('details','','pr-row');
   node.dataset.number=String(pr.number);node.dataset.state=pr.state;node.dataset.attention=String(pr.state==='open'&&pr.readiness.state!=='ready');node.open=open;
   const summary=el('summary','','pr-summary');
@@ -19,6 +36,7 @@ export function renderPull(pr,{open=false}={}) {
   summary.append(el('span','Details','expand-label'));
   node.append(summary);
   const detail=el('div','','pr-detail');
+  if(pr.state==='open'&&!pr.detailError&&onMerge) detail.append(mergeBar(pr,onMerge));
   const flow=el('ol','','review-flow');
   for(const event of progress.events||[]) {const step=el('li','',`flow-${event.kind}`);step.append(el('strong',event.label),el('span',`${new Date(event.at).toLocaleString()}${event.commit?' · '+event.commit.slice(0,10):''}`,'muted'));flow.append(step);}
   detail.append(el('h3','PR activity'),el('p','Observed GitHub history; code changes do not prove an agent fixed findings. Earlier events may be missing.','muted'),flow);
@@ -39,11 +57,11 @@ export function renderPull(pr,{open=false}={}) {
 }
 
 // Keeps the rows the viewer has expanded open across refreshes.
-export function renderPulls(container,pulls) {
+export function renderPulls(container,pulls,{onMerge}={}) {
   const expanded=new Set([...container.querySelectorAll('details[open]')].map(n=>n.dataset.number));
   container.replaceChildren();
   const headings=el('div','','pr-summary list-head');for(const title of ['PR','Merge','CI','Codex','#Reviews','#Commits','#P1','#P2']) headings.append(el('span',title));headings.setAttribute('aria-hidden','true');container.append(headings);
-  for(const pr of pulls) container.append(renderPull(pr,{open:expanded.has(String(pr.number))}));
+  for(const pr of pulls) container.append(renderPull(pr,{open:expanded.has(String(pr.number)),onMerge}));
   if(!pulls.length) container.append(el('p','No pull requests found.'));
 }
 

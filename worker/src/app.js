@@ -205,7 +205,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   const body=await readJson(request);
   if(url.pathname==='/api/chat') return run(()=>chat(body,{env,store,github,config,access,fetchImpl}));
   if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github,config,access}));
-  if(url.pathname==='/api/merge') return run(()=>mergePullRequest(body,{store,github,config,access}));
+  if(url.pathname==='/api/merge') return run(()=>mergePullRequest(body,{store,github,access}));
   throw new UserError(404,'Not found.');
 }
 
@@ -401,44 +401,44 @@ export function pullDescription({request,explanation,changes,sha}) {
   ].filter(Boolean).join('\n\n');
 }
 
-// Merges the pull request opened from an answer, exactly at the head commit the owner saw checked.
+// Merges a pull request from the dashboard, exactly at the head commit the owner saw checked, once Codex
+// has cleared that commit.
 // GitHub still enforces branch protection, required checks and reviews.
-async function mergePullRequest(body,{store,github,config,access}) {
-  if(typeof body.conversation!=='string'||!/^[0-9a-f]{32}$/.test(body.conversation)||!Number.isSafeInteger(body.message)||body.message<1) throw new UserError(400,'Invalid request.');
+async function mergePullRequest(body,{store,github,access}) {
+  if(typeof body.repository!=='string'||!Number.isSafeInteger(body.number)||body.number<1) throw new UserError(400,'Invalid request.');
   // The head commit whose status the owner saw is required: nothing else is ever merged.
   if(typeof body.sha!=='string'||!/^[0-9a-f]{40}$/.test(body.sha)) throw new UserError(400,'Reload the pull request status before merging.');
-  const message=await store.getMessage(body.conversation,body.message);
-  const info=await store.getConversationInfo(body.conversation);
-  const repository=await resolveRepository(info?.repository||config.repository,access);
-  const prefix=`https://github.com/${repository}/pull/`.toLowerCase(),url=typeof message?.prUrl==='string'?message.prUrl:'';
-  const rest=url.toLowerCase().startsWith(prefix)?url.slice(prefix.length):'',number=/^[1-9]\d{0,8}$/.test(rest)?Number(rest):0;
-  if(!number) throw new UserError(404,'This message has no pull request to merge.');
+  const repository=await resolveRepository(body.repository,access),number=body.number;
   const lock=randomHex(16);
   if(!await store.acquireLock('merge',lock,60000)) throw new UserError(429,'A merge is already in progress. Wait a moment.');
   try {
-    // Every refusal drops the chat's cached status for this pull request, so the refresh that follows
-    // it shows the current state instead of the one that was refused.
+    // Every refusal drops the dashboard's cached status for this pull request, so the reload that
+    // follows it shows the current state instead of the one that was refused.
     const refuse=async message=>{await store.invalidate(repository,{pulls:[number]});throw new UserError(409,message);};
-    const client=github(repository),pull=await client.api(`pulls/${number}`);
+    const client=github(repository);
+    let pull;
+    try {pull=await client.api(`pulls/${number}`);}
+    catch(error) {if(error instanceof GitHubError&&error.status===404) throw new UserError(404,`PR #${number} was not found.`);throw error;}
     if(pull.merged) {await store.invalidate(repository,{overview:true,pulls:[number]});return json(200,{merged:true});}
     if(pull.state!=='open') await refuse(`PR #${number} is closed.`);
-    // The chat promises a merge into the default branch; a retargeted pull request is merged on GitHub.
+    // The dashboard promises a merge into the default branch; a retargeted pull request is merged on GitHub.
     const {default_branch:defaultBranch}=await client.api('');
     if(pull.base?.ref!==defaultBranch) await refuse(`PR #${number} now targets ${pull.base?.ref||'another branch'} instead of the default branch ${defaultBranch}. Merge it on GitHub if that is intended.`);
     if(body.sha!==pull.head?.sha) await refuse(`PR #${number} has new commits since its status was shown. Check it again before merging.`);
     // Blockers can appear without a new commit (failed CI, Codex findings, requested changes), so the
-    // readiness the chat shows is computed again here and enforced, not only in the browser. It fails
+    // readiness the dashboard shows is computed again here and enforced, not only in the browser. It fails
     // closed: a status that cannot be read, or unverified items the owner did not confirm, refuse the merge.
     const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
     const {item}=await status.pullDetails(repository,pull);
-    // GitHub's merge call guards the head but not the base, so a retarget or a new default branch during
-    // the check is caught here, against the default branch read again.
-    // The pull request and the default branch are read once more after all the checks above.
+    // GitHub's merge call guards the head but not the base, so the pull request and the default branch
+    // are read once more after all the checks above: a retarget or a new default branch is caught here.
     const [{default_branch:currentDefault},latest]=await Promise.all([client.api(''),client.api(`pulls/${number}`)]);
     for(const base of [item.baseRef,latest.base?.ref]) if(base!==currentDefault) await refuse(`PR #${number} now targets ${base||'another branch'} instead of the default branch ${currentDefault}. Merge it on GitHub if that is intended.`);
     if(latest.state!=='open'||latest.merged) await refuse(`PR #${number} is no longer open.`);
     if(item.headSha!==body.sha||latest.head?.sha!==body.sha) await refuse(`PR #${number} has new commits since its status was shown. Check it again before merging.`);
     if(item.detailError) await refuse(`Could not check PR #${number}'s current status: ${item.detailError} Try again.`);
+    // The dashboard offers merging only once Codex has cleared the current code; so does the server.
+    if(item.codex?.state!=='clear') await refuse(`PR #${number} has no Codex 👍 for its current code yet.`);
     if(item.readiness.state==='not_ready') await refuse(`PR #${number} is not ready to merge: ${item.readiness.reasons.join('; ')}.`);
     const confirmed=Array.isArray(body.confirmed)?body.confirmed:[];
     const unconfirmed=item.readiness.state==='ready'?[]:item.readiness.reasons.filter(reason=>!confirmed.includes(reason));
@@ -451,9 +451,10 @@ async function mergePullRequest(body,{store,github,config,access}) {
       if([403,404].includes(error.status)) throw new UserError(403,`GitHub refused to merge PR #${number} (HTTP ${error.status}). Check that the GitHub App has Contents and Pull requests set to Read and write.`);
       throw error;
     }
-    // The chat's own branch is removed once merged; failures leave it for GitHub's own cleanup.
+    // The branch of a pull request opened from the chat is removed once merged; other pull requests keep
+    // theirs, and failures leave it for GitHub's own cleanup.
     const ref=pull.head?.ref;
-    if(typeof ref==='string'&&ref.startsWith('autopilot/chat-')&&pull.head?.repo?.full_name?.toLowerCase()===repository.toLowerCase()) {
+    if(typeof ref==='string'&&ref.startsWith('autopilot/chat-')&&pull.head?.repo?.full_name?.toLowerCase()===repository.toLowerCase()&&await store.isChatPullRequest(`https://github.com/${repository}/pull/${number}`)) {
       try {await client.api(`git/refs/heads/${ref.split('/').map(encodeURIComponent).join('/')}`,{method:'DELETE'});} catch {}
     }
     await store.invalidate(repository,{overview:true,pulls:[number],head:true});

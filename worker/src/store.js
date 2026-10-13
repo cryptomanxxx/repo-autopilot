@@ -136,4 +136,6 @@ export class ChatStoreLogic {
   setPullRequest(conversation,id,url) {
     this.sql.exec('UPDATE messages SET pr_url = ? WHERE conversation = ? AND id = ? AND pr_url IS NULL',url,conversation,id);
   }
+  // Whether a pull request was opened from a chat answer, so only its own branch is cleaned up.
+  isChatPullRequest(url) {return this.rows('SELECT 1 FROM messages WHERE lower(pr_url) = lower(?) LIMIT 1',url).length>0;}
 }
