@@ -259,10 +259,12 @@ async function mergePullRequest(message,pr,button) {
   if(!confirm(`Merge PR #${pr.number} "${pr.title}" into the default branch?${unverified}`)) return;
   setBusy(true);button.disabled=true;status(`Merging PR #${pr.number}…`);
   try {
-    await api('/api/merge',{conversation:state.conversation,message,sha:pr.headSha},60000);
+    // The server merges only if the unverified items it finds are the ones confirmed here.
+    const confirmed=pr.readiness?.state==='ready'?[]:pr.readiness?.reasons||[];
+    await api('/api/merge',{conversation:state.conversation,message,sha:pr.headSha,confirmed},60000);
     status(`PR #${pr.number} merged.`);
     setBusy(false);await openConversation(state.conversation);
-  } catch(error) {status(error.message);button.disabled=false;}
+  } catch(error) {status(error.message);button.disabled=false;refreshThread();}
   finally {setBusy(false);}
 }
 

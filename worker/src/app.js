@@ -480,8 +480,15 @@ async function mergePullRequest(body,{store,github,config,access}) {
     // readiness the chat shows is computed again here and enforced, not only in the browser.
     const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
     const {item}=await status.pullDetails(repository,pull);
-    if(item.headSha!==body.sha) throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again before merging.`);
-    if(item.readiness.state==='not_ready') throw new UserError(409,`PR #${number} is not ready to merge: ${item.readiness.reasons.join('; ')}.`);
+    // It fails closed: a status that cannot be read, or unverified items the owner did not confirm,
+    // refuse the merge, and the chat's cached status is dropped so it shows the current state.
+    const refuse=async message=>{await store.invalidate(repository,{pulls:[number]});throw new UserError(409,message);};
+    if(item.headSha!==body.sha) await refuse(`PR #${number} has new commits since its status was shown. Check it again before merging.`);
+    if(item.detailError) await refuse(`Could not check PR #${number}'s current status: ${item.detailError} Try again.`);
+    if(item.readiness.state==='not_ready') await refuse(`PR #${number} is not ready to merge: ${item.readiness.reasons.join('; ')}.`);
+    const confirmed=Array.isArray(body.confirmed)?body.confirmed:[];
+    const unconfirmed=item.readiness.state==='ready'?[]:item.readiness.reasons.filter(reason=>!confirmed.includes(reason));
+    if(unconfirmed.length) await refuse(`PR #${number}'s status changed: ${unconfirmed.join('; ')}. Check it again before merging.`);
     try {await client.api(`pulls/${number}/merge`,{method:'PUT',body:{sha:body.sha,merge_method:'squash',commit_title:`${pull.title} (#${number})`}});}
     catch(error) {
       if(!(error instanceof GitHubError)) throw error;
