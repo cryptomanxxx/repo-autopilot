@@ -50,7 +50,9 @@ test('timeline thumb requires completed current-head summary, not just a review'
 test('historical priority counts deduplicate findings and exclude replies, summaries and other authors',()=>{
  const c={id:1,user:bot,body:'![P2 Badge](https://img.shields.io/badge/P2-yellow) Fix this',created_at:'2026-10-10T12:01:00Z',pull_request_review_id:5};
  const p=reviewProgress(head,{inline:[c,c,{...c,id:2,body:'[P1] Important'},{...c,id:3,in_reply_to_id:1},{...c,id:4,user:{login:'human'}}],comments:[{...c,id:5,body:'<!-- codex-pull-request-review-summary --> [P1]'}]});
- assert.deepEqual(p.findings,{p1:1,p2:1,incomplete:false});
+ const {items,...counts}=p.findings;
+ assert.deepEqual(counts,{p1:1,p2:1,incomplete:false});
+ assert.deepEqual(items.map(f=>[f.id,f.priority,f.title,f.resolved]),[[1,'P2','Fix this',null],[2,'P1','[P1] Important',null]],'each finding is listed once, resolution unknown until GitHub says');
  assert.equal(p.events.filter(e=>e.kind==='findings').length,1);
  assert.match(p.events[0].label,/1 P1 · 1 P2/);
  assert.equal(reviewProgress(head,{inline:[c],findingsTruncated:true}).findings.incomplete,true);
@@ -69,4 +71,21 @@ test('incomplete commits or reviews do not make complete finding counts lower bo
  assert.equal(p.findings.incomplete,false);
  assert.equal(p.truncated,true);
  assert.equal(p.updatesAfterReview,null);
+});
+
+test('a finding shows its headline, place and whether it is about the current code',()=>{
+ const body='**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Check the head again**\n\nDetails follow.';
+ const [f]=reviewProgress(head,{inline:[{id:9,user:bot,body,path:'worker/src/app.js',line:42,original_commit_id:head.slice(0,10),created_at:'2026-10-10T12:01:00Z',html_url:'https://github.com/a/b/pull/1#discussion_r9'}]}).findings.items;
+ assert.deepEqual([f.title,f.path,f.line,f.current],['Check the head again','worker/src/app.js',42,true]);
+ assert.equal(reviewProgress(head,{inline:[{id:9,user:bot,body,original_commit_id:'1234567',created_at:'2026-10-10T12:01:00Z'}]}).findings.items[0].current,false);
+});
+
+test('P0 and P3 findings, review-body findings and permalinked comments are all listed',()=>{
+ const badge=p=>`**<sub><sub>![${p} Badge](https://img.shields.io/badge/${p}-red)</sub></sub>  ${p} headline**`;
+ const issue={id:21,user:bot,body:`${badge('P0')}\n\nhttps://github.com/a/b/blob/abcdef1234/src/x.js#L7-L9`,created_at:'2026-10-10T12:01:00Z'};
+ const inline={id:22,user:bot,body:badge('P3'),path:'a.js',line:1,original_commit_id:head,created_at:'2026-10-10T12:02:00Z'};
+ const rev={...review,id:23,body:badge('P1'),submitted_at:'2026-10-10T12:03:00Z'};
+ const p=reviewProgress(head,{comments:[issue],inline:[inline],reviews:[rev]});
+ assert.deepEqual(p.findings.items.map(f=>[f.priority,f.title,f.path,f.line,f.current]).sort(),[['P0','P0 headline','src/x.js',7,true],['P1','P1 headline',null,null,true],['P3','P3 headline','a.js',1,true]]);
+ assert.equal(p.findings.p1,1);assert.equal(p.findings.p2,0,'only P1 and P2 feed the counts');
 });

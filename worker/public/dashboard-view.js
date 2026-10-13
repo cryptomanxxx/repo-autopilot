@@ -39,6 +39,29 @@ function mergeBar(pr,{onMerge,onCodex,askedCodex}) {
   return bar;
 }
 
+// Codex's findings on the pull request, newest first: open or unverified ones listed, resolved ones folded.
+function findingItem(f) {
+  const item=el('li','',`finding finding-${f.priority.toLowerCase()}${f.resolved?' finding-resolved':''}`);
+  const where=[f.path?`${f.path}${f.line?`:${f.line}`:''}`:'location unknown',f.current?'current code':f.commit?`older commit ${f.commit.slice(0,7)}`:'commit unknown',f.resolved===null?'resolution unverified':''].filter(Boolean).join(' · ');
+  item.append(el('span',f.priority,'finding-priority'),link(f.title,f.url),el('span',where,'muted small'));
+  return item;
+}
+export function findingsSection(findings) {
+  const items=[...(findings?.items||[])].sort((a,b)=>Date.parse(b.at)-Date.parse(a.at));
+  if(!items.length) return null;
+  const section=el('div','','findings');
+  const open=items.filter(f=>f.resolved!==true),resolved=items.filter(f=>f.resolved===true);
+  // Only findings GitHub reports as unresolved count as open; the rest are counted as unverified.
+  const counts=[`${open.filter(f=>f.resolved===false).length} open`,...(open.some(f=>f.resolved===null)?[`${open.filter(f=>f.resolved===null).length} unverified`]:[])].join(' · ');
+  section.append(el('h3',`Codex findings · ${counts}${findings.incomplete?' (list may be incomplete)':''}`));
+  if(open.length) {const list=el('ul','','finding-list');list.append(...open.map(findingItem));section.append(list);}
+  if(resolved.length) {
+    const folded=el('details','','findings-resolved');folded.append(el('summary',`${resolved.length} resolved`));
+    const list=el('ul','','finding-list');list.append(...resolved.map(findingItem));folded.append(list);section.append(folded);
+  }
+  return section;
+}
+
 export function renderPull(pr,{open=false,onMerge,onCodex,askedCodex=()=>false}={}) {
   const node=el('details','','pr-row');
   node.dataset.number=String(pr.number);node.dataset.state=pr.state;node.dataset.attention=String(pr.state==='open'&&pr.readiness.state!=='ready');node.open=open;
@@ -51,6 +74,8 @@ export function renderPull(pr,{open=false,onMerge,onCodex,askedCodex=()=>false}=
   node.append(summary);
   const detail=el('div','','pr-detail');
   if(pr.state==='open'&&!pr.detailError&&onMerge) detail.append(mergeBar(pr,{onMerge,onCodex,askedCodex}));
+  const findings=findingsSection(progress.findings);
+  if(findings) detail.append(findings);
   const flow=el('ol','','review-flow');
   for(const event of progress.events||[]) {const step=el('li','',`flow-${event.kind}`);step.append(el('strong',event.label),el('span',`${new Date(event.at).toLocaleString()}${event.commit?' · '+event.commit.slice(0,10):''}`,'muted'));flow.append(step);}
   detail.append(el('h3','PR activity'),el('p','Observed GitHub history; code changes do not prove an agent fixed findings. Earlier events may be missing.','muted'),flow);

@@ -39,3 +39,5 @@
 .review-flow li:last-child:before{background:#d5a6ff;box-shadow:0 0 0 4px #392c55;width:12px;height:12px;top:-7px}
 .review-flow li:last-child strong:after{content:'Latest';display:inline-block;margin-left:10px;padding:2px 7px;border-radius:9px;background:#392c55;color:#ead8ff;font-size:10px;font-weight:600}
 .merge-bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 0 14px}.merge-bar .merge{background:#35506b;color:#c9d6e6}.merge-bar .merge:disabled{cursor:not-allowed}.merge-bar .merge-ready{background:#7ed6a5;color:#0b1220}
+.findings{margin:0 0 18px}.finding-list{list-style:none;padding:0;margin:8px 0;display:flex;flex-direction:column;gap:8px}.finding{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}.finding-priority{font-size:12px;font-weight:700;border-radius:6px;padding:1px 6px;background:#4a3b12;color:#ffd77a}.finding-p1 .finding-priority{background:#4d2a12;color:#ffb27a}.finding-resolved a{text-decoration:line-through;color:#8fa1b8}.findings-resolved summary{cursor:pointer;color:#a8b7cc}
+.finding-p0 .finding-priority{background:#5a1d1d;color:#ff9a9a}.finding-p3 .finding-priority{background:#2a3546;color:#c9d6e6}
