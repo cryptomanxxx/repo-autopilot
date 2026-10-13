@@ -2,7 +2,7 @@ import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,l
 
 const $=id=>document.getElementById(id);
 const REFRESH_MS=180000,VERSION_MS=15000;
-let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,version=null,merging=false,retried=null,reloadAfter=false;
+let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,version=null,merging=false,retried=null,reloadAfter=false,notice='',noticeFrom=0,loads=0;
 const status=text=>{$('dashboard-status').replaceChildren(text);};
 const filters=()=>applyFilters({pullFilter:$('pr-filter'),workflowFilter:$('workflow-filter'),pulls:$('pulls'),workflows:$('workflows')});
 
@@ -41,6 +41,7 @@ function openPending() {
 export async function loadDashboard({fresh=false}={}) {
   if(loading||!api||$('dashboard-view').hidden) return;
   loading=true;$('refresh').disabled=true;
+  const load=++loads;
   // Every request of one load uses the repository selected when it started.
   const target=repository(),query=`repo=${encodeURIComponent(target)}`;
   if(!data) status('Loading live GitHub data…');
@@ -58,7 +59,9 @@ export async function loadDashboard({fresh=false}={}) {
     renderWorkflows($('workflows'),data.workflows);
     filters();
     $('scope').textContent=[data.scope,...data.warnings].join(' ');
-    status('');updateAge();openPending();
+    // A merge outcome stays until a load started after the merge shows its result.
+    status(notice);if(load>=noticeFrom) notice='';
+    updateAge();openPending();
   } catch(error) {
     if(target===repository()) status(data?`Refresh failed; showing earlier data. ${error.message}`:error.message);
   } finally {
@@ -85,10 +88,10 @@ async function mergePull(pr,button) {
   finally {
     merging=false;
     // The data shown is stale now: a load already running or a hidden tab reloads it later, the next
-    // time the tab is shown. The outcome stays visible after the reload, which clears the status line.
+    // time the tab is shown. The outcome is shown now and again once that reload completes.
     lastLoad=0;reloadAfter=loading;
-    await loadDashboard();
-    if(target===repository()) status(outcome);
+    if(target===repository()) {status(outcome);notice=outcome;noticeFrom=loads+1;}
+    loadDashboard();
   }
 }
 
@@ -104,7 +107,7 @@ async function checkVersion() {
 
 // Called when another repository is selected: forget the old data and load the new one if visible.
 export function setRepository() {
-  data=null;version=null;pendingPull=null;retried=null;
+  data=null;version=null;pendingPull=null;retried=null;notice='';
   for(const id of ['summary','pulls','workflows']) $(id).replaceChildren();
   $('scope').textContent='';$('data-age').textContent='';status('');
   loadDashboard();
