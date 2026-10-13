@@ -61,7 +61,7 @@ test('Codex findings show whether their review thread was resolved on GitHub',as
  const finding=(id,title)=>({id,user:{login:'chatgpt-codex-connector[bot]'},body:`**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub></sub>  ${title}**`,original_commit_id:head,created_at:'2026-10-10T12:00:00Z',html_url:`https://github.com/a/b/pull/1#discussion_r${id}`});
  const fetchImpl=async url=>{
   let data=[];
-  if(url.endsWith('/graphql')) data={data:{repository:{pullRequest:{headRefOid:head,mergeStateStatus:'BLOCKED',reviewDecision:null,reviewThreads:{pageInfo:{hasNextPage:false},nodes:[{isResolved:true,comments:{nodes:[{databaseId:11}]}},{isResolved:false,comments:{nodes:[{databaseId:12}]}}]}}}}};
+  if(url.endsWith('/graphql')) data={data:{repository:{pullRequest:{headRefOid:head,mergeStateStatus:'BLOCKED',reviewDecision:null,reviewThreads:{pageInfo:{hasNextPage:false},nodes:[{isResolved:true,comments:{nodes:[{fullDatabaseId:'11'}]}},{isResolved:false,comments:{nodes:[{fullDatabaseId:'12'}]}}]}}}}};
   else if(url.endsWith('/pulls/1')) data=pr;
   else if(url.includes('/pulls/1/comments')) data=[finding(11,'Fixed already'),finding(12,'Still open'),finding(13,'Not a thread yet')];
   else if(url.includes('/check-runs')) data={check_runs:[]};

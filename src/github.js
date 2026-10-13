@@ -32,7 +32,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
   async function mergeVerification(repo, number) {
     if (!token) return {complete:false};
     const [owner,name]=repo.split('/');
-    const query=`query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid mergeStateStatus reviewDecision reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved comments(first:1){nodes{databaseId}}}}}}}`;
+    const query=`query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid mergeStateStatus reviewDecision reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved comments(first:1){nodes{fullDatabaseId}}}}}}}`;
     try {
       const response=await fetchImpl('https://api.github.com/graphql',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...agent},body:JSON.stringify({query,variables:{owner,name,number}}),signal:AbortSignal.timeout(15000)});
       if(!response.ok) return {complete:false};
@@ -40,7 +40,8 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
       const pr=data.data?.repository?.pullRequest;
       if(data.errors?.length || !pr?.reviewThreads?.nodes || pr.reviewThreads.pageInfo?.hasNextPage !== false) return {complete:false};
       // Each thread's first comment identifies it, so a Codex finding can show whether it was resolved.
-      const resolvedById=new Map(pr.reviewThreads.nodes.filter(t=>Number.isInteger(t.comments?.nodes?.[0]?.databaseId)).map(t=>[t.comments.nodes[0].databaseId,t.isResolved]));
+      // fullDatabaseId holds the 64-bit REST id as a string; ids are compared as strings.
+      const resolvedById=new Map(pr.reviewThreads.nodes.filter(t=>t.comments?.nodes?.[0]?.fullDatabaseId!=null).map(t=>[String(t.comments.nodes[0].fullDatabaseId),t.isResolved]));
       return {complete:true,headSha:pr.headRefOid,mergeStateStatus:pr.mergeStateStatus,reviewDecision:pr.reviewDecision,unresolvedThreads:pr.reviewThreads.nodes.filter(t=>!t.isResolved).length,resolvedById};
     } catch {return {complete:false};}
   }
@@ -64,13 +65,13 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
     try {
       const [reviews, comments, inline, checks, status, reactions, commits] = await Promise.all([get(`${root}/pulls/${pr.number}/reviews?per_page=100`), get(`${root}/issues/${pr.number}/comments?per_page=100`), get(`${root}/pulls/${pr.number}/comments?per_page=100`), get(`${root}/commits/${pr.head.sha}/check-runs?per_page=100`), get(`${root}/commits/${pr.head.sha}/status?per_page=100`), get(`${root}/issues/${pr.number}/reactions?per_page=100`), get(`${root}/pulls/${pr.number}/commits?per_page=100`)]);
       const all = [...reviews, ...comments, ...inline];
-      details = {ci: ciState(checks.check_runs, status.statuses), reviews: reviews.map(r => ({author:r.user?.login, state:r.state, commit:r.commit_id, url:r.html_url})), codexComments: all.filter(c => !(c.body || '').includes('<!-- codex-pull-request-review-summary -->')).filter(c => c.user?.login === 'chatgpt-codex-connector[bot]').map(c => ({body:c.body, url:c.html_url, createdAt:c.created_at || c.submitted_at})), detailError:null, codex:codexStatus(pr.head.sha,{reviews,comments,inline,reactions,headAt:commits.find(c=>c.sha===pr.head.sha)?.commit?.committer?.date,truncated:[reviews,comments,inline,reactions].some(a=>a.length>=100)||commits.length>=100&&!commits.some(c=>c.sha===pr.head.sha)}), progress:reviewProgress(pr.head.sha,{reviews,comments,inline,commits,reactions,openedAt:pr.created_at,mergedAt:pr.merged_at,findingsTruncated:[comments,inline].some(a=>a.length>=100),truncated:[reviews,comments,commits].some(a=>a.length>=100)}), checksComplete:checks.check_runs.length<100 && status.statuses.length<100 && (checks.total_count ?? checks.check_runs.length)<=checks.check_runs.length};
+      details = {ci: ciState(checks.check_runs, status.statuses), reviews: reviews.map(r => ({author:r.user?.login, state:r.state, commit:r.commit_id, url:r.html_url})), codexComments: all.filter(c => !(c.body || '').includes('<!-- codex-pull-request-review-summary -->')).filter(c => c.user?.login === 'chatgpt-codex-connector[bot]').map(c => ({body:c.body, url:c.html_url, createdAt:c.created_at || c.submitted_at})), detailError:null, codex:codexStatus(pr.head.sha,{reviews,comments,inline,reactions,headAt:commits.find(c=>c.sha===pr.head.sha)?.commit?.committer?.date,truncated:[reviews,comments,inline,reactions].some(a=>a.length>=100)||commits.length>=100&&!commits.some(c=>c.sha===pr.head.sha)}), progress:reviewProgress(pr.head.sha,{reviews,comments,inline,commits,reactions,openedAt:pr.created_at,mergedAt:pr.merged_at,findingsTruncated:[comments,inline,reviews].some(a=>a.length>=100),truncated:[reviews,comments,commits].some(a=>a.length>=100)}), checksComplete:checks.check_runs.length<100 && status.statuses.length<100 && (checks.total_count ?? checks.check_runs.length)<=checks.check_runs.length};
       if ([reviews, comments, inline, reactions, commits, checks.check_runs, status.statuses].some(a => a.length >= 100)) warnings.push(`PR #${pr.number}: detail list may be truncated at 100 entries.`);
     } catch (error) {if (error.status === 401) throw error;details.detailError = error.message;}
     if(pr.state === 'open') {
       try {
         const current=await get(`${root}/pulls/${pr.number}`);
-        if(current.head?.sha !== pr.head.sha) {changed=true;details.checksComplete=false;details.codex={state:'unknown',label:'Codex: code changed during loading'};details.progress.currentCompleted=false;details.detailError='PR changed during loading; refresh for a consistent snapshot.';}
+        if(current.head?.sha !== pr.head.sha) {changed=true;details.checksComplete=false;details.codex={state:'unknown',label:'Codex: code changed during loading'};details.progress.currentCompleted=false;for(const item of details.progress.findings?.items||[]) item.current=Boolean(item.commit&&current.head?.sha?.startsWith(item.commit));details.detailError='PR changed during loading; refresh for a consistent snapshot.';}
         pr=current;
         verification=await mergeVerification(repo,pr.number);
         if(verification.headSha !== pr.head.sha) verification={complete:false};
@@ -79,7 +80,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
     // The listed state decides, so a pull request merged during loading is not verified twice.
     if(listed.state !== 'open') {verification=await mergeVerification(repo,pr.number);if(verification.headSha !== pr.head.sha) verification={complete:false};}
     details.unresolvedThreads=verification.complete ? verification.unresolvedThreads : null;
-    for(const item of details.progress.findings?.items||[]) item.resolved=verification.complete&&verification.resolvedById.has(item.id)?verification.resolvedById.get(item.id):null;
+    for(const item of details.progress.findings?.items||[]) item.resolved=verification.complete&&verification.resolvedById.has(String(item.id))?verification.resolvedById.get(String(item.id)):null;
     const readiness=mergeReadiness(pr,{ci:details.ci,codex:details.codex,checksComplete:details.checksComplete,verification});
     return {warnings, changed, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, baseRef:pr.base?.ref, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details}};
   }

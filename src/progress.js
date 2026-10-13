@@ -4,7 +4,7 @@ const stamp = value => typeof value === 'number' ? value : Date.parse(value) || 
 
 // The finding's headline: Codex writes it in bold after the priority badge.
 export function findingTitle(body='') {
-  const bold=body.match(/\*\*(?:<sub><sub>)?!\[P[12] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?\s*([^*]+?)\s*\*\*/i)?.[1];
+  const bold=body.match(/\*\*(?:<sub><sub>)?!\[P[0-3] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?\s*([^*]+?)\s*\*\*/i)?.[1];
   const text=bold || body.replace(/!\[[^\]]*\]\([^)]*\)|<[^>]+>|[*_`#]/g,'').trim().split('\n')[0];
   return text.trim().slice(0,200) || 'Codex finding';
 }
@@ -14,17 +14,23 @@ export function reviewProgress(head, {reviews = [], comments = [], inline = [], 
   const add=(kind,label,at,commit,url)=>{if(stamp(at)) events.push({kind,label,at:new Date(at).toISOString(),commit,url});};
   add('opened','PR opened',openedAt);
   for(const c of comments) if(c.user?.login !== bot && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '')) add('requested','Codex review requested',c.created_at,undefined,c.html_url);
-  const findingComments=[...comments,...inline].filter(c=>c.user?.login === bot && !c.in_reply_to_id && !(c.body || '').includes('codex-pull-request-review-summary'));
+  // A finding can also sit in a review's own body; it carries the review's time and commit.
+  const reviewFindings=reviews.filter(r=>r.user?.login === bot && /(?:badge\/|\[)P[0-3](?:-|\])/i.test(r.body || '')).map(r=>({...r,id:`review:${r.id}`,created_at:r.submitted_at,commit_id:r.commit_id}));
+  const findingComments=[...comments,...inline,...reviewFindings].filter(c=>c.user?.login === bot && !c.in_reply_to_id && !(c.body || '').includes('codex-pull-request-review-summary'));
   const seen=new Set();const findings={p1:0,p2:0,incomplete:findingsTruncated,items:[]};const batches=new Map();
   for(const c of findingComments) {
-    const priority=(c.body || '').match(/(?:badge\/|\[)(P[12])(?:-|\])/i)?.[1]?.toLowerCase();
+    const priority=(c.body || '').match(/(?:badge\/|\[)(P[0-3])(?:-|\])/i)?.[1]?.toLowerCase();
     if(!priority) continue;
     const identity=c.id ?? c.html_url;
     if(identity && seen.has(identity)) continue;
     if(identity) seen.add(identity);
+    // Comments outside a review thread name their place only in a permalink to the code.
+    const permalink=(c.body || '').match(/\/blob\/([0-9a-f]{7,40})\/([^#)\s]+)#L(\d+)/i);
+    const commit=c.original_commit_id || c.commit_id || permalink?.[1];
+    findings.items.push({id:c.id ?? null,priority:priority.toUpperCase(),title:findingTitle(c.body),path:c.path || permalink?.[2] || null,line:c.line ?? c.original_line ?? (permalink?Number(permalink[3]):null),url:c.html_url,at:c.created_at,commit:commit || null,current:Boolean(commit && head.startsWith(commit)),resolved:null});
+    // The counts and the activity flow keep tracking P1 and P2; every priority is listed.
+    if(!['p1','p2'].includes(priority)) continue;
     findings[priority]++;
-    const commit=c.original_commit_id || c.commit_id;
-    findings.items.push({id:c.id ?? null,priority:priority.toUpperCase(),title:findingTitle(c.body),path:c.path || null,line:c.line ?? c.original_line ?? null,url:c.html_url,at:c.created_at,commit:commit || null,current:Boolean(commit && head.startsWith(commit)),resolved:null});
     const key=c.pull_request_review_id ?? identity ?? c.created_at;
     const batch=batches.get(key) || {p1:0,p2:0,at:c.created_at,commit:c.original_commit_id || c.commit_id,url:c.html_url};
     batch[priority]++;batches.set(key,batch);

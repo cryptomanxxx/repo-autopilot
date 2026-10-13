@@ -79,3 +79,13 @@ test('a finding shows its headline, place and whether it is about the current co
  assert.deepEqual([f.title,f.path,f.line,f.current],['Check the head again','worker/src/app.js',42,true]);
  assert.equal(reviewProgress(head,{inline:[{id:9,user:bot,body,original_commit_id:'1234567',created_at:'2026-10-10T12:01:00Z'}]}).findings.items[0].current,false);
 });
+
+test('P0 and P3 findings, review-body findings and permalinked comments are all listed',()=>{
+ const badge=p=>`**<sub><sub>![${p} Badge](https://img.shields.io/badge/${p}-red)</sub></sub>  ${p} headline**`;
+ const issue={id:21,user:bot,body:`${badge('P0')}\n\nhttps://github.com/a/b/blob/abcdef1234/src/x.js#L7-L9`,created_at:'2026-10-10T12:01:00Z'};
+ const inline={id:22,user:bot,body:badge('P3'),path:'a.js',line:1,original_commit_id:head,created_at:'2026-10-10T12:02:00Z'};
+ const rev={...review,id:23,body:badge('P1'),submitted_at:'2026-10-10T12:03:00Z'};
+ const p=reviewProgress(head,{comments:[issue],inline:[inline],reviews:[rev]});
+ assert.deepEqual(p.findings.items.map(f=>[f.priority,f.title,f.path,f.line,f.current]).sort(),[['P0','P0 headline','src/x.js',7,true],['P1','P1 headline',null,null,true],['P3','P3 headline','a.js',1,true]]);
+ assert.equal(p.findings.p1,1);assert.equal(p.findings.p2,0,'only P1 and P2 feed the counts');
+});
