@@ -226,7 +226,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[]}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -235,7 +235,7 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(url==='https://api.github.com/user/installations?per_page=100') return ok({installations:[{id:1}]});
     if(url.startsWith('https://api.github.com/user/installations/1/repositories')) return ok({repositories:[{full_name:'owner/repo',private:false,pushed_at:'2026-10-01T00:00:00Z'},{full_name:'owner/other',private:true,pushed_at:'2026-10-02T00:00:00Z'}]});
     const path=url.replace('https://api.github.com/repos/owner/repo','');
-    if(path==='') return ok({default_branch:'main',private:false});
+    if(path==='') return ok({default_branch:calls.filter(c=>c.url==='https://api.github.com/repos/owner/repo').length>defaultAfter?'trunk':'main',private:false});
     if(path==='/git/ref/heads/main') return ok({object:{sha:head}});
     if(path===`/tarball/${head}`) return new Response(gzipSync(repoTar(repoFiles,executable)));
     if(path===`/git/commits/${head}`) return ok({tree:{sha:'tree0'}});
@@ -243,8 +243,15 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(method==='POST'&&path==='/git/commits') return ok({sha:'commit1'},201);
     if(method==='POST'&&path==='/git/refs') return ok({},refStatus);
     if(method==='PATCH'&&path.startsWith('/git/refs/heads/autopilot/chat-')) return ok({});
+    if(method==='GET'&&path===`/compare/${head}...commit1`) return ok({files:[{filename:'public/app.js',status:'modified',additions:1,deletions:1}]},compareStatus);
     if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},pullStatus);
     if(method==='GET'&&path.startsWith('/pulls?state=open&head=owner%3Aautopilot%2Fchat-')) return ok(openPulls);
+    if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:'open',merged:false,title:'New title',base:{ref:calls.filter(c=>c.url.endsWith('/pulls/7')).length>retargetAfter?'release':mergeBase},head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
+    if(/^\/(pulls\/7\/(reviews|comments|commits)|issues\/7\/(comments|reactions))\?per_page=100$/.test(path)) return ok([],detailStatus);
+    if(path===`/commits/${'b'.repeat(40)}/status?per_page=100`) return ok({statuses:[]});
+    if(path===`/commits/${'b'.repeat(40)}/check-runs?per_page=100`) return ok({total_count:1,check_runs:[{name:'test',status:'completed',conclusion:mergeCi}]});
+    if(method==='PUT'&&path==='/pulls/7/merge') return ok({merged:true},mergeStatus);
+    if(method==='DELETE'&&path==='/git/refs/heads/autopilot/chat-abc-2') return new Response(null,{status:204});
     return ok({message:'not found'},404);
   };
 }
@@ -374,11 +381,51 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.deepEqual(tree,{base_tree:'tree0',tree:[{path:'public/app.js',mode:'100644',type:'blob',content:'const title="New";\n'}]});
   const pull=JSON.parse(calls.find(c=>c.url.endsWith('/pulls')).options.body);
   assert.equal(pull.title,'New title');assert.equal(pull.base,'main');assert.match(pull.head,/^autopilot\/chat-/);assert.equal(pull.body.includes('<<<<<<<'),false);
+  assert.ok(calls.some(c=>c.url.endsWith(`/compare/${'a'.repeat(40)}...commit1`)),'line counts come from GitHub\'s diff of the new commit');
+  assert.match(pull.body,/^## Request\n\n> Change the title in public\/app\.js\n\n## What the agent changed\n\nRenaming the title\.\n\n## Files\n\n- `public\/app\.js`: \+1 −1 lines\n\n---\nCreated from the Repo Autopilot chat/,'the description is written from the request, the explanation and the edits');
   const writes=calls.filter(c=>c.method==='POST').length;
   assert.deepEqual(await (await handle(post('/api/pull-request',auth,{conversation,message:reply.id}),env,{fetchImpl})).json(),{url:'https://github.com/owner/repo/pull/7'});
   assert.equal(calls.filter(c=>c.method==='POST').length,writes,'a second click reuses the existing pull request');
   assert.equal((await handle(post('/api/pull-request',auth,{conversation,message:thread.messages[0].id}),env,{fetchImpl})).status,404);
   assert.equal(store.acquireLock('model','t',1),true,'the model lock is released after answering');
+  // The chat sends the unverified items it showed and the owner confirmed; the server checks them again.
+  const shown=await (await handle(request('/api/dashboard/pulls/7',{cookie:auth.cookie}),env,{fetchImpl})).json();
+  assert.equal(shown.readiness.state,'unknown');
+  const confirmed=shown.readiness.reasons;
+  const merge=(extra={},fetch=fetchImpl)=>handle(post('/api/merge',auth,{conversation,message:reply.id,sha:'b'.repeat(40),confirmed,...extra}),env,{fetchImpl:fetch});
+  calls.length=0;
+  store.setCache('pull:owner/repo:7:',{stale:true},60000);assert.ok(store.getCache('pull:owner/repo:7:'));
+  assert.equal((await merge({sha:'c'.repeat(40)})).status,409,'a pull request with new commits is not merged');
+  assert.equal(store.getCache('pull:owner/repo:7:'),null,'the refused status is not served again from the cache');
+  const unconfirmed=await merge({confirmed:undefined});
+  assert.equal(unconfirmed.status,409);assert.match((await unconfirmed.json()).error,/status changed: .*Check it again/,'unverified items must have been confirmed');
+  assert.equal(calls.some(c=>c.method==='PUT'),false);
+  const unreadable=await merge({},github({calls:[],detailStatus:503}));
+  assert.equal(unreadable.status,409);assert.match((await unreadable.json()).error,/Could not check PR #7's current status/,'a status that cannot be read refuses the merge');
+  const failing=[],red=await merge({},github({calls:failing,mergeCi:'failure'}));
+  assert.equal(red.status,409);assert.match((await red.json()).error,/not ready to merge: CI failed/);
+  assert.equal(failing.some(c=>c.method==='PUT'),false,'blockers are checked again on the server before merging');
+  const blocked=await merge({},github({calls:[],mergeStatus:405}));
+  assert.equal(blocked.status,409);assert.match((await blocked.json()).error,/cannot merge PR #7 yet/);
+  const retargeted=await merge({},github({calls:[],mergeBase:'release'}));
+  assert.equal(retargeted.status,409);assert.match((await retargeted.json()).error,/now targets release instead of the default branch main/);
+  const moving=[],moved=await merge({},github({calls:moving,retargetAfter:1}));
+  assert.equal(moved.status,409);assert.match((await moved.json()).error,/now targets release/,'a retarget during the status check is caught');
+  assert.equal(moving.some(c=>c.method==='PUT'),false);
+  const late=[],retargetedLate=await merge({},github({calls:late,retargetAfter:2}));
+  assert.equal(retargetedLate.status,409);assert.match((await retargetedLate.json()).error,/now targets release/,'a retarget after the readiness checks is caught');
+  assert.equal(late.some(c=>c.method==='PUT'),false);
+  const renaming=[],renamed=await merge({},github({calls:renaming,defaultAfter:1}));
+  assert.equal(renamed.status,409);assert.match((await renamed.json()).error,/instead of the default branch trunk/,'a new default branch during the status check is caught');
+  assert.equal(renaming.some(c=>c.method==='PUT'),false);
+  for(const sha of [undefined,'','b'.repeat(39),42]) assert.equal((await merge({sha})).status,400,'the reviewed head commit is required: '+sha);
+  calls.length=0;
+  const merged=await merge();
+  assert.deepEqual(await merged.json(),{merged:true});
+  assert.deepEqual(JSON.parse(calls.find(c=>c.method==='PUT').options.body),{sha:'b'.repeat(40),merge_method:'squash',commit_title:'New title (#7)'},'merged exactly at the head that was shown');
+  assert.ok(calls.some(c=>c.method==='DELETE'&&c.url.endsWith('/git/refs/heads/autopilot/chat-abc-2')),'the chat branch is removed');
+  assert.ok(store.getVersion('owner/repo')>0,'open dashboards reload');
+  assert.equal((await handle(post('/api/merge',auth,{conversation,message:thread.messages[0].id,sha:'b'.repeat(40)}),env,{fetchImpl})).status,404,'only answers with a pull request can be merged');
 });
 
 test('pull requests keep file modes and can be retried after a partial failure',async()=>{
@@ -393,8 +440,9 @@ test('pull requests keep file modes and can be retried after a partial failure',
   const branch=JSON.parse(calls.findLast(c=>c.url.endsWith('/git/refs')).options.body).ref.replace('refs/heads/','');
   // Leftover branch without a pull request: it is moved to the new commit and the PR is opened.
   calls.length=0;
-  const retried=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422})});
+  const retried=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422,compareStatus:500})});
   assert.deepEqual(await retried.json(),{url:'https://github.com/owner/repo/pull/7'});
+  assert.match(JSON.parse(calls.find(c=>c.method==='POST'&&c.url.endsWith('/pulls')).options.body).body,/## Files\n\n- `public\/app\.js`\n\n---/,'without GitHub\'s counts the files are still listed');
   const patch=calls.find(c=>c.method==='PATCH');
   assert.equal(patch.url.split('/git/refs/heads/')[1],branch,'the retry reuses the same branch');assert.equal(JSON.parse(patch.options.body).force,true);
   // A pull request opened from the branch after the first check is reused, not overwritten.

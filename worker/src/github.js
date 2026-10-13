@@ -16,7 +16,7 @@ export function githubClient({repository,token,fetchImpl=fetch}) {
   async function api(path,{method='GET',body}={}) {
     const response=await fetchImpl(`${API}/repos/${repository}${path?'/'+path:''}`,{method,headers:{...headers('application/vnd.github+json'),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
     if(!response.ok) throw new GitHubError(response.status,path);
-    return response.json();
+    return response.status===204?null:response.json();
   }
   return {
     api,
@@ -56,7 +56,9 @@ export function githubClient({repository,token,fetchImpl=fetch}) {
         if(opened) return pullUrl(opened);
         await api(`git/refs/heads/${branch}`,{method:'PATCH',body:{sha:next.sha,force:true}});
       }
-      try {return pullUrl(await api('pulls',{method:'POST',body:{title,head:branch,base,body}}));}
+      // The description may depend on the new commit, such as GitHub's own count of the changed lines.
+      const description=typeof body==='function'?await body(next.sha):body;
+      try {return pullUrl(await api('pulls',{method:'POST',body:{title,head:branch,base,body:description}}));}
       catch(error) {
         if(!(error instanceof GitHubError&&error.status===422)) throw error;
         const existing=await openPull();
