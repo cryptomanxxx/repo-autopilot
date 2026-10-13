@@ -159,6 +159,8 @@ test('pull request line counts come from the actual change',()=>{
   assert.deepEqual(lineChanges('1\n2\n3\n4\n','1\n3\n2\n4\n'),{added:1,removed:1});
   assert.deepEqual(lineChanges('x',''),{added:0,removed:1},'emptying a file');
   assert.deepEqual(lineChanges('','x'),{added:1,removed:0},'filling an empty file');
+  assert.deepEqual(lineChanges('a','a\n'),{added:1,removed:1},'adding the final newline changes the last line');
+  assert.deepEqual(lineChanges('a\n','a'),{added:1,removed:1});
 });
 
 test('an edit block without a file path is matched to the one file its text belongs to',async()=>{
