@@ -16,7 +16,7 @@ export function githubClient({repository,token,fetchImpl=fetch}) {
   async function api(path,{method='GET',body}={}) {
     const response=await fetchImpl(`${API}/repos/${repository}${path?'/'+path:''}`,{method,headers:{...headers('application/vnd.github+json'),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
     if(!response.ok) throw new GitHubError(response.status,path);
-    return response.json();
+    return response.status===204?null:response.json();
   }
   return {
     api,

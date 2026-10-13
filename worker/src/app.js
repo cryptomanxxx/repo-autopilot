@@ -205,6 +205,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   const body=await readJson(request);
   if(url.pathname==='/api/chat') return run(()=>chat(body,{env,store,github,config,access,fetchImpl}));
   if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github,config,access}));
+  if(url.pathname==='/api/merge') return run(()=>mergePullRequest(body,{store,github,config,access}));
   throw new UserError(404,'Not found.');
 }
 
@@ -387,6 +388,58 @@ function progressStream(work) {
   return new Response(readable,{status:200,headers:{'Content-Type':'application/x-ndjson; charset=utf-8','Cache-Control':'no-store'}});
 }
 
+// The pull request description: what the owner asked for, the agent's explanation and what changes.
+export function pullDescription({request,explanation,edits,sha}) {
+  const lines=text=>text?text.split('\n').length:0,files=new Map();
+  for(const edit of edits) {
+    const counts=files.get(edit.path)||{added:0,removed:0};
+    counts.added+=lines(edit.replace);counts.removed+=lines(edit.search);files.set(edit.path,counts);
+  }
+  const plural=(n,word)=>`${n} line${n===1?'':'s'} ${word}`;
+  const quote=text=>text.trim().slice(0,1500).split('\n').map(line=>`> ${line}`).join('\n');
+  return [
+    request.trim()?`## Request\n\n${quote(request)}`:'',
+    explanation.trim()?`## What the agent changed\n\n${explanation.trim().slice(0,3000)}`:'',
+    `## Files\n\n${[...files].map(([path,{added,removed}])=>`- \`${path}\`: ${removed?`${plural(removed,'replaced')}, `:''}${plural(added,removed?'now':'added')}`).join('\n')}`,
+    `---\nCreated from the Repo Autopilot chat on ${sha.slice(0,10)}. Agent-generated: review the diff and CI before merging.`,
+  ].filter(Boolean).join('\n\n');
+}
+
+// Merges the pull request opened from an answer, exactly at the head commit the owner saw checked.
+// GitHub still enforces branch protection, required checks and reviews.
+async function mergePullRequest(body,{store,github,config,access}) {
+  if(typeof body.conversation!=='string'||!/^[0-9a-f]{32}$/.test(body.conversation)||!Number.isSafeInteger(body.message)||body.message<1) throw new UserError(400,'Invalid request.');
+  const message=await store.getMessage(body.conversation,body.message);
+  const info=await store.getConversationInfo(body.conversation);
+  const repository=await resolveRepository(info?.repository||config.repository,access);
+  const prefix=`https://github.com/${repository}/pull/`.toLowerCase(),url=typeof message?.prUrl==='string'?message.prUrl:'';
+  const rest=url.toLowerCase().startsWith(prefix)?url.slice(prefix.length):'',number=/^[1-9]\d{0,8}$/.test(rest)?Number(rest):0;
+  if(!number) throw new UserError(404,'This message has no pull request to merge.');
+  const lock=randomHex(16);
+  if(!await store.acquireLock('merge',lock,60000)) throw new UserError(429,'A merge is already in progress. Wait a moment.');
+  try {
+    const client=github(repository),pull=await client.api(`pulls/${number}`);
+    if(pull.merged) return json(200,{merged:true});
+    if(pull.state!=='open') throw new UserError(409,`PR #${number} is closed.`);
+    if(typeof body.sha==='string'&&body.sha&&body.sha!==pull.head?.sha) throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again before merging.`);
+    try {await client.api(`pulls/${number}/merge`,{method:'PUT',body:{sha:pull.head.sha,merge_method:'squash',commit_title:`${pull.title} (#${number})`}});}
+    catch(error) {
+      if(!(error instanceof GitHubError)) throw error;
+      if(error.status===405) throw new UserError(409,`GitHub cannot merge PR #${number} yet: required checks, reviews or branch rules are not satisfied, or it has conflicts.`);
+      if(error.status===409) throw new UserError(409,`PR #${number} changed while merging. Check it again.`);
+      if([403,404].includes(error.status)) throw new UserError(403,`GitHub refused to merge PR #${number} (HTTP ${error.status}). Check that the GitHub App has Contents and Pull requests set to Read and write.`);
+      throw error;
+    }
+    // The chat's own branch is removed once merged; failures leave it for GitHub's own cleanup.
+    const ref=pull.head?.ref;
+    if(typeof ref==='string'&&ref.startsWith('autopilot/chat-')&&pull.head?.repo?.full_name?.toLowerCase()===repository.toLowerCase()) {
+      try {await client.api(`git/refs/heads/${ref.split('/').map(encodeURIComponent).join('/')}`,{method:'DELETE'});} catch {}
+    }
+    await store.invalidate(repository,{overview:true,pulls:[number],head:true});
+    return json(200,{merged:true});
+  } finally {await store.releaseLock('merge',lock);}
+}
+
 async function pullRequest(body,{store,github,config,access}) {
   if(typeof body.conversation!=='string'||!/^[0-9a-f]{32}$/.test(body.conversation)||!Number.isSafeInteger(body.message)||body.message<1) throw new UserError(400,'Invalid request.');
   const lock=randomHex(16);
@@ -403,7 +456,9 @@ async function pullRequest(body,{store,github,config,access}) {
     try {files=applyEdits(message.proposal.edits,textFiles(new Map([...archive].filter(([path])=>edited.has(path)))),[...archive.keys()],policy.allowed);}
     catch(error) {throw new UserError(409,`The change no longer applies to the current code: ${error.message} Ask the agent to redo it.`);}
     const title=message.proposal.title||info?.title||'Change from the agent chat';
-    const description=`${displayText(message.content).slice(0,4000)}\n\n---\nCreated from the Repo Autopilot chat on ${head.sha.slice(0,10)}. Agent-generated: review the diff and CI before merging.`;
+    const conversation=await store.getConversation(body.conversation);
+    const request=conversation?.messages.filter(m=>m.role==='user'&&m.id<message.id).at(-1)?.content||'';
+    const description=pullDescription({request,explanation:displayText(message.content),edits:message.proposal.edits,sha:head.sha});
     let url;
     try {url=await client.createPullRequest({base:head.branch,parent:head.sha,files,executable,branch:`autopilot/chat-${body.conversation.slice(0,12)}-${body.message}`,title,body:description});}
     catch(error) {

@@ -47,3 +47,4 @@ textarea{display:block;width:100%;resize:vertical;background:#0b1220;color:inher
 @keyframes spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.steps li::before{animation:none}}
 .proposal .pr-status{flex-basis:100%;margin:0;font-weight:600}.proposal .target{flex-basis:100%;margin:0}
+.proposal .merge{background:#7ed6a5;color:#0b1220}

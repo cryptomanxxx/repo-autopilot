@@ -226,7 +226,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[]}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -245,6 +245,9 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(method==='PATCH'&&path.startsWith('/git/refs/heads/autopilot/chat-')) return ok({});
     if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},pullStatus);
     if(method==='GET'&&path.startsWith('/pulls?state=open&head=owner%3Aautopilot%2Fchat-')) return ok(openPulls);
+    if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:'open',merged:false,title:'New title',head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
+    if(method==='PUT'&&path==='/pulls/7/merge') return ok({merged:true},mergeStatus);
+    if(method==='DELETE'&&path==='/git/refs/heads/autopilot/chat-abc-2') return new Response(null,{status:204});
     return ok({message:'not found'},404);
   };
 }
@@ -374,11 +377,23 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.deepEqual(tree,{base_tree:'tree0',tree:[{path:'public/app.js',mode:'100644',type:'blob',content:'const title="New";\n'}]});
   const pull=JSON.parse(calls.find(c=>c.url.endsWith('/pulls')).options.body);
   assert.equal(pull.title,'New title');assert.equal(pull.base,'main');assert.match(pull.head,/^autopilot\/chat-/);assert.equal(pull.body.includes('<<<<<<<'),false);
+  assert.match(pull.body,/^## Request\n\n> Change the title in public\/app\.js\n\n## What the agent changed\n\nRenaming the title\.\n\n## Files\n\n- `public\/app\.js`: 1 line replaced, 1 line now\n\n---\nCreated from the Repo Autopilot chat/,'the description is written from the request, the explanation and the edits');
   const writes=calls.filter(c=>c.method==='POST').length;
   assert.deepEqual(await (await handle(post('/api/pull-request',auth,{conversation,message:reply.id}),env,{fetchImpl})).json(),{url:'https://github.com/owner/repo/pull/7'});
   assert.equal(calls.filter(c=>c.method==='POST').length,writes,'a second click reuses the existing pull request');
   assert.equal((await handle(post('/api/pull-request',auth,{conversation,message:thread.messages[0].id}),env,{fetchImpl})).status,404);
   assert.equal(store.acquireLock('model','t',1),true,'the model lock is released after answering');
+  calls.length=0;
+  assert.equal((await handle(post('/api/merge',auth,{conversation,message:reply.id,sha:'c'.repeat(40)}),env,{fetchImpl})).status,409,'a pull request with new commits is not merged');
+  assert.equal(calls.some(c=>c.method==='PUT'),false);
+  const merged=await handle(post('/api/merge',auth,{conversation,message:reply.id,sha:'b'.repeat(40)}),env,{fetchImpl});
+  assert.deepEqual(await merged.json(),{merged:true});
+  assert.deepEqual(JSON.parse(calls.find(c=>c.method==='PUT').options.body),{sha:'b'.repeat(40),merge_method:'squash',commit_title:'New title (#7)'},'merged exactly at the head that was shown');
+  assert.ok(calls.some(c=>c.method==='DELETE'&&c.url.endsWith('/git/refs/heads/autopilot/chat-abc-2')),'the chat branch is removed');
+  assert.ok(store.getVersion('owner/repo')>0,'open dashboards reload');
+  assert.equal((await handle(post('/api/merge',auth,{conversation,message:thread.messages[0].id}),env,{fetchImpl})).status,404,'only answers with a pull request can be merged');
+  const blocked=await handle(post('/api/merge',auth,{conversation,message:reply.id}),env,{fetchImpl:github({calls:[],mergeStatus:405})});
+  assert.equal(blocked.status,409);assert.match((await blocked.json()).error,/cannot merge PR #7 yet/);
 });
 
 test('pull requests keep file modes and can be retried after a partial failure',async()=>{
