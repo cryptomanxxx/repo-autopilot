@@ -56,7 +56,7 @@ export async function loadDashboard({fresh=false}={}) {
     version=seen>0?seen:version;
     data={...overview,pulls,warnings:[...overview.warnings,...pulls.flatMap(pr=>pr.warnings||[])]};
     renderSummary($('summary'),data);
-    renderPulls($('pulls'),data.pulls,{onMerge:mergePull,onCodexFix:askCodexFix,askedCodex:pr=>askedCodex.has(`${target}#${pr.number}@${pr.headSha}`)});
+    renderPulls($('pulls'),data.pulls,{onMerge:mergePull,onCodexFix:askCodexFix,askedCodex:pr=>pr.codexFixAsked===true||askedCodex.has(`${target}#${pr.number}@${pr.headSha}`)});
     renderWorkflows($('workflows'),data.workflows);
     filters();
     $('scope').textContent=[data.scope,...data.warnings].join(' ');
@@ -101,10 +101,10 @@ async function askCodexFix(pr,button) {
   const target=repository();
   button.disabled=true;status(`Asking Codex to fix PR #${pr.number}…`);
   try {
-    await api('/api/codex-fix',{repository:target,number:pr.number,sha:pr.headSha});
+    const {already}=await api('/api/codex-fix',{repository:target,number:pr.number,sha:pr.headSha});
     askedCodex.add(`${target}#${pr.number}@${pr.headSha}`);
     button.textContent='Codex asked to fix';
-    if(target===repository()) status(`Asked Codex to fix PR #${pr.number}. It pushes a commit when done; then ask it to review again.`);
+    if(target===repository()) status(already?`Codex was already asked to fix PR #${pr.number} at this commit.`:`Asked Codex to fix PR #${pr.number}. It pushes a commit when done; then ask it to review again.`);
   } catch(error) {
     button.disabled=false;
     if(target===repository()) status(error.message);

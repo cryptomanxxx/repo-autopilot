@@ -450,8 +450,10 @@ test('Codex can be asked to fix its findings once per head commit',async()=>{
   assert.deepEqual(JSON.parse(comment.options.body),{body:'@codex address that feedback'},'the comment Codex acts on');
   assert.equal(comment.options.headers.Authorization,'Bearer ghu_user','posted with the owner\'s GitHub account');
   calls.length=0;
+  const shown=await (await handle(request('/api/dashboard/pulls/7',{cookie:auth.cookie}),env,{fetchImpl})).json();
+  assert.equal(shown.codexFixAsked,true,'the dashboard shows that Codex was asked, after a reload too');
   const again=await ask();
-  assert.equal(again.status,409);assert.match((await again.json()).error,/already asked/);
+  assert.deepEqual(await again.json(),{asked:true,already:true},'asking again for the same commit is answered as already asked');
   assert.equal(calls.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false,'asked at most once per commit');
   assert.equal((await ask({sha:'c'.repeat(40)})).status,409,'only for the head commit that was shown');
   assert.equal((await ask({number:8})).status,404);
@@ -464,7 +466,11 @@ test('Codex can be asked to fix its findings once per head commit',async()=>{
   assert.equal(unreadable.status,409);assert.match((await unreadable.json()).error,/Could not check/);
   const refused=await ask({},github({calls:[],codex:'findings',commentStatus:403}));
   assert.equal(refused.status,403);assert.match((await refused.json()).error,/Pull requests set to Read and write/);
-  assert.equal((await ask()).status,200,'a refused comment can be retried');
+  assert.deepEqual(await (await ask()).json(),{asked:true},'a refused comment can be retried');
+  store.rows('DELETE FROM codex_fixes');
+  const dropped=github({calls:[],codex:'findings'}),lost=await ask({},async(url,options)=>options?.method==='POST'&&url.endsWith('/issues/7/comments')?Promise.reject(new TypeError('network connection lost')):dropped(url,options));
+  assert.equal(lost.status,500);
+  assert.deepEqual(await (await ask()).json(),{asked:true,already:true},'when the comment may have been posted, it is not posted again');
 });
 
 test('pull requests keep file modes and can be retried after a partial failure',async()=>{

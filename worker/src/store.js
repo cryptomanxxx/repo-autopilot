@@ -145,6 +145,7 @@ export class ChatStoreLogic {
     this.sql.exec('INSERT INTO codex_fixes (repository, number, sha, at) VALUES (?, ?, ?, ?)',repo,number,sha,this.now());
     return true;
   }
+  hasCodexFix(repository,number,sha) {return this.rows('SELECT 1 FROM codex_fixes WHERE repository = ? AND number = ? AND sha = ?',repository.toLowerCase(),number,sha).length>0;}
   releaseCodexFix(repository,number,sha) {this.sql.exec('DELETE FROM codex_fixes WHERE repository = ? AND number = ? AND sha = ?',repository.toLowerCase(),number,sha);}
   // Whether a pull request was opened from a chat answer, so only its own branch is cleaned up.
   isChatPullRequest(url) {return this.rows('SELECT 1 FROM messages WHERE lower(pr_url) = lower(?) LIMIT 1',url).length>0;}

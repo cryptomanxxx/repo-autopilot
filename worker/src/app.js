@@ -304,7 +304,9 @@ async function dashboard(url,{store,session,fetchImpl,repository}) {
   const repo=repository.toLowerCase(),key=pull?`pull:${repo}:${pull[1]}:${updated}`:`overview:${repo}`;
   const cached=fresh?null:await store.getCache(key);
   if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
-  if(cached) return json(200,cached);
+  // Whether Codex was already asked to fix the head is read on every response, outside the cache.
+  const withAsked=async item=>pull&&item?.state==='open'&&item.headSha?{...item,codexFixAsked:await store.hasCodexFix(repository,item.number,item.headSha)}:item;
+  if(cached) return json(200,await withAsked(cached));
   const load=await store.startDashboardLoad(repository);
   let value,changed=false;
   try {
@@ -331,7 +333,7 @@ async function dashboard(url,{store,session,fetchImpl,repository}) {
   // A result with a failed part is cached only briefly, so a transient GitHub error does not stick. A pull
   // request that changed while loading is not cached at all: the next load should read it again.
   if(!changed) await store.setDashboardCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS,{repository,...load,pull:pull?{number:Number(pull[1]),sha:value.headSha}:null});
-  return json(200,value);
+  return json(200,await withAsked(value));
 }
 
 async function chat(body,{env,store,github,config,access,fetchImpl}) {
@@ -420,11 +422,13 @@ async function askCodexFix(body,{store,github,access}) {
   if(item.detailError) throw new UserError(409,`Could not check PR #${number}'s current Codex status: ${item.detailError} Try again.`);
   if(item.headSha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
   if(item.codex?.state!=='findings') {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`Codex reports no findings on PR #${number}'s current code any more.`);}
-  if(!await store.claimCodexFix(repository,number,body.sha)) throw new UserError(409,`Codex was already asked to fix PR #${number} at this commit. Wait for its new commit.`);
+  // Asking again for the same commit is not an error: the button then shows that Codex was asked.
+  if(!await store.claimCodexFix(repository,number,body.sha)) return json(200,{asked:true,already:true});
   try {await client.api(`issues/${number}/comments`,{method:'POST',body:{body:CODEX_FIX_COMMENT}});}
   catch(error) {
-    // A comment that was not posted can be asked for again.
-    await store.releaseCodexFix(repository,number,body.sha);
+    // Only a refusal from GitHub proves no comment was posted; after a timeout or a server error the
+    // comment may exist, so the claim stays and nothing is posted twice.
+    if(error instanceof GitHubError&&error.status>=400&&error.status<500) await store.releaseCodexFix(repository,number,body.sha);
     if(error instanceof GitHubError&&[403,404].includes(error.status)) throw new UserError(403,`GitHub refused the comment on PR #${number} (HTTP ${error.status}). Check that the GitHub App has Pull requests set to Read and write.`);
     throw error;
   }
