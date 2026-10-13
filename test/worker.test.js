@@ -226,7 +226,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -235,7 +235,7 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(url==='https://api.github.com/user/installations?per_page=100') return ok({installations:[{id:1}]});
     if(url.startsWith('https://api.github.com/user/installations/1/repositories')) return ok({repositories:[{full_name:'owner/repo',private:false,pushed_at:'2026-10-01T00:00:00Z'},{full_name:'owner/other',private:true,pushed_at:'2026-10-02T00:00:00Z'}]});
     const path=url.replace('https://api.github.com/repos/owner/repo','');
-    if(path==='') return ok({default_branch:'main',private:false});
+    if(path==='') return ok({default_branch:calls.filter(c=>c.url==='https://api.github.com/repos/owner/repo').length>defaultAfter?'trunk':'main',private:false});
     if(path==='/git/ref/heads/main') return ok({object:{sha:head}});
     if(path===`/tarball/${head}`) return new Response(gzipSync(repoTar(repoFiles,executable)));
     if(path===`/git/commits/${head}`) return ok({tree:{sha:'tree0'}});
@@ -412,6 +412,9 @@ test('chat answers from repository files and opens a pull request on request',as
   const moving=[],moved=await merge({},github({calls:moving,retargetAfter:1}));
   assert.equal(moved.status,409);assert.match((await moved.json()).error,/now targets release/,'a retarget during the status check is caught');
   assert.equal(moving.some(c=>c.method==='PUT'),false);
+  const renaming=[],renamed=await merge({},github({calls:renaming,defaultAfter:1}));
+  assert.equal(renamed.status,409);assert.match((await renamed.json()).error,/instead of the default branch trunk/,'a new default branch during the status check is caught');
+  assert.equal(renaming.some(c=>c.method==='PUT'),false);
   for(const sha of [undefined,'','b'.repeat(39),42]) assert.equal((await merge({sha})).status,400,'the reviewed head commit is required: '+sha);
   calls.length=0;
   const merged=await merge();

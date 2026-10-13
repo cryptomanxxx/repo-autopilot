@@ -431,8 +431,10 @@ async function mergePullRequest(body,{store,github,config,access}) {
     // closed: a status that cannot be read, or unverified items the owner did not confirm, refuse the merge.
     const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
     const {item}=await status.pullDetails(repository,pull);
-    // GitHub's merge call guards the head but not the base, so a retarget during the check is caught here.
-    if(item.baseRef!==defaultBranch) await refuse(`PR #${number} now targets ${item.baseRef||'another branch'} instead of the default branch ${defaultBranch}. Merge it on GitHub if that is intended.`);
+    // GitHub's merge call guards the head but not the base, so a retarget or a new default branch during
+    // the check is caught here, against the default branch read again.
+    const {default_branch:currentDefault}=await client.api('');
+    if(item.baseRef!==currentDefault) await refuse(`PR #${number} now targets ${item.baseRef||'another branch'} instead of the default branch ${currentDefault}. Merge it on GitHub if that is intended.`);
     if(item.headSha!==body.sha) await refuse(`PR #${number} has new commits since its status was shown. Check it again before merging.`);
     if(item.detailError) await refuse(`Could not check PR #${number}'s current status: ${item.detailError} Try again.`);
     if(item.readiness.state==='not_ready') await refuse(`PR #${number} is not ready to merge: ${item.readiness.reasons.join('; ')}.`);
