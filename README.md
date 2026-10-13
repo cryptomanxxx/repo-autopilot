@@ -1,6 +1,6 @@
 # Repo Autopilot
 
-An open-source GitHub dashboard and coding-agent chat for your repositories. MIT licensed, with no Debatt-AI-specific configuration.
+An open-source GitHub dashboard and coding-agent chat for your repositories. MIT licensed.
 
 Repo Autopilot is one app on Cloudflare Workers with GitHub sign-in: a live dashboard and the agent chat in two tabs, for any repository where its GitHub App is installed. See [Repo Autopilot app on Cloudflare Workers](#repo-autopilot-app-on-cloudflare-workers).
 
