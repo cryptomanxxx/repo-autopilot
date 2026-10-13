@@ -420,6 +420,7 @@ async function askCodexFix(body,{store,github,access}) {
   const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
   const {item}=await status.pullDetails(repository,pull);
   if(item.detailError) throw new UserError(409,`Could not check PR #${number}'s current Codex status: ${item.detailError} Try again.`);
+  if(item.state!=='open') {await store.invalidate(repository,{overview:true,pulls:[number]});throw new UserError(409,`PR #${number} is no longer open.`);}
   if(item.headSha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
   if(item.codex?.state!=='findings') {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`Codex reports no findings on PR #${number}'s current code any more.`);}
   // Asking again for the same commit is not an error: the button then shows that Codex was asked.
