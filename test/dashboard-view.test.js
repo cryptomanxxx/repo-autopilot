@@ -10,9 +10,9 @@ test('the dashboard offers merging only after a Codex 👍 and with no known blo
   assert.match(mergeBlocker({...pr,readiness:{state:'not_ready',reasons:['CI failed']}}),/Not ready: CI failed/);
 });
 
-test('the dashboard offers to ask Codex to fix findings, or to review code it has not reviewed',()=>{
+test('the dashboard offers to ask Codex to review code it has not reviewed, and never to fix',()=>{
   const offered=state=>CODEX_ACTIONS.filter(a=>a.show(state)).map(a=>a.kind);
-  assert.deepEqual(offered('findings'),['fix']);
+  assert.deepEqual(offered('findings'),[],'findings are fixed in the pull request, not by asking Codex');
   for(const state of ['unknown','unverified']) assert.deepEqual(offered(state),['review']);
   for(const state of ['clear','running','requested','incomplete']) assert.deepEqual(offered(state),[],'nothing to ask while Codex is busy or done, or its history is cut off');
 });

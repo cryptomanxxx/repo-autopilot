@@ -440,40 +440,13 @@ test('chat answers from repository files and opens a pull request on request',as
 
 });
 
-test('Codex can be asked to fix its findings once per head commit',async()=>{
-  const calls=[],{env,store}=environment(),fetchImpl=github({calls,codex:'findings'});
+test('Codex can no longer be asked to fix its findings',async()=>{
+  const calls=[],{env}=environment(),fetchImpl=github({calls,codex:'findings'});
   const auth=await session(env,fetchImpl);
-  const ask=(extra={},fetch=fetchImpl)=>handle(post('/api/codex-fix',auth,{repository:'owner/repo',number:7,sha:'b'.repeat(40),...extra}),env,{fetchImpl:fetch});
-  const asked=await ask();
-  assert.deepEqual(await asked.json(),{asked:true});
-  const comment=calls.find(c=>c.method==='POST'&&c.url.endsWith('/issues/7/comments'));
-  assert.deepEqual(JSON.parse(comment.options.body),{body:'@codex address that feedback'},'the comment Codex acts on');
-  assert.equal(comment.options.headers.Authorization,'Bearer ghu_user','posted with the owner\'s GitHub account');
-  calls.length=0;
+  assert.equal((await handle(post('/api/codex-fix',auth,{repository:'owner/repo',number:7,sha:'b'.repeat(40)}),env,{fetchImpl})).status,404);
+  assert.equal(calls.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
   const shown=await (await handle(request('/api/dashboard/pulls/7',{cookie:auth.cookie}),env,{fetchImpl})).json();
-  assert.equal(shown.codexFixAsked,true,'the dashboard shows that Codex was asked, after a reload too');
-  const again=await ask();
-  assert.deepEqual(await again.json(),{asked:true,already:true},'asking again for the same commit is answered as already asked');
-  assert.equal(calls.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false,'asked at most once per commit');
-  assert.equal((await ask({sha:'c'.repeat(40)})).status,409,'only for the head commit that was shown');
-  assert.equal((await ask({number:8})).status,404);
-  for(const extra of [{repository:undefined},{number:'7'},{sha:'b'}]) assert.equal((await ask(extra)).status,400);
-  store.rows('DELETE FROM codex_fixes');
-  const cleared=[],clear=await ask({},github({calls:cleared,codex:'clear'}));
-  assert.equal(clear.status,409);assert.match((await clear.json()).error,/no findings/,'the current Codex status is checked before asking');
-  assert.equal(cleared.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
-  const unreadable=await ask({},github({calls:[],codex:'findings',detailStatus:503}));
-  assert.equal(unreadable.status,409);assert.match((await unreadable.json()).error,/Could not check/);
-  const closing=[],closed=await ask({},github({calls:closing,codex:'findings',closeAfter:1}));
-  assert.equal(closed.status,409);assert.match((await closed.json()).error,/no longer open/,'a PR closed during the status check is not asked');
-  assert.equal(closing.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
-  const refused=await ask({},github({calls:[],codex:'findings',commentStatus:403}));
-  assert.equal(refused.status,403);assert.match((await refused.json()).error,/Pull requests set to Read and write/);
-  assert.deepEqual(await (await ask()).json(),{asked:true},'a refused comment can be retried');
-  store.rows('DELETE FROM codex_fixes');
-  const dropped=github({calls:[],codex:'findings'}),lost=await ask({},async(url,options)=>options?.method==='POST'&&url.endsWith('/issues/7/comments')?Promise.reject(new TypeError('network connection lost')):dropped(url,options));
-  assert.equal(lost.status,500);
-  assert.deepEqual(await (await ask()).json(),{asked:true,already:true},'when the comment may have been posted, it is not posted again');
+  assert.equal('codexFixAsked' in shown,false);
 });
 
 test('Codex can be asked to review code it has not reviewed, once per head commit',async()=>{
@@ -484,7 +457,7 @@ test('Codex can be asked to review code it has not reviewed, once per head commi
   const comments=calls.filter(c=>c.method==='POST'&&c.url.endsWith('/issues/7/comments'));
   assert.deepEqual(comments.map(c=>JSON.parse(c.options.body)),[{body:'@codex review'}],'the comment Codex reviews on');
   const shown=await (await handle(request('/api/dashboard/pulls/7',{cookie:auth.cookie}),env,{fetchImpl})).json();
-  assert.equal(shown.codexReviewAsked,true);assert.equal(shown.codexFixAsked,false,'fix and review requests are recorded separately');
+  assert.equal(shown.codexReviewAsked,true);
   calls.length=0;
   assert.deepEqual(await (await ask()).json(),{asked:true,already:true});
   assert.equal(calls.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false,'asked at most once per commit');
@@ -612,6 +585,12 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
   assert.equal(repoCalls().length,3,'the overview needs three GitHub calls');
   assert.ok(calls.every(c=>c.options.headers['User-Agent']==='repo-autopilot-chat'&&c.options.headers.Authorization==='Bearer ghu_user'),'Workers requests identify themselves to GitHub');
   calls.length=0;
+  // "Show more" asks for larger lists in steps; each size has its own cache entry.
+  await get('/api/dashboard?pulls=12&runs=30');
+  assert.ok(calls.some(c=>c.url.includes('/pulls?')&&c.url.includes('per_page=12'))&&calls.some(c=>c.url.includes('/actions/runs?per_page=30')));
+  assert.ok(store.getCache('overview:owner/repo:12:30'));
+  for(const bad of ['pulls=7','pulls=36','runs=0','runs=75','pulls=x','pulls=012']) assert.equal((await get(`/api/dashboard?${bad}`)).status,400,bad);
+  calls.length=0;
   const detail=await (await get('/api/dashboard/pulls/1?updated=2026-10-01T00:00:00Z')).json();
   assert.equal(detail.number,1);assert.equal(detail.ci,'success');assert.equal(detail.state,'open');assert.ok(detail.readiness.label);
   assert.ok(repoCalls().length<=10,`one pull request needs at most ten GitHub calls (used ${repoCalls().length})`);
@@ -689,13 +668,13 @@ test('store adds the repository column to conversations saved before repository 
   assert.deepEqual(store.listConversations('owner/other').map(c=>c.title),['New'],'repository names compare without case');
   assert.deepEqual({...store.getConversationInfo('b'.repeat(32))},{title:'New',repository:'Owner/Other'});
   const sha='c'.repeat(40);
-  store.setCache('overview:owner/repo',1,60000);store.setCache('pull:owner/repo2:5:x',1,60000);store.setCache('pull:owner/repo:50:x',1,60000);
+  store.setCache('overview:owner/repo',1,60000);store.setCache('overview:owner/repo:12:15',1,60000);store.setCache('overview:owner/repo2:12:15',1,60000);store.setCache('pull:owner/repo2:5:x',1,60000);store.setCache('pull:owner/repo:50:x',1,60000);
   for(const number of [5,6]) store.setDashboardCache(`pull:owner/repo:${number}:x`,{number},60000,{repository:'Owner/Repo',version:0,pull:{number,sha:number===6?sha:'d'.repeat(40)}});
   assert.equal(store.invalidate('Owner/Repo',{overview:true,pulls:[5]}),1);
-  assert.deepEqual(store.rows('SELECT key FROM cache ORDER BY key').map(r=>r.key),['pull:owner/repo2:5:x','pull:owner/repo:50:x','pull:owner/repo:6:x'],'only PR 5 of this repository is dropped');
+  assert.deepEqual(store.rows('SELECT key FROM cache ORDER BY key').map(r=>r.key),['overview:owner/repo2:12:15','pull:owner/repo2:5:x','pull:owner/repo:50:x','pull:owner/repo:6:x'],'only PR 5 and the overviews of this repository are dropped');
   assert.equal(store.invalidate('owner/repo',{sha:'e'.repeat(40)}),null,'a commit of no loaded pull request changes nothing');
   assert.equal(store.invalidate('owner/repo',{sha}),2,'a check on a pull request\'s head commit drops that pull request');
-  assert.deepEqual(store.rows('SELECT key FROM cache ORDER BY key').map(r=>r.key),['pull:owner/repo2:5:x','pull:owner/repo:50:x']);
+  assert.deepEqual(store.rows('SELECT key FROM cache ORDER BY key').map(r=>r.key),['overview:owner/repo2:12:15','pull:owner/repo2:5:x','pull:owner/repo:50:x']);
   assert.equal(store.getVersion('OWNER/REPO'),2);assert.equal(store.getVersion('owner/other'),0);
   store.setDashboardCache('pull:owner/repo:7:x',{},60000,{repository:'owner/repo',version:1});
   assert.equal(store.getCache('pull:owner/repo:7:x'),null,'data loaded before a webhook event is not cached');
