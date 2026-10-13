@@ -153,9 +153,10 @@ function locate(source,search,path) {
 // The file an edit block without a path refers to: the one editable file its SEARCH text matches exactly.
 export function findFile(search,files,allowed=editablePath) {
   if(!search) throw new PublicError('An edit block that creates a file must name it after SEARCH.');
-  const first=search.split('\n').find(line=>line.trim())||search,hits=[];
+  // A line with content is a quick filter; a search of only whitespace lines is checked in full by locate.
+  const first=search.split('\n').find(line=>line.trim()),hits=[];
   for(const [path,text] of Object.entries(files)) {
-    if(!text.includes(first)) continue;
+    if(first!==undefined&&!text.includes(first)) continue;
     try {locate(text,search,path);hits.push(path);} catch {}
   }
   const editable=hits.filter(path=>allowed(path));

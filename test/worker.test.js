@@ -163,6 +163,7 @@ test('an edit block without a file path is matched to the one file its text belo
   assert.throws(()=>findFile('secret();',files),/src\/agent\.js may not be edited/);
   assert.throws(()=>findFile('missing',files),/matches no file exactly/);
   assert.throws(()=>findFile('',files),/must name it/);
+  assert.equal(findFile('  \n  ',{'public/w.js':'a\r\n  \r\n  \r\nb'}),'public/w.js','a whitespace-only search still matches CRLF files');
   assert.equal(displayText(reply),'','path-less blocks are left out of the PR description too');
 });
 
