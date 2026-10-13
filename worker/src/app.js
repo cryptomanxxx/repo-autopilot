@@ -16,6 +16,13 @@ const fromBase64url=value=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(
 const sha256=async text=>new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(text)));
 
 
+// The commit and time the deploy workflow recorded; null when the Worker was deployed some other way.
+export function deployedVersion(env) {
+  const commit=/^[0-9a-f]{40}$/i.test(env.DEPLOYED_COMMIT||'')?env.DEPLOYED_COMMIT.toLowerCase():null;
+  const at=Date.parse(env.DEPLOYED_AT||'');
+  return commit?{commit,at:Number.isNaN(at)?null:new Date(at).toISOString()}:null;
+}
+
 let keyCache=null;
 async function stateKey(secret) {
   if(keyCache?.secret===secret) return keyCache.key;
@@ -154,7 +161,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   const sessionId=cookies(request)[sessionCookie];
   const hash=sessionId&&/^[0-9a-f]{64}$/.test(sessionId)?hex(await sha256(sessionId)):null;
   const session=hash?await store.getSession(hash):null;
-  if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:env.MODEL||DEFAULT_MODEL}:{login:null,repository:config.repository});
+  if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:env.MODEL||DEFAULT_MODEL,deployed:deployedVersion(env)}:{login:null,repository:config.repository});
   if(!session) throw new UserError(401,'Sign in to chat.');
 
   const github=repository=>githubClient({repository,token:session.token,fetchImpl});

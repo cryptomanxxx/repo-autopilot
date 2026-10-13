@@ -12,7 +12,7 @@ import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFi
 import {createHmac} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
-import {handle,validateImage,webhookTargets} from '../worker/src/app.js';
+import {handle,validateImage,webhookTargets,deployedVersion} from '../worker/src/app.js';
 
 // Adapter giving node:sqlite the Durable Object `sql.exec(query, ...bindings).toArray()` shape.
 const sqlite=()=>{const db=new DatabaseSync(':memory:');return {exec:(query,...bindings)=>{const rows=db.prepare(query).all(...bindings);return {toArray:()=>rows};}};};
@@ -823,4 +823,16 @@ test('webhook events map to the dashboard data they change',()=>{
   for(const event of ['ping','push','installation','star']) assert.equal(webhookTargets(event,{}),null,event);
   assert.deepEqual(webhookTargets('push',{ref:'refs/heads/main',repository:{default_branch:'main'}}),{overview:false,pulls:[],head:true});
   assert.equal(webhookTargets('push',{ref:'refs/heads/feature',repository:{default_branch:'main'}}),null,'pushes to other branches change nothing shown');
+});
+
+test('the session reports the deployed commit only when the deploy workflow recorded a valid one',async()=>{
+  const sha='ABCDEF0123456789abcdef0123456789abcdef01';
+  assert.deepEqual(deployedVersion({DEPLOYED_COMMIT:sha,DEPLOYED_AT:'2026-10-13T18:30:00Z'}),{commit:sha.toLowerCase(),at:'2026-10-13T18:30:00.000Z'});
+  assert.deepEqual(deployedVersion({DEPLOYED_COMMIT:sha,DEPLOYED_AT:'soon'}),{commit:sha.toLowerCase(),at:null});
+  for(const commit of [undefined,'','abc1234',`${sha}0`,'<script>']) assert.equal(deployedVersion({DEPLOYED_COMMIT:commit}),null);
+  const {env}=environment(),fetchImpl=github({calls:[]});
+  assert.equal((await session(env,fetchImpl)).info.deployed,null);
+  const deployed=environment();
+  assert.equal((await session({...deployed.env,DEPLOYED_COMMIT:sha},fetchImpl)).info.deployed.commit,sha.toLowerCase());
+  assert.equal((await (await handle(request('/api/session'),{...deployed.env,DEPLOYED_COMMIT:sha},{fetchImpl})).json()).deployed,undefined,'signed-out visitors see no version');
 });
