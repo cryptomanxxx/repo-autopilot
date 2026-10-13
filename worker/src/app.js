@@ -414,19 +414,22 @@ async function askCodexFix(body,{store,github,access}) {
   catch(error) {if(error instanceof GitHubError&&error.status===404) throw new UserError(404,`PR #${number} was not found.`);throw error;}
   if(pull.state!=='open'||pull.merged) throw new UserError(409,`PR #${number} is no longer open.`);
   if(pull.head?.sha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
-  const key=`codex-fix:${repository.toLowerCase()}:${number}:${body.sha}`,lock=randomHex(16);
-  if(!await store.acquireLock(key,lock,30000)) throw new UserError(429,'Codex is already being asked. Wait a moment.');
-  try {
-    if(await store.getCache(key)) throw new UserError(409,`Codex was already asked to fix PR #${number} at this commit. Wait for its new commit.`);
-    try {await client.api(`issues/${number}/comments`,{method:'POST',body:{body:CODEX_FIX_COMMENT}});}
-    catch(error) {
-      if(error instanceof GitHubError&&[403,404].includes(error.status)) throw new UserError(403,`GitHub refused the comment on PR #${number} (HTTP ${error.status}). Check that the GitHub App has Pull requests set to Read and write.`);
-      throw error;
-    }
-    await store.setCache(key,{at:Date.now()},7*24*HOUR);
-    await store.invalidate(repository,{pulls:[number]});
-    return json(200,{asked:true});
-  } finally {await store.releaseLock(key,lock);}
+  // Codex may have cleared the commit, or been asked already, since the dashboard showed it.
+  const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
+  const {item}=await status.pullDetails(repository,pull);
+  if(item.detailError) throw new UserError(409,`Could not check PR #${number}'s current Codex status: ${item.detailError} Try again.`);
+  if(item.headSha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
+  if(item.codex?.state!=='findings') {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`Codex reports no findings on PR #${number}'s current code any more.`);}
+  if(!await store.claimCodexFix(repository,number,body.sha)) throw new UserError(409,`Codex was already asked to fix PR #${number} at this commit. Wait for its new commit.`);
+  try {await client.api(`issues/${number}/comments`,{method:'POST',body:{body:CODEX_FIX_COMMENT}});}
+  catch(error) {
+    // A comment that was not posted can be asked for again.
+    await store.releaseCodexFix(repository,number,body.sha);
+    if(error instanceof GitHubError&&[403,404].includes(error.status)) throw new UserError(403,`GitHub refused the comment on PR #${number} (HTTP ${error.status}). Check that the GitHub App has Pull requests set to Read and write.`);
+    throw error;
+  }
+  await store.invalidate(repository,{pulls:[number]});
+  return json(200,{asked:true});
 }
 
 // Merges a pull request from the dashboard, exactly at the head commit the owner saw checked, once Codex

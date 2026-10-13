@@ -247,6 +247,7 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},pullStatus);
     if(method==='GET'&&path.startsWith('/pulls?state=open&head=owner%3Aautopilot%2Fchat-')) return ok(openPulls);
     if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:'open',merged:false,title:'New title',base:{ref:calls.filter(c=>c.url.endsWith('/pulls/7')).length>retargetAfter?'release':mergeBase},head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
+    if(path==='/pulls/7/reviews?per_page=100'&&codex==='findings') return ok([{user:{login:'chatgpt-codex-connector[bot]'},state:'COMMENTED',commit_id:'b'.repeat(40),submitted_at:'2026-10-13T12:00:00Z',body:'Here are some automated review suggestions for this pull request.'}],detailStatus);
     if(path==='/issues/7/comments?per_page=100'&&codex==='clear') return ok([{user:{login:'chatgpt-codex-connector[bot]'},body:"Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `bbbbbbbbbb`",created_at:'2026-10-13T12:00:00Z'}],detailStatus);
     if(/^\/(pulls\/7\/(reviews|comments|commits)|issues\/7\/(comments|reactions))\?per_page=100$/.test(path)) return ok([],detailStatus);
     if(path===`/commits/${'b'.repeat(40)}/status?per_page=100`) return ok({statuses:[]});
@@ -440,7 +441,7 @@ test('chat answers from repository files and opens a pull request on request',as
 });
 
 test('Codex can be asked to fix its findings once per head commit',async()=>{
-  const calls=[],{env,store}=environment(),fetchImpl=github({calls});
+  const calls=[],{env,store}=environment(),fetchImpl=github({calls,codex:'findings'});
   const auth=await session(env,fetchImpl);
   const ask=(extra={},fetch=fetchImpl)=>handle(post('/api/codex-fix',auth,{repository:'owner/repo',number:7,sha:'b'.repeat(40),...extra}),env,{fetchImpl:fetch});
   const asked=await ask();
@@ -451,12 +452,17 @@ test('Codex can be asked to fix its findings once per head commit',async()=>{
   calls.length=0;
   const again=await ask();
   assert.equal(again.status,409);assert.match((await again.json()).error,/already asked/);
-  assert.equal(calls.some(c=>c.method==='POST'),false,'asked at most once per commit');
+  assert.equal(calls.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false,'asked at most once per commit');
   assert.equal((await ask({sha:'c'.repeat(40)})).status,409,'only for the head commit that was shown');
   assert.equal((await ask({number:8})).status,404);
   for(const extra of [{repository:undefined},{number:'7'},{sha:'b'}]) assert.equal((await ask(extra)).status,400);
-  store.rows("DELETE FROM cache WHERE key LIKE 'codex-fix:%'");
-  const refused=await ask({},github({calls:[],commentStatus:403}));
+  store.rows('DELETE FROM codex_fixes');
+  const cleared=[],clear=await ask({},github({calls:cleared,codex:'clear'}));
+  assert.equal(clear.status,409);assert.match((await clear.json()).error,/no findings/,'the current Codex status is checked before asking');
+  assert.equal(cleared.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
+  const unreadable=await ask({},github({calls:[],codex:'findings',detailStatus:503}));
+  assert.equal(unreadable.status,409);assert.match((await unreadable.json()).error,/Could not check/);
+  const refused=await ask({},github({calls:[],codex:'findings',commentStatus:403}));
   assert.equal(refused.status,403);assert.match((await refused.json()).error,/Pull requests set to Read and write/);
   assert.equal((await ask()).status,200,'a refused comment can be retried');
 });
