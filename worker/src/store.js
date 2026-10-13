@@ -17,6 +17,8 @@ export class ChatStoreLogic {
     sql.exec(`CREATE TABLE IF NOT EXISTS versions (repository TEXT PRIMARY KEY, version INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS heads (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY (repository, number))`);
     sql.exec(`CREATE TABLE IF NOT EXISTS commit_events (repository TEXT NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // Codex fix requests, one per pull request head commit; kept for good so none is ever posted twice.
+    sql.exec(`CREATE TABLE IF NOT EXISTS codex_fixes (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (repository, number, sha))`);
     // Conversations from before repository selection have no repository; they belong to the app's own one.
     try {sql.exec('SELECT repository FROM conversations LIMIT 0');}
     catch {sql.exec('ALTER TABLE conversations ADD COLUMN repository TEXT');}
@@ -136,6 +138,15 @@ export class ChatStoreLogic {
   setPullRequest(conversation,id,url) {
     this.sql.exec('UPDATE messages SET pr_url = ? WHERE conversation = ? AND id = ? AND pr_url IS NULL',url,conversation,id);
   }
+  // Records a Codex fix request for this head commit; false when one was already recorded.
+  claimCodexFix(repository,number,sha) {
+    const repo=repository.toLowerCase();
+    if(this.rows('SELECT 1 FROM codex_fixes WHERE repository = ? AND number = ? AND sha = ?',repo,number,sha).length) return false;
+    this.sql.exec('INSERT INTO codex_fixes (repository, number, sha, at) VALUES (?, ?, ?, ?)',repo,number,sha,this.now());
+    return true;
+  }
+  hasCodexFix(repository,number,sha) {return this.rows('SELECT 1 FROM codex_fixes WHERE repository = ? AND number = ? AND sha = ?',repository.toLowerCase(),number,sha).length>0;}
+  releaseCodexFix(repository,number,sha) {this.sql.exec('DELETE FROM codex_fixes WHERE repository = ? AND number = ? AND sha = ?',repository.toLowerCase(),number,sha);}
   // Whether a pull request was opened from a chat answer, so only its own branch is cleaned up.
   isChatPullRequest(url) {return this.rows('SELECT 1 FROM messages WHERE lower(pr_url) = lower(?) LIMIT 1',url).length>0;}
 }

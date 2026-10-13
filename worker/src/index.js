@@ -17,6 +17,9 @@ export class ChatStore extends DurableObject {
   saveExchange(exchange) {return this.logic.saveExchange(exchange);}
   setPullRequest(conversation,id,url) {return this.logic.setPullRequest(conversation,id,url);}
   isChatPullRequest(url) {return this.logic.isChatPullRequest(url);}
+  claimCodexFix(repository,number,sha) {return this.logic.claimCodexFix(repository,number,sha);}
+  hasCodexFix(repository,number,sha) {return this.logic.hasCodexFix(repository,number,sha);}
+  releaseCodexFix(repository,number,sha) {return this.logic.releaseCodexFix(repository,number,sha);}
   getCache(key) {return this.logic.getCache(key);}
   invalidate(repository,targets) {return this.logic.invalidate(repository,targets);}
   getVersion(repository) {return this.logic.getVersion(repository);}

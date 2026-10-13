@@ -226,7 +226,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity,codex='clear'}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity,codex='clear',commentStatus=201,closeAfter=Infinity}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -246,11 +246,13 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(method==='GET'&&path===`/compare/${head}...commit1`) return ok({files:[{filename:'public/app.js',status:'modified',additions:1,deletions:1}]},compareStatus);
     if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},pullStatus);
     if(method==='GET'&&path.startsWith('/pulls?state=open&head=owner%3Aautopilot%2Fchat-')) return ok(openPulls);
-    if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:'open',merged:false,title:'New title',base:{ref:calls.filter(c=>c.url.endsWith('/pulls/7')).length>retargetAfter?'release':mergeBase},head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
+    if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:calls.filter(c=>c.url.endsWith('/pulls/7')).length>closeAfter?'closed':'open',merged:false,title:'New title',base:{ref:calls.filter(c=>c.url.endsWith('/pulls/7')).length>retargetAfter?'release':mergeBase},head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
+    if(path==='/pulls/7/reviews?per_page=100'&&codex==='findings') return ok([{user:{login:'chatgpt-codex-connector[bot]'},state:'COMMENTED',commit_id:'b'.repeat(40),submitted_at:'2026-10-13T12:00:00Z',body:'Here are some automated review suggestions for this pull request.'}],detailStatus);
     if(path==='/issues/7/comments?per_page=100'&&codex==='clear') return ok([{user:{login:'chatgpt-codex-connector[bot]'},body:"Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `bbbbbbbbbb`",created_at:'2026-10-13T12:00:00Z'}],detailStatus);
     if(/^\/(pulls\/7\/(reviews|comments|commits)|issues\/7\/(comments|reactions))\?per_page=100$/.test(path)) return ok([],detailStatus);
     if(path===`/commits/${'b'.repeat(40)}/status?per_page=100`) return ok({statuses:[]});
     if(path===`/commits/${'b'.repeat(40)}/check-runs?per_page=100`) return ok({total_count:1,check_runs:[{name:'test',status:'completed',conclusion:mergeCi}]});
+    if(method==='POST'&&path==='/issues/7/comments') return ok({id:1},commentStatus);
     if(method==='PUT'&&path==='/pulls/7/merge') return ok({merged:true},mergeStatus);
     if(method==='DELETE'&&path==='/git/refs/heads/autopilot/chat-abc-2') return new Response(null,{status:204});
     return ok({message:'not found'},404);
@@ -436,6 +438,42 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.equal((await merge({number:8})).status,404,'an unknown pull request is not found');
   for(const extra of [{repository:undefined},{number:'7'},{number:0}]) assert.equal((await merge(extra)).status,400);
 
+});
+
+test('Codex can be asked to fix its findings once per head commit',async()=>{
+  const calls=[],{env,store}=environment(),fetchImpl=github({calls,codex:'findings'});
+  const auth=await session(env,fetchImpl);
+  const ask=(extra={},fetch=fetchImpl)=>handle(post('/api/codex-fix',auth,{repository:'owner/repo',number:7,sha:'b'.repeat(40),...extra}),env,{fetchImpl:fetch});
+  const asked=await ask();
+  assert.deepEqual(await asked.json(),{asked:true});
+  const comment=calls.find(c=>c.method==='POST'&&c.url.endsWith('/issues/7/comments'));
+  assert.deepEqual(JSON.parse(comment.options.body),{body:'@codex address that feedback'},'the comment Codex acts on');
+  assert.equal(comment.options.headers.Authorization,'Bearer ghu_user','posted with the owner\'s GitHub account');
+  calls.length=0;
+  const shown=await (await handle(request('/api/dashboard/pulls/7',{cookie:auth.cookie}),env,{fetchImpl})).json();
+  assert.equal(shown.codexFixAsked,true,'the dashboard shows that Codex was asked, after a reload too');
+  const again=await ask();
+  assert.deepEqual(await again.json(),{asked:true,already:true},'asking again for the same commit is answered as already asked');
+  assert.equal(calls.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false,'asked at most once per commit');
+  assert.equal((await ask({sha:'c'.repeat(40)})).status,409,'only for the head commit that was shown');
+  assert.equal((await ask({number:8})).status,404);
+  for(const extra of [{repository:undefined},{number:'7'},{sha:'b'}]) assert.equal((await ask(extra)).status,400);
+  store.rows('DELETE FROM codex_fixes');
+  const cleared=[],clear=await ask({},github({calls:cleared,codex:'clear'}));
+  assert.equal(clear.status,409);assert.match((await clear.json()).error,/no findings/,'the current Codex status is checked before asking');
+  assert.equal(cleared.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
+  const unreadable=await ask({},github({calls:[],codex:'findings',detailStatus:503}));
+  assert.equal(unreadable.status,409);assert.match((await unreadable.json()).error,/Could not check/);
+  const closing=[],closed=await ask({},github({calls:closing,codex:'findings',closeAfter:1}));
+  assert.equal(closed.status,409);assert.match((await closed.json()).error,/no longer open/,'a PR closed during the status check is not asked');
+  assert.equal(closing.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
+  const refused=await ask({},github({calls:[],codex:'findings',commentStatus:403}));
+  assert.equal(refused.status,403);assert.match((await refused.json()).error,/Pull requests set to Read and write/);
+  assert.deepEqual(await (await ask()).json(),{asked:true},'a refused comment can be retried');
+  store.rows('DELETE FROM codex_fixes');
+  const dropped=github({calls:[],codex:'findings'}),lost=await ask({},async(url,options)=>options?.method==='POST'&&url.endsWith('/issues/7/comments')?Promise.reject(new TypeError('network connection lost')):dropped(url,options));
+  assert.equal(lost.status,500);
+  assert.deepEqual(await (await ask()).json(),{asked:true,already:true},'when the comment may have been posted, it is not posted again');
 });
 
 test('pull requests keep file modes and can be retried after a partial failure',async()=>{
