@@ -6,6 +6,26 @@ Repo Autopilot is one app on Cloudflare Workers with GitHub sign-in: a live dash
 
 Automatic merge is **off**. The coding agent proposes changes as pull requests; it does not execute generated code or merge changes. A successful CI indicator is informational: it does not establish branch protection, resolved conversations, current review approval, or merge eligibility.
 
+## How it works best
+
+Repo Autopilot shows the work and lets you merge it; the coding and the reviewing are done by tools you already use. It works best with at least **Claude Pro** and **ChatGPT Plus with Codex**:
+
+- **Coding agent:** Claude Code (Claude Pro or higher) or Codex in ChatGPT writes the change and fixes what the review finds. With Claude Code on the web, turn on automatic pull request fixing in its settings, so it picks up Codex's findings by itself.
+- **Reviewer:** Codex code review (ChatGPT Plus or higher), with automatic reviews set to run **on every push** (Codex settings → Code review). Then each fix is reviewed again without anyone asking for it.
+
+The flow:
+
+1. You describe what you want once, in the Claude app (Claude Code) or in ChatGPT (Codex).
+2. The coding agent writes the change and opens a pull request.
+3. Codex reviews the pull request automatically.
+4. The coding agent fixes what Codex found and pushes; Codex reviews the new commit.
+5. Steps 3–4 repeat until Codex gives the current code a 👍. You follow every round in the dashboard's PR activity.
+6. The **Merge** button turns green, and you merge from the dashboard.
+
+This loop has been run end to end with Claude Code as the coding agent. With Codex as the coding agent, check that its fixes are pushed to the pull request's own branch: a fix that opens a new pull request or stays in a Codex task does not move the loop on.
+
+The agent chat built into Repo Autopilot is experimental and is not part of this flow; see [Agent chat](#agent-chat).
+
 ## Screenshots
 
 <p align="center"><img src="docs/screenshots/dashboard.png" width="860" alt="Dashboard tab: repository picker, the six most recently updated pull requests with merge readiness, CI and Codex status, and recent GitHub Actions runs"></p>
@@ -18,7 +38,7 @@ Automatic merge is **off**. The coding agent proposes changes as pull requests; 
 
 <p align="center"><img src="docs/screenshots/chat.png" width="860" alt="Agent chat tab: a question about checkout totals, the agent's explanation and exact code edits, and a Create pull request button"></p>
 
-**Agent chat.** Ask about the code or describe a change, with an optional screenshot. The agent reads the repository's current files, answers with exact edits, and opens a pull request when you press **Create pull request**.
+**Agent chat (experimental).** Ask about the code or describe a change, with an optional screenshot. The agent reads the repository's current files, answers with exact edits, and opens a pull request when you press **Create pull request**.
 
 <p align="center"><img src="docs/screenshots/mobile.png" width="300" alt="The dashboard on a phone, with each pull request shown as a card"></p>
 
@@ -79,6 +99,8 @@ The **Dashboard** tab reads live data from GitHub with your sign-in: the 6 most 
 The header shows which version is live: the commit the deploy workflow shipped (linking to it on GitHub) and when. After a merge, the version changes once the **Agent chat Worker** workflow has deployed; a merge that touches no Worker files deploys nothing, so the version stays. A Worker deployed some other way shows "version unknown".
 
 ### Agent chat
+
+> **Experimental.** The default model, `@cf/meta/llama-4-scout-17b-16e-instruct` on Cloudflare Workers AI, is free but too weak to fix code reliably: its edits are often incomplete or wrong, and it cannot work through review findings. It does not replace Claude Code or ChatGPT (Codex) as the coding agent, nor Codex as the reviewer. Use the chat for questions about the code and small, simple changes, and check every change it proposes. For real work, use the flow in [How it works best](#how-it-works-best).
 
 The **Agent chat** tab lets you talk to the coding agent directly. You sign in with GitHub, ask about the code or describe a change, and can attach or paste a screenshot. For each message the Worker downloads the current default branch as one archive. It sends whole relevant files, not excerpts, to the model together with the conversation. Answers arrive within seconds once the model replies.
 
