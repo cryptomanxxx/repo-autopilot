@@ -399,17 +399,30 @@ export function lineChanges(before,after) {
   let endA=a.length,endB=b.length;while(endA>start&&endB>start&&a[endA-1]===b[endB-1]) {endA--;endB--;}
   const x=a.slice(start,endA),y=b.slice(start,endB),n=x.length,m=y.length;
   // Myers' O((N+M)·D) diff finds the fewest added plus removed lines D; it is fast when the change is
-  // small, whatever the file size. Very large rewrites fall back to counting both regions.
+  // small, whatever the file size. Past a fixed number of steps it falls back to comparing which lines occur how often.
+  // Only additions or only removals need no diff; the step budget keeps the Worker's CPU use small.
+  if(!n||!m) return {added:m,removed:n};
   const limit=Math.min(n+m,4000),offset=limit+1,v=new Int32Array(2*limit+3);
+  let steps=0;
   for(let d=0;d<=limit;d++) {
     for(let k=-d;k<=d;k+=2) {
+      if(++steps>100000) return multisetChanges(x,y);
       let i=k===-d||(k!==d&&v[offset+k-1]<v[offset+k+1])?v[offset+k+1]:v[offset+k-1]+1,j=i-k;
-      while(i<n&&j<m&&x[i]===y[j]) {i++;j++;}
+      while(i<n&&j<m&&x[i]===y[j]) {i++;j++;steps++;}
       v[offset+k]=i;
       if(i>=n&&j>=m) return {added:(d+m-n)/2,removed:(d-m+n)/2};
     }
   }
-  return {added:m,removed:n};
+  return multisetChanges(x,y);
+}
+// Fallback for very large changes: lines present more often on one side; exact except for moved lines.
+function multisetChanges(x,y) {
+  const counts=new Map();
+  for(const line of x) counts.set(line,(counts.get(line)||0)+1);
+  for(const line of y) counts.set(line,(counts.get(line)||0)-1);
+  let added=0,removed=0;
+  for(const count of counts.values()) count>0?removed+=count:added-=count;
+  return {added,removed};
 }
 
 // The pull request description: what the owner asked for, the agent's explanation and what changes.

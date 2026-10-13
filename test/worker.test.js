@@ -164,6 +164,10 @@ test('pull request line counts come from the actual change',()=>{
   const middle=Array.from({length:1999},(_,i)=>`line ${i}\n`).join('');
   assert.deepEqual(lineChanges(`first\n${middle}last\n`,`FIRST\n${middle}LAST\n`),{added:2,removed:2},'common lines of large files are found');
   assert.deepEqual(lineChanges('a\nb\nc\nd\ne\n','x\nb\ny\nd\nz\n'),{added:3,removed:3});
+  const big=Array.from({length:4000},(_,i)=>`${i}\n`).join(''),other=Array.from({length:4000},(_,i)=>`x${i}\n`).join('');
+  let started=Date.now();assert.deepEqual(lineChanges(undefined,big),{added:4000,removed:0});
+  assert.deepEqual(lineChanges(big,other),{added:4000,removed:4000},'a full rewrite stops at the step budget');
+  assert.ok(Date.now()-started<200,'large files are counted quickly');
 });
 
 test('an edit block without a file path is matched to the one file its text belongs to',async()=>{
