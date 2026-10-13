@@ -226,7 +226,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main'}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -245,7 +245,7 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(method==='PATCH'&&path.startsWith('/git/refs/heads/autopilot/chat-')) return ok({});
     if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},pullStatus);
     if(method==='GET'&&path.startsWith('/pulls?state=open&head=owner%3Aautopilot%2Fchat-')) return ok(openPulls);
-    if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:'open',merged:false,title:'New title',head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
+    if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:'open',merged:false,title:'New title',base:{ref:mergeBase},head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
     if(method==='PUT'&&path==='/pulls/7/merge') return ok({merged:true},mergeStatus);
     if(method==='DELETE'&&path==='/git/refs/heads/autopilot/chat-abc-2') return new Response(null,{status:204});
     return ok({message:'not found'},404);
@@ -395,6 +395,8 @@ test('chat answers from repository files and opens a pull request on request',as
   for(const sha of [undefined,'','b'.repeat(39),42]) assert.equal((await handle(post('/api/merge',auth,{conversation,message:reply.id,sha}),env,{fetchImpl})).status,400,'the reviewed head commit is required: '+sha);
   const blocked=await handle(post('/api/merge',auth,{conversation,message:reply.id,sha:'b'.repeat(40)}),env,{fetchImpl:github({calls:[],mergeStatus:405})});
   assert.equal(blocked.status,409);assert.match((await blocked.json()).error,/cannot merge PR #7 yet/);
+  const retargeted=await handle(post('/api/merge',auth,{conversation,message:reply.id,sha:'b'.repeat(40)}),env,{fetchImpl:github({calls:[],mergeBase:'release'})});
+  assert.equal(retargeted.status,409);assert.match((await retargeted.json()).error,/now targets release instead of the default branch main/);
 });
 
 test('pull requests keep file modes and can be retried after a partial failure',async()=>{

@@ -423,6 +423,9 @@ async function mergePullRequest(body,{store,github,config,access}) {
     const client=github(repository),pull=await client.api(`pulls/${number}`);
     if(pull.merged) return json(200,{merged:true});
     if(pull.state!=='open') throw new UserError(409,`PR #${number} is closed.`);
+    // The chat promises a merge into the default branch; a retargeted pull request is merged on GitHub.
+    const {default_branch:defaultBranch}=await client.api('');
+    if(pull.base?.ref!==defaultBranch) throw new UserError(409,`PR #${number} now targets ${pull.base?.ref||'another branch'} instead of the default branch ${defaultBranch}. Merge it on GitHub if that is intended.`);
     if(body.sha!==pull.head?.sha) throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again before merging.`);
     try {await client.api(`pulls/${number}/merge`,{method:'PUT',body:{sha:body.sha,merge_method:'squash',commit_title:`${pull.title} (#${number})`}});}
     catch(error) {
