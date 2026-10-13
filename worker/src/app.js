@@ -433,9 +433,11 @@ async function mergePullRequest(body,{store,github,config,access}) {
     const {item}=await status.pullDetails(repository,pull);
     // GitHub's merge call guards the head but not the base, so a retarget or a new default branch during
     // the check is caught here, against the default branch read again.
-    const {default_branch:currentDefault}=await client.api('');
-    if(item.baseRef!==currentDefault) await refuse(`PR #${number} now targets ${item.baseRef||'another branch'} instead of the default branch ${currentDefault}. Merge it on GitHub if that is intended.`);
-    if(item.headSha!==body.sha) await refuse(`PR #${number} has new commits since its status was shown. Check it again before merging.`);
+    // The pull request and the default branch are read once more after all the checks above.
+    const [{default_branch:currentDefault},latest]=await Promise.all([client.api(''),client.api(`pulls/${number}`)]);
+    for(const base of [item.baseRef,latest.base?.ref]) if(base!==currentDefault) await refuse(`PR #${number} now targets ${base||'another branch'} instead of the default branch ${currentDefault}. Merge it on GitHub if that is intended.`);
+    if(latest.state!=='open'||latest.merged) await refuse(`PR #${number} is no longer open.`);
+    if(item.headSha!==body.sha||latest.head?.sha!==body.sha) await refuse(`PR #${number} has new commits since its status was shown. Check it again before merging.`);
     if(item.detailError) await refuse(`Could not check PR #${number}'s current status: ${item.detailError} Try again.`);
     if(item.readiness.state==='not_ready') await refuse(`PR #${number} is not ready to merge: ${item.readiness.reasons.join('; ')}.`);
     const confirmed=Array.isArray(body.confirmed)?body.confirmed:[];

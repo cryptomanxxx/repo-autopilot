@@ -412,6 +412,9 @@ test('chat answers from repository files and opens a pull request on request',as
   const moving=[],moved=await merge({},github({calls:moving,retargetAfter:1}));
   assert.equal(moved.status,409);assert.match((await moved.json()).error,/now targets release/,'a retarget during the status check is caught');
   assert.equal(moving.some(c=>c.method==='PUT'),false);
+  const late=[],retargetedLate=await merge({},github({calls:late,retargetAfter:2}));
+  assert.equal(retargetedLate.status,409);assert.match((await retargetedLate.json()).error,/now targets release/,'a retarget after the readiness checks is caught');
+  assert.equal(late.some(c=>c.method==='PUT'),false);
   const renaming=[],renamed=await merge({},github({calls:renaming,defaultAfter:1}));
   assert.equal(renamed.status,409);assert.match((await renamed.json()).error,/instead of the default branch trunk/,'a new default branch during the status check is caught');
   assert.equal(renaming.some(c=>c.method==='PUT'),false);
