@@ -391,7 +391,9 @@ function progressStream(work) {
 // Lines added and removed between two versions of a file: common lines at both ends are skipped and
 // the rest is compared line by line (a longest-common-subsequence diff, bounded for very large edits).
 export function lineChanges(before,after) {
-  const a=before===undefined?[]:before.replace(/\r\n/g,'\n').split('\n'),b=after.replace(/\r\n/g,'\n').split('\n');
+  // An empty file has no lines (split would give one empty line).
+  const lines=text=>text?text.replace(/\r\n/g,'\n').split('\n'):[];
+  const a=lines(before),b=lines(after);
   let start=0;while(start<a.length&&start<b.length&&a[start]===b[start]) start++;
   let endA=a.length,endB=b.length;while(endA>start&&endB>start&&a[endA-1]===b[endB-1]) {endA--;endB--;}
   const x=a.slice(start,endA),y=b.slice(start,endB);
