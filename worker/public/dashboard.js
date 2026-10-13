@@ -2,7 +2,7 @@ import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,l
 
 const $=id=>document.getElementById(id);
 const REFRESH_MS=180000,VERSION_MS=15000;
-let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,version=null,merging=false,retried=null;
+let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,version=null,merging=false,retried=null,reloadAfter=false;
 const status=text=>{$('dashboard-status').replaceChildren(text);};
 const filters=()=>applyFilters({pullFilter:$('pr-filter'),workflowFilter:$('workflow-filter'),pulls:$('pulls'),workflows:$('workflows')});
 
@@ -63,8 +63,8 @@ export async function loadDashboard({fresh=false}={}) {
     if(target===repository()) status(data?`Refresh failed; showing earlier data. ${error.message}`:error.message);
   } finally {
     loading=false;lastLoad=Date.now();$('refresh').disabled=false;
-    // The repository changed while loading: load the one now selected.
-    if(target!==repository()) loadDashboard();
+    // The repository changed while loading, or a merge finished during it: load again.
+    if(target!==repository()||reloadAfter) {reloadAfter=false;lastLoad=0;loadDashboard();}
   }
 }
 
@@ -84,7 +84,9 @@ async function mergePull(pr,button) {
   } catch(error) {outcome=error.message;}
   finally {
     merging=false;
-    // The outcome stays visible after the reload, which clears the status line.
+    // The data shown is stale now: a load already running or a hidden tab reloads it later, the next
+    // time the tab is shown. The outcome stays visible after the reload, which clears the status line.
+    lastLoad=0;reloadAfter=loading;
     await loadDashboard();
     if(target===repository()) status(outcome);
   }
