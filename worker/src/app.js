@@ -451,9 +451,10 @@ async function mergePullRequest(body,{store,github,access}) {
       if([403,404].includes(error.status)) throw new UserError(403,`GitHub refused to merge PR #${number} (HTTP ${error.status}). Check that the GitHub App has Contents and Pull requests set to Read and write.`);
       throw error;
     }
-    // The chat's own branch is removed once merged; failures leave it for GitHub's own cleanup.
+    // The branch of a pull request opened from the chat is removed once merged; other pull requests keep
+    // theirs, and failures leave it for GitHub's own cleanup.
     const ref=pull.head?.ref;
-    if(typeof ref==='string'&&ref.startsWith('autopilot/chat-')&&pull.head?.repo?.full_name?.toLowerCase()===repository.toLowerCase()) {
+    if(typeof ref==='string'&&ref.startsWith('autopilot/chat-')&&pull.head?.repo?.full_name?.toLowerCase()===repository.toLowerCase()&&await store.isChatPullRequest(`https://github.com/${repository}/pull/${number}`)) {
       try {await client.api(`git/refs/heads/${ref.split('/').map(encodeURIComponent).join('/')}`,{method:'DELETE'});} catch {}
     }
     await store.invalidate(repository,{overview:true,pulls:[number],head:true});

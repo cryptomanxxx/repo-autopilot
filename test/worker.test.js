@@ -428,6 +428,10 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.deepEqual(await merged.json(),{merged:true});
   assert.deepEqual(JSON.parse(calls.find(c=>c.method==='PUT').options.body),{sha:'b'.repeat(40),merge_method:'squash',commit_title:'New title (#7)'},'merged exactly at the head that was shown');
   assert.ok(calls.some(c=>c.method==='DELETE'&&c.url.endsWith('/git/refs/heads/autopilot/chat-abc-2')),'the chat branch is removed');
+  store.sql.exec('UPDATE messages SET pr_url = NULL');calls.length=0;
+  assert.equal((await merge()).status,200);
+  assert.equal(calls.some(c=>c.method==='DELETE'),false,'a pull request not opened from the chat keeps its branch, whatever its name');
+  store.sql.exec("UPDATE messages SET pr_url = 'https://github.com/owner/repo/pull/7' WHERE id = ?",reply.id);
   assert.ok(store.getVersion('owner/repo')>0,'open dashboards reload');
   assert.equal((await merge({number:8})).status,404,'an unknown pull request is not found');
   for(const extra of [{repository:undefined},{number:'7'},{number:0}]) assert.equal((await merge(extra)).status,400);
