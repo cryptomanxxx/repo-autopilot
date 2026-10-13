@@ -8,7 +8,7 @@ import {join,dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {ChatStoreLogic} from '../worker/src/store.js';
 import {readTar} from '../worker/src/github.js';
-import {selectContext,parseEdits,applyEdits,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy} from '../worker/src/agent.js';
+import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy} from '../worker/src/agent.js';
 import {createHmac} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -149,6 +149,22 @@ test('messages carry files, history and the current image',()=>{
   assert.match(messages[1].content,/no longer available/);
   assert.equal(messages[2].role,'assistant');
   assert.deepEqual(messages[3].content[1],{type:'image_url',image_url:{url:'data:image/jpeg;base64,AAAA'}});
+});
+
+test('an edit block without a file path is matched to the one file its text belongs to',async()=>{
+  const files={'README.md':'# Repo\n\nAn app, with no special configuration.\n','public/app.js':'const a=1;\n','public/b.js':'const a=1;\n','src/agent.js':'secret();\n'};
+  const reply='PR-TITLE: Shorter intro\n<<<<<<< SEARCH\nAn app, with no special configuration.\n=======\nAn app.\n>>>>>>> REPLACE';
+  assert.equal(parseEdits(reply).edits[0].path,null);
+  const env={AI:{run:async()=>({response:reply})}};
+  const result=await answer(env,{messages:[],files,existingPaths:Object.keys(files)});
+  assert.equal(result.error,null);assert.equal(result.proposal.edits[0].path,'README.md','the stored proposal names the file');
+  assert.deepEqual(applyEdits(result.proposal.edits,files,Object.keys(files)),[{path:'README.md',content:'# Repo\n\nAn app.\n'}]);
+  assert.throws(()=>findFile('const a=1;',files),/matches several files \(public\/app\.js, public\/b\.js\)/);
+  assert.throws(()=>findFile('secret();',files),/src\/agent\.js may not be edited/);
+  assert.throws(()=>findFile('missing',files),/matches no file exactly/);
+  assert.throws(()=>findFile('',files),/must name it/);
+  assert.equal(findFile('  \n  ',{'public/w.js':'a\r\n  \r\n  \r\nb'}),'public/w.js','a whitespace-only search still matches CRLF files');
+  assert.equal(displayText(reply),'','path-less blocks are left out of the PR description too');
 });
 
 test('a failed edit gets one correction round before it is reported',async()=>{
