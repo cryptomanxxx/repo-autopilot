@@ -56,7 +56,9 @@ export function githubClient({repository,token,fetchImpl=fetch}) {
         if(opened) return pullUrl(opened);
         await api(`git/refs/heads/${branch}`,{method:'PATCH',body:{sha:next.sha,force:true}});
       }
-      try {return pullUrl(await api('pulls',{method:'POST',body:{title,head:branch,base,body}}));}
+      // The description may depend on the new commit, such as GitHub's own count of the changed lines.
+      const description=typeof body==='function'?await body(next.sha):body;
+      try {return pullUrl(await api('pulls',{method:'POST',body:{title,head:branch,base,body:description}}));}
       catch(error) {
         if(!(error instanceof GitHubError&&error.status===422)) throw error;
         const existing=await openPull();

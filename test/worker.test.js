@@ -12,7 +12,7 @@ import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFi
 import {createHmac} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
-import {handle,validateImage,webhookTargets,lineChanges} from '../worker/src/app.js';
+import {handle,validateImage,webhookTargets} from '../worker/src/app.js';
 
 // Adapter giving node:sqlite the Durable Object `sql.exec(query, ...bindings).toArray()` shape.
 const sqlite=()=>{const db=new DatabaseSync(':memory:');return {exec:(query,...bindings)=>{const rows=db.prepare(query).all(...bindings);return {toArray:()=>rows};}};};
@@ -151,32 +151,6 @@ test('messages carry files, history and the current image',()=>{
   assert.deepEqual(messages[3].content[1],{type:'image_url',image_url:{url:'data:image/jpeg;base64,AAAA'}});
 });
 
-test('pull request line counts come from the actual change',()=>{
-  assert.deepEqual(lineChanges('a\nb\nc\n','a\nB\nc\n'),{added:1,removed:1},'context lines are not counted');
-  assert.deepEqual(lineChanges('a\nb\n','a\nb\nc\n'),{added:1,removed:0});
-  assert.deepEqual(lineChanges('a\r\nb\r\nc\r\n','a\nc\n'),{added:0,removed:1},'line endings do not count as changes');
-  assert.deepEqual(lineChanges(undefined,'x\ny'),{added:2,removed:0},'a new file');
-  assert.deepEqual(lineChanges('1\n2\n3\n4\n','1\n3\n2\n4\n'),{added:1,removed:1});
-  assert.deepEqual(lineChanges('x',''),{added:0,removed:1},'emptying a file');
-  assert.deepEqual(lineChanges('','x'),{added:1,removed:0},'filling an empty file');
-  assert.deepEqual(lineChanges('a','a\n'),{added:1,removed:1},'adding the final newline changes the last line');
-  assert.deepEqual(lineChanges('a\n','a'),{added:1,removed:1});
-  const middle=Array.from({length:1999},(_,i)=>`line ${i}\n`).join('');
-  assert.deepEqual(lineChanges(`first\n${middle}last\n`,`FIRST\n${middle}LAST\n`),{added:2,removed:2},'common lines of large files are found');
-  assert.deepEqual(lineChanges('a\nb\nc\nd\ne\n','x\nb\ny\nd\nz\n'),{added:3,removed:3});
-  const big=Array.from({length:4000},(_,i)=>`${i}\n`).join(''),other=Array.from({length:4000},(_,i)=>`x${i}\n`).join('');
-  let started=Date.now();assert.deepEqual(lineChanges(undefined,big),{added:4000,removed:0});
-  assert.deepEqual(lineChanges(big,other),{added:4000,removed:4000},'a full rewrite stops at the step budget');
-  const unique=Array.from({length:300},(_,i)=>`u${i}\n`);
-  assert.deepEqual(lineChanges(unique.join(''),[...unique].reverse().join('')),{added:299,removed:299},'past the step budget, moved lines still count');
-  const half=(line)=>line.repeat(2000);
-  const swapped=lineChanges(half('a\n')+half('b\n'),half('b\n')+half('a\n'));
-  assert.deepEqual(swapped,{added:2000,removed:2000},'a moved block of repeated lines keeps the other block');
-  const run='x\n'.repeat(100000);
-  assert.deepEqual(lineChanges(`A\n${run}B\n`,`C\n${run}D\n`),{added:2,removed:2},'a long unchanged run between changes is kept');
-  assert.ok(Date.now()-started<300,'large files are counted quickly');
-});
-
 test('an edit block without a file path is matched to the one file its text belongs to',async()=>{
   const files={'README.md':'# Repo\n\nAn app, with no special configuration.\n','public/app.js':'const a=1;\n','public/b.js':'const a=1;\n','src/agent.js':'secret();\n'};
   const reply='PR-TITLE: Shorter intro\n<<<<<<< SEARCH\nAn app, with no special configuration.\n=======\nAn app.\n>>>>>>> REPLACE';
@@ -252,7 +226,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -269,6 +243,7 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(method==='POST'&&path==='/git/commits') return ok({sha:'commit1'},201);
     if(method==='POST'&&path==='/git/refs') return ok({},refStatus);
     if(method==='PATCH'&&path.startsWith('/git/refs/heads/autopilot/chat-')) return ok({});
+    if(method==='GET'&&path===`/compare/${head}...commit1`) return ok({files:[{filename:'public/app.js',status:'modified',additions:1,deletions:1}]},compareStatus);
     if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},pullStatus);
     if(method==='GET'&&path.startsWith('/pulls?state=open&head=owner%3Aautopilot%2Fchat-')) return ok(openPulls);
     if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:'open',merged:false,title:'New title',base:{ref:calls.filter(c=>c.url.endsWith('/pulls/7')).length>retargetAfter?'release':mergeBase},head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
@@ -406,6 +381,7 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.deepEqual(tree,{base_tree:'tree0',tree:[{path:'public/app.js',mode:'100644',type:'blob',content:'const title="New";\n'}]});
   const pull=JSON.parse(calls.find(c=>c.url.endsWith('/pulls')).options.body);
   assert.equal(pull.title,'New title');assert.equal(pull.base,'main');assert.match(pull.head,/^autopilot\/chat-/);assert.equal(pull.body.includes('<<<<<<<'),false);
+  assert.ok(calls.some(c=>c.url.endsWith(`/compare/${'a'.repeat(40)}...commit1`)),'line counts come from GitHub\'s diff of the new commit');
   assert.match(pull.body,/^## Request\n\n> Change the title in public\/app\.js\n\n## What the agent changed\n\nRenaming the title\.\n\n## Files\n\n- `public\/app\.js`: \+1 −1 lines\n\n---\nCreated from the Repo Autopilot chat/,'the description is written from the request, the explanation and the edits');
   const writes=calls.filter(c=>c.method==='POST').length;
   assert.deepEqual(await (await handle(post('/api/pull-request',auth,{conversation,message:reply.id}),env,{fetchImpl})).json(),{url:'https://github.com/owner/repo/pull/7'});
@@ -458,8 +434,9 @@ test('pull requests keep file modes and can be retried after a partial failure',
   const branch=JSON.parse(calls.findLast(c=>c.url.endsWith('/git/refs')).options.body).ref.replace('refs/heads/','');
   // Leftover branch without a pull request: it is moved to the new commit and the PR is opened.
   calls.length=0;
-  const retried=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422})});
+  const retried=await handle(post('/api/pull-request',auth,{conversation,message}),env,{fetchImpl:github({calls,refStatus:422,compareStatus:500})});
   assert.deepEqual(await retried.json(),{url:'https://github.com/owner/repo/pull/7'});
+  assert.match(JSON.parse(calls.find(c=>c.method==='POST'&&c.url.endsWith('/pulls')).options.body).body,/## Files\n\n- `public\/app\.js`\n\n---/,'without GitHub\'s counts the files are still listed');
   const patch=calls.find(c=>c.method==='PATCH');
   assert.equal(patch.url.split('/git/refs/heads/')[1],branch,'the retry reuses the same branch');assert.equal(JSON.parse(patch.options.body).force,true);
   // A pull request opened from the branch after the first check is reused, not overwritten.

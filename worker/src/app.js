@@ -388,86 +388,11 @@ function progressStream(work) {
   return new Response(readable,{status:200,headers:{'Content-Type':'application/x-ndjson; charset=utf-8','Cache-Control':'no-store'}});
 }
 
-// Lines added and removed between two versions of a file: common lines at both ends are skipped and
-// the rest is compared line by line.
-export function lineChanges(before,after) {
-  // Lines keep their terminator, as in git: an empty file has none, and adding or removing the final
-  // newline changes the last line.
-  const lines=text=>(text||'').replace(/\r\n/g,'\n').match(/[^\n]*\n|[^\n]+$/g)||[];
-  const a=lines(before),b=lines(after);
-  let start=0;while(start<a.length&&start<b.length&&a[start]===b[start]) start++;
-  let endA=a.length,endB=b.length;while(endA>start&&endB>start&&a[endA-1]===b[endB-1]) {endA--;endB--;}
-  const x=a.slice(start,endA),y=b.slice(start,endB),n=x.length,m=y.length;
-  // Myers' O((N+M)·D) diff finds the fewest added plus removed lines D; it is fast when the change is
-  // small, whatever the file size. Past a fixed number of steps it falls back to a bounded ordered match.
-  // Only additions or only removals need no diff; the step budget keeps the Worker's CPU use small.
-  if(!n||!m) return {added:m,removed:n};
-  const limit=Math.min(n+m,4000),offset=limit+1,v=new Int32Array(2*limit+3);
-  let steps=0;
-  for(let d=0;d<=limit;d++) {
-    for(let k=-d;k<=d;k+=2) {
-      if(++steps>100000) return orderedChanges(x,y);
-      let i=k===-d||(k!==d&&v[offset+k-1]<v[offset+k+1])?v[offset+k+1]:v[offset+k-1]+1,j=i-k;
-      while(i<n&&j<m&&x[i]===y[j]) {i++;j++;if(++steps>100000) return orderedChanges(x,y);}
-      v[offset+k]=i;
-      if(i>=n&&j>=m) return {added:(d+m-n)/2,removed:(d-m+n)/2};
-    }
-  }
-  return orderedChanges(x,y);
-}
-// Fallback for very large changes. Each estimate below finds lines kept in order, a common subsequence,
-// so the count may be too high but never too low; the best of them is used. Moved lines count as changed.
-function orderedChanges(x,y) {
-  const kept=Math.max(sampledKept(x,y),runKept(x,y));
-  return {added:y.length-kept,removed:x.length-kept};
-}
-// The longest run of lines kept in order (Hunt–Szymanski) among a bounded set of matching line pairs.
-// Each old line is paired with at most `per` occurrences in the new text, those nearest its proportional
-// position, so the work stays linear.
-function sampledKept(x,y) {
-  const n=x.length,m=y.length,per=Math.max(1,Math.floor(200000/n)),positions=new Map();
-  for(let j=0;j<m;j++) {const list=positions.get(y[j]);list?list.push(j):positions.set(y[j],[j]);}
-  // tails[k] is the smallest position in y that ends a kept run of k+1 lines.
-  const tails=[];
-  for(let i=0;i<n;i++) {
-    const list=positions.get(x[i]);if(!list) continue;
-    let lo=0,hi=list.length;
-    if(hi>per) {
-      const target=Math.floor(i*m/n);let low=0,high=hi;
-      while(low<high) {const mid=(low+high)>>1;list[mid]<target?low=mid+1:high=mid;}
-      lo=Math.max(0,Math.min(low-(per>>1),hi-per));hi=lo+per;
-    }
-    // Positions of one old line go in descending order, so at most one of them extends a run.
-    for(let p=hi-1;p>=lo;p--) {
-      const j=list[p];let low=0,high=tails.length;
-      while(low<high) {const mid=(low+high)>>1;tails[mid]<j?low=mid+1:high=mid;}
-      tails[low]=j;
-    }
-  }
-  return tails.length;
-}
-// Repeated lines in a row are compared as blocks: an LCS over the blocks, where two blocks of the same
-// line keep the shorter one's lines. It finds moved blocks of repeated lines, and is skipped when there
-// are too many blocks to compare cheaply.
-function runKept(x,y) {
-  const runs=lines=>{const result=[];for(const line of lines) {const last=result[result.length-1];last&&last.line===line?last.count++:result.push({line,count:1});}return result;};
-  const a=runs(x),b=runs(y);
-  if(a.length*b.length>1000000) return 0;
-  let previous=new Int32Array(b.length+1),current=new Int32Array(b.length+1);
-  for(const run of a) {
-    for(let j=1;j<=b.length;j++) {
-      const other=b[j-1];
-      current[j]=Math.max(previous[j],current[j-1],run.line===other.line?previous[j-1]+Math.min(run.count,other.count):0);
-    }
-    [previous,current]=[current,previous];
-  }
-  return previous[b.length];
-}
-
 // The pull request description: what the owner asked for, the agent's explanation and what changes.
 export function pullDescription({request,explanation,changes,sha}) {
   const quote=text=>text.trim().slice(0,1500).split('\n').map(line=>`> ${line}`).join('\n');
-  const file=({path,added,removed,created})=>`- \`${path}\`${created?' (new file)':''}: +${added} −${removed} line${added+removed===1?'':'s'}`;
+  // Line counts come from GitHub's diff; without them the files are still listed.
+  const file=({path,added,removed,created})=>`- \`${path}\`${created?' (new file)':''}${Number.isInteger(added)&&Number.isInteger(removed)?`: +${added} −${removed} line${added+removed===1?'':'s'}`:''}`;
   return [
     request.trim()?`## Request\n\n${quote(request)}`:'',
     explanation.trim()?`## What the agent changed\n\n${explanation.trim().slice(0,3000)}`:'',
@@ -550,7 +475,13 @@ async function pullRequest(body,{store,github,config,access}) {
     const title=message.proposal.title||info?.title||'Change from the agent chat';
     const conversation=await store.getConversation(body.conversation);
     const request=conversation?.messages.filter(m=>m.role==='user'&&m.id<message.id).at(-1)?.content||'';
-    const description=pullDescription({request,explanation:displayText(message.content),changes:files.map(f=>({path:f.path,created:originals[f.path]===undefined,...lineChanges(originals[f.path],f.content)})),sha:head.sha});
+    // GitHub counts the changed lines of the new commit exactly as its diff shows them.
+    const description=async commit=>{
+      let counted=new Map();
+      try {counted=new Map(((await client.api(`compare/${head.sha}...${commit}`)).files||[]).map(f=>[f.filename,f]));} catch {}
+      const changes=files.map(f=>{const count=counted.get(f.path);return {path:f.path,created:originals[f.path]===undefined,added:count?.additions,removed:count?.deletions};});
+      return pullDescription({request,explanation:displayText(message.content),changes,sha:head.sha});
+    };
     let url;
     try {url=await client.createPullRequest({base:head.branch,parent:head.sha,files,executable,branch:`autopilot/chat-${body.conversation.slice(0,12)}-${body.message}`,title,body:description});}
     catch(error) {
