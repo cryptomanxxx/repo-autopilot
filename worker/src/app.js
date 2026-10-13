@@ -408,31 +408,38 @@ export function lineChanges(before,after) {
     for(let k=-d;k<=d;k+=2) {
       if(++steps>100000) return orderedChanges(x,y);
       let i=k===-d||(k!==d&&v[offset+k-1]<v[offset+k+1])?v[offset+k+1]:v[offset+k-1]+1,j=i-k;
-      while(i<n&&j<m&&x[i]===y[j]) {i++;j++;steps++;}
+      while(i<n&&j<m&&x[i]===y[j]) {i++;j++;if(++steps>100000) return orderedChanges(x,y);}
       v[offset+k]=i;
       if(i>=n&&j>=m) return {added:(d+m-n)/2,removed:(d-m+n)/2};
     }
   }
   return orderedChanges(x,y);
 }
-// Fallback for very large changes: the longest run of lines kept in order among a bounded number of
-// matching line pairs (Hunt–Szymanski). Moved lines count as changed; past the pair budget the count
-// can only be too high, never too low.
+// Fallback for very large changes: the longest run of lines kept in order (Hunt–Szymanski) among a
+// bounded set of matching line pairs. Each old line is paired with at most `per` occurrences in the new
+// text, those nearest its proportional position, so the work stays linear. A subset of the pairs can only
+// miss kept lines, so the count may be too high but never too low. Moved lines count as changed.
 function orderedChanges(x,y) {
-  const positions=new Map();
-  for(let j=y.length-1;j>=0;j--) {const list=positions.get(y[j]);list?list.push(j):positions.set(y[j],[j]);}
+  const n=x.length,m=y.length,per=Math.max(1,Math.floor(200000/n)),positions=new Map();
+  for(let j=0;j<m;j++) {const list=positions.get(y[j]);list?list.push(j):positions.set(y[j],[j]);}
   // tails[k] is the smallest position in y that ends a kept run of k+1 lines.
-  const tails=[];let pairs=0;
-  for(const line of x) {
-    for(const j of positions.get(line)||[]) {
-      if(++pairs>200000) break;
-      let low=0,high=tails.length;
+  const tails=[];
+  for(let i=0;i<n;i++) {
+    const list=positions.get(x[i]);if(!list) continue;
+    let lo=0,hi=list.length;
+    if(hi>per) {
+      const target=Math.floor(i*m/n);let low=0,high=hi;
+      while(low<high) {const mid=(low+high)>>1;list[mid]<target?low=mid+1:high=mid;}
+      lo=Math.max(0,Math.min(low-(per>>1),hi-per));hi=lo+per;
+    }
+    // Positions of one old line go in descending order, so at most one of them extends a run.
+    for(let p=hi-1;p>=lo;p--) {
+      const j=list[p];let low=0,high=tails.length;
       while(low<high) {const mid=(low+high)>>1;tails[mid]<j?low=mid+1:high=mid;}
       tails[low]=j;
     }
-    if(pairs>200000) break;
   }
-  return {added:y.length-tails.length,removed:x.length-tails.length};
+  return {added:m-tails.length,removed:n-tails.length};
 }
 
 // The pull request description: what the owner asked for, the agent's explanation and what changes.
