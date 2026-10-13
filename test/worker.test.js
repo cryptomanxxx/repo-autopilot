@@ -171,7 +171,7 @@ test('pull request line counts come from the actual change',()=>{
   assert.deepEqual(lineChanges(unique.join(''),[...unique].reverse().join('')),{added:299,removed:299},'past the step budget, moved lines still count');
   const half=(line)=>line.repeat(2000);
   const swapped=lineChanges(half('a\n')+half('b\n'),half('b\n')+half('a\n'));
-  assert.ok(swapped.added>=2000&&swapped.added===swapped.removed&&swapped.added<=4000,'repeated lines stay within the pair budget and never undercount');
+  assert.deepEqual(swapped,{added:2000,removed:2000},'a moved block of repeated lines keeps the other block');
   const run='x\n'.repeat(100000);
   assert.deepEqual(lineChanges(`A\n${run}B\n`,`C\n${run}D\n`),{added:2,removed:2},'a long unchanged run between changes is kept');
   assert.ok(Date.now()-started<300,'large files are counted quickly');

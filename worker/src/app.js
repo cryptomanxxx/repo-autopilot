@@ -415,11 +415,16 @@ export function lineChanges(before,after) {
   }
   return orderedChanges(x,y);
 }
-// Fallback for very large changes: the longest run of lines kept in order (Hunt–Szymanski) among a
-// bounded set of matching line pairs. Each old line is paired with at most `per` occurrences in the new
-// text, those nearest its proportional position, so the work stays linear. A subset of the pairs can only
-// miss kept lines, so the count may be too high but never too low. Moved lines count as changed.
+// Fallback for very large changes. Each estimate below finds lines kept in order, a common subsequence,
+// so the count may be too high but never too low; the best of them is used. Moved lines count as changed.
 function orderedChanges(x,y) {
+  const kept=Math.max(sampledKept(x,y),runKept(x,y));
+  return {added:y.length-kept,removed:x.length-kept};
+}
+// The longest run of lines kept in order (Hunt–Szymanski) among a bounded set of matching line pairs.
+// Each old line is paired with at most `per` occurrences in the new text, those nearest its proportional
+// position, so the work stays linear.
+function sampledKept(x,y) {
   const n=x.length,m=y.length,per=Math.max(1,Math.floor(200000/n)),positions=new Map();
   for(let j=0;j<m;j++) {const list=positions.get(y[j]);list?list.push(j):positions.set(y[j],[j]);}
   // tails[k] is the smallest position in y that ends a kept run of k+1 lines.
@@ -439,7 +444,24 @@ function orderedChanges(x,y) {
       tails[low]=j;
     }
   }
-  return {added:m-tails.length,removed:n-tails.length};
+  return tails.length;
+}
+// Repeated lines in a row are compared as blocks: an LCS over the blocks, where two blocks of the same
+// line keep the shorter one's lines. It finds moved blocks of repeated lines, and is skipped when there
+// are too many blocks to compare cheaply.
+function runKept(x,y) {
+  const runs=lines=>{const result=[];for(const line of lines) {const last=result[result.length-1];last&&last.line===line?last.count++:result.push({line,count:1});}return result;};
+  const a=runs(x),b=runs(y);
+  if(a.length*b.length>1000000) return 0;
+  let previous=new Int32Array(b.length+1),current=new Int32Array(b.length+1);
+  for(const run of a) {
+    for(let j=1;j<=b.length;j++) {
+      const other=b[j-1];
+      current[j]=Math.max(previous[j],current[j-1],run.line===other.line?previous[j-1]+Math.min(run.count,other.count):0);
+    }
+    [previous,current]=[current,previous];
+  }
+  return previous[b.length];
 }
 
 // The pull request description: what the owner asked for, the agent's explanation and what changes.
