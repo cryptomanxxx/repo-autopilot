@@ -45,7 +45,7 @@ export function renderPull(pr,{open=false,onMerge,onCodex,askedCodex=()=>false}=
   const summary=el('summary','','pr-summary');
   const progress=pr.progress;
   const waiting=['running','requested'].includes(pr.codex.state);
-  const codexText=pr.codex.state==='clear'?'✅ Reviewed · clear':pr.codex.state==='findings'?'⚠ Findings':waiting?'🔄 Pending':progress.currentCompleted?'✓ Reviewed · unverified':'❔ Unverified';
+  const codexText=pr.codex.state==='clear'?'✅ Reviewed · clear':pr.codex.state==='findings'?'⚠ Findings':waiting?'🔄 Pending':pr.codex.state==='incomplete'?'❔ History incomplete':progress.currentCompleted?'✓ Reviewed · unverified':'❔ Unverified';
   summary.append(cell('PR',`#${pr.number} ${pr.title}`,'pr-title'),cell('Merge',pr.readiness.label,`readiness-${pr.readiness.state}`),cell('CI',pr.ci==='success'?'✅ Passed':pr.ci==='failure'?'❌ Failed':pr.ci,`ci-${pr.ci}`),cell('Codex',codexText,`codex-${pr.codex.state}`),cell('Reviews',progress.reviewCount===null?'?':`≥${progress.reviewCount}`),cell('Commits',String(progress.updatesAfterReview??'?')),cell('P1',progress.findings?`${progress.findings.incomplete?'≥':''}${progress.findings.p1}`:'?'),cell('P2',progress.findings?`${progress.findings.incomplete?'≥':''}${progress.findings.p2}`:'?'));
   summary.append(el('span','Details','expand-label'));
   node.append(summary);

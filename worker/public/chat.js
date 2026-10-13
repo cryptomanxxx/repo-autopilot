@@ -86,7 +86,7 @@ function renderMeta(meta) {
   return line;
 }
 const ciText={success:'✅ CI passed',failure:'❌ CI failed',pending:'⏳ CI running'};
-const codexText={clear:'👍 Codex clear',findings:'⚠ Codex findings',running:'🔄 Codex reviewing',requested:'🔄 Codex reviewing'};
+const codexText={clear:'👍 Codex clear',findings:'⚠ Codex findings',running:'🔄 Codex reviewing',requested:'🔄 Codex reviewing',incomplete:'❔ Codex history too long to check'};
 function pullStatusText(pr) {
   if(pr.state==='merged') return `PR #${pr.number} · merged`;
   if(pr.state==='closed') return `PR #${pr.number} · closed without merge`;
