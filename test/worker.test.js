@@ -476,6 +476,26 @@ test('Codex can be asked to fix its findings once per head commit',async()=>{
   assert.deepEqual(await (await ask()).json(),{asked:true,already:true},'when the comment may have been posted, it is not posted again');
 });
 
+test('Codex can be asked to review code it has not reviewed, once per head commit',async()=>{
+  const calls=[],{env}=environment(),fetchImpl=github({calls,codex:'none'});
+  const auth=await session(env,fetchImpl);
+  const ask=(extra={},fetch=fetchImpl)=>handle(post('/api/codex-review',auth,{repository:'owner/repo',number:7,sha:'b'.repeat(40),...extra}),env,{fetchImpl:fetch});
+  assert.deepEqual(await (await ask()).json(),{asked:true});
+  const comments=calls.filter(c=>c.method==='POST'&&c.url.endsWith('/issues/7/comments'));
+  assert.deepEqual(comments.map(c=>JSON.parse(c.options.body)),[{body:'@codex review'}],'the comment Codex reviews on');
+  const shown=await (await handle(request('/api/dashboard/pulls/7',{cookie:auth.cookie}),env,{fetchImpl})).json();
+  assert.equal(shown.codexReviewAsked,true);assert.equal(shown.codexFixAsked,false,'fix and review requests are recorded separately');
+  calls.length=0;
+  assert.deepEqual(await (await ask()).json(),{asked:true,already:true});
+  assert.equal(calls.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false,'asked at most once per commit');
+  for(const [codex,reason] of [['clear',/already cleared/],['findings',/has findings/]]) {
+    const seen=[],refused=await ask({sha:'b'.repeat(40)},github({calls:seen,codex}));
+    assert.equal(refused.status,409);assert.match((await refused.json()).error,reason);
+    assert.equal(seen.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
+  }
+  assert.equal((await ask({sha:'c'.repeat(40)})).status,409,'only for the head commit that was shown');
+});
+
 test('pull requests keep file modes and can be retried after a partial failure',async()=>{
   const calls=[],{env,store}=environment();
   env.AI.run=async()=>({response:'<<<<<<< SEARCH public/app.js\nconst title="Old";\n=======\nconst title="New";\n>>>>>>> REPLACE'});

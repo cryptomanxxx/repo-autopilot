@@ -206,7 +206,8 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   if(url.pathname==='/api/chat') return run(()=>chat(body,{env,store,github,config,access,fetchImpl}));
   if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github,config,access}));
   if(url.pathname==='/api/merge') return run(()=>mergePullRequest(body,{store,github,access}));
-  if(url.pathname==='/api/codex-fix') return run(()=>askCodexFix(body,{store,github,access}));
+  if(url.pathname==='/api/codex-fix') return run(()=>askCodex('fix',body,{store,github,access}));
+  if(url.pathname==='/api/codex-review') return run(()=>askCodex('review',body,{store,github,access}));
   throw new UserError(404,'Not found.');
 }
 
@@ -305,7 +306,7 @@ async function dashboard(url,{store,session,fetchImpl,repository}) {
   const cached=fresh?null:await store.getCache(key);
   if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
   // Whether Codex was already asked to fix the head is read on every response, outside the cache.
-  const withAsked=async item=>pull&&item?.state==='open'&&item.headSha?{...item,codexFixAsked:await store.hasCodexFix(repository,item.number,item.headSha)}:item;
+  const withAsked=async item=>pull&&item?.state==='open'&&item.headSha?{...item,codexFixAsked:await store.hasCodexRequest('fix',repository,item.number,item.headSha),codexReviewAsked:await store.hasCodexRequest('review',repository,item.number,item.headSha)}:item;
   if(cached) return json(200,await withAsked(cached));
   const load=await store.startDashboardLoad(repository);
   let value,changed=false;
@@ -404,10 +405,15 @@ export function pullDescription({request,explanation,changes,sha}) {
   ].filter(Boolean).join('\n\n');
 }
 
-// Asks Codex, on the pull request, to fix its own review findings; Codex then pushes a commit. The comment
-// is posted with the owner's GitHub account, at most once per head commit, and only for the head shown.
-const CODEX_FIX_COMMENT='@codex address that feedback';
-async function askCodexFix(body,{store,github,access}) {
+// Asks Codex on the pull request to fix its own review findings (Codex then pushes a commit) or to
+// review the current code. The comment is posted with the owner's GitHub account, at most once per kind
+// and head commit, and only while Codex's state for the head shown still calls for it.
+const CODEX_REQUESTS={
+  fix:{comment:'@codex address that feedback',wanted:state=>state==='findings'?'':'Codex reports no findings on the current code any more.'},
+  review:{comment:'@codex review',wanted:state=>({findings:'Codex already reviewed the current code and has findings.',clear:'Codex already cleared the current code.',running:'Codex is reviewing the current code.',requested:'A Codex review was already requested.'})[state]||''},
+};
+async function askCodex(kind,body,{store,github,access}) {
+  const request=CODEX_REQUESTS[kind];
   if(typeof body.repository!=='string'||!Number.isSafeInteger(body.number)||body.number<1) throw new UserError(400,'Invalid request.');
   if(typeof body.sha!=='string'||!/^[0-9a-f]{40}$/.test(body.sha)) throw new UserError(400,'Reload the pull request status first.');
   const repository=await resolveRepository(body.repository,access),number=body.number,client=github(repository);
@@ -416,20 +422,21 @@ async function askCodexFix(body,{store,github,access}) {
   catch(error) {if(error instanceof GitHubError&&error.status===404) throw new UserError(404,`PR #${number} was not found.`);throw error;}
   if(pull.state!=='open'||pull.merged) throw new UserError(409,`PR #${number} is no longer open.`);
   if(pull.head?.sha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
-  // Codex may have cleared the commit, or been asked already, since the dashboard showed it.
+  // Codex's state may have changed since the dashboard showed it.
   const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
   const {item}=await status.pullDetails(repository,pull);
   if(item.detailError) throw new UserError(409,`Could not check PR #${number}'s current Codex status: ${item.detailError} Try again.`);
   if(item.state!=='open') {await store.invalidate(repository,{overview:true,pulls:[number]});throw new UserError(409,`PR #${number} is no longer open.`);}
   if(item.headSha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
-  if(item.codex?.state!=='findings') {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`Codex reports no findings on PR #${number}'s current code any more.`);}
+  const unwanted=request.wanted(item.codex?.state);
+  if(unwanted) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number}: ${unwanted}`);}
   // Asking again for the same commit is not an error: the button then shows that Codex was asked.
-  if(!await store.claimCodexFix(repository,number,body.sha)) return json(200,{asked:true,already:true});
-  try {await client.api(`issues/${number}/comments`,{method:'POST',body:{body:CODEX_FIX_COMMENT}});}
+  if(!await store.claimCodexRequest(kind,repository,number,body.sha)) return json(200,{asked:true,already:true});
+  try {await client.api(`issues/${number}/comments`,{method:'POST',body:{body:request.comment}});}
   catch(error) {
     // Only a refusal from GitHub proves no comment was posted; after a timeout or a server error the
     // comment may exist, so the claim stays and nothing is posted twice.
-    if(error instanceof GitHubError&&error.status>=400&&error.status<500) await store.releaseCodexFix(repository,number,body.sha);
+    if(error instanceof GitHubError&&error.status>=400&&error.status<500) await store.releaseCodexRequest(kind,repository,number,body.sha);
     if(error instanceof GitHubError&&[403,404].includes(error.status)) throw new UserError(403,`GitHub refused the comment on PR #${number} (HTTP ${error.status}). Check that the GitHub App has Pull requests set to Read and write.`);
     throw error;
   }
