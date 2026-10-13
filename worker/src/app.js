@@ -409,6 +409,8 @@ export function pullDescription({request,explanation,edits,sha}) {
 // GitHub still enforces branch protection, required checks and reviews.
 async function mergePullRequest(body,{store,github,config,access}) {
   if(typeof body.conversation!=='string'||!/^[0-9a-f]{32}$/.test(body.conversation)||!Number.isSafeInteger(body.message)||body.message<1) throw new UserError(400,'Invalid request.');
+  // The head commit whose status the owner saw is required: nothing else is ever merged.
+  if(typeof body.sha!=='string'||!/^[0-9a-f]{40}$/.test(body.sha)) throw new UserError(400,'Reload the pull request status before merging.');
   const message=await store.getMessage(body.conversation,body.message);
   const info=await store.getConversationInfo(body.conversation);
   const repository=await resolveRepository(info?.repository||config.repository,access);
@@ -421,8 +423,8 @@ async function mergePullRequest(body,{store,github,config,access}) {
     const client=github(repository),pull=await client.api(`pulls/${number}`);
     if(pull.merged) return json(200,{merged:true});
     if(pull.state!=='open') throw new UserError(409,`PR #${number} is closed.`);
-    if(typeof body.sha==='string'&&body.sha&&body.sha!==pull.head?.sha) throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again before merging.`);
-    try {await client.api(`pulls/${number}/merge`,{method:'PUT',body:{sha:pull.head.sha,merge_method:'squash',commit_title:`${pull.title} (#${number})`}});}
+    if(body.sha!==pull.head?.sha) throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again before merging.`);
+    try {await client.api(`pulls/${number}/merge`,{method:'PUT',body:{sha:body.sha,merge_method:'squash',commit_title:`${pull.title} (#${number})`}});}
     catch(error) {
       if(!(error instanceof GitHubError)) throw error;
       if(error.status===405) throw new UserError(409,`GitHub cannot merge PR #${number} yet: required checks, reviews or branch rules are not satisfied, or it has conflicts.`);

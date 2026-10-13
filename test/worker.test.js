@@ -391,8 +391,9 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.deepEqual(JSON.parse(calls.find(c=>c.method==='PUT').options.body),{sha:'b'.repeat(40),merge_method:'squash',commit_title:'New title (#7)'},'merged exactly at the head that was shown');
   assert.ok(calls.some(c=>c.method==='DELETE'&&c.url.endsWith('/git/refs/heads/autopilot/chat-abc-2')),'the chat branch is removed');
   assert.ok(store.getVersion('owner/repo')>0,'open dashboards reload');
-  assert.equal((await handle(post('/api/merge',auth,{conversation,message:thread.messages[0].id}),env,{fetchImpl})).status,404,'only answers with a pull request can be merged');
-  const blocked=await handle(post('/api/merge',auth,{conversation,message:reply.id}),env,{fetchImpl:github({calls:[],mergeStatus:405})});
+  assert.equal((await handle(post('/api/merge',auth,{conversation,message:thread.messages[0].id,sha:'b'.repeat(40)}),env,{fetchImpl})).status,404,'only answers with a pull request can be merged');
+  for(const sha of [undefined,'','b'.repeat(39),42]) assert.equal((await handle(post('/api/merge',auth,{conversation,message:reply.id,sha}),env,{fetchImpl})).status,400,'the reviewed head commit is required: '+sha);
+  const blocked=await handle(post('/api/merge',auth,{conversation,message:reply.id,sha:'b'.repeat(40)}),env,{fetchImpl:github({calls:[],mergeStatus:405})});
   assert.equal(blocked.status,409);assert.match((await blocked.json()).error,/cannot merge PR #7 yet/);
 });
 
