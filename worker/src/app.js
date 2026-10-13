@@ -389,7 +389,7 @@ function progressStream(work) {
 }
 
 // Lines added and removed between two versions of a file: common lines at both ends are skipped and
-// the rest is compared line by line (a longest-common-subsequence diff, bounded for very large edits).
+// the rest is compared line by line.
 export function lineChanges(before,after) {
   // Lines keep their terminator, as in git: an empty file has none, and adding or removing the final
   // newline changes the last line.
@@ -397,16 +397,19 @@ export function lineChanges(before,after) {
   const a=lines(before),b=lines(after);
   let start=0;while(start<a.length&&start<b.length&&a[start]===b[start]) start++;
   let endA=a.length,endB=b.length;while(endA>start&&endB>start&&a[endA-1]===b[endB-1]) {endA--;endB--;}
-  const x=a.slice(start,endA),y=b.slice(start,endB);
-  if(x.length*y.length>4000000) return {added:y.length,removed:x.length};
-  let previous=new Array(y.length+1).fill(0);
-  for(let i=1;i<=x.length;i++) {
-    const row=new Array(y.length+1).fill(0);
-    for(let j=1;j<=y.length;j++) row[j]=x[i-1]===y[j-1]?previous[j-1]+1:Math.max(previous[j],row[j-1]);
-    previous=row;
+  const x=a.slice(start,endA),y=b.slice(start,endB),n=x.length,m=y.length;
+  // Myers' O((N+M)·D) diff finds the fewest added plus removed lines D; it is fast when the change is
+  // small, whatever the file size. Very large rewrites fall back to counting both regions.
+  const limit=Math.min(n+m,4000),offset=limit+1,v=new Int32Array(2*limit+3);
+  for(let d=0;d<=limit;d++) {
+    for(let k=-d;k<=d;k+=2) {
+      let i=k===-d||(k!==d&&v[offset+k-1]<v[offset+k+1])?v[offset+k+1]:v[offset+k-1]+1,j=i-k;
+      while(i<n&&j<m&&x[i]===y[j]) {i++;j++;}
+      v[offset+k]=i;
+      if(i>=n&&j>=m) return {added:(d+m-n)/2,removed:(d-m+n)/2};
+    }
   }
-  const common=previous[y.length];
-  return {added:y.length-common,removed:x.length-common};
+  return {added:m,removed:n};
 }
 
 // The pull request description: what the owner asked for, the agent's explanation and what changes.

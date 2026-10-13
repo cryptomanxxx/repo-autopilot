@@ -161,6 +161,9 @@ test('pull request line counts come from the actual change',()=>{
   assert.deepEqual(lineChanges('','x'),{added:1,removed:0},'filling an empty file');
   assert.deepEqual(lineChanges('a','a\n'),{added:1,removed:1},'adding the final newline changes the last line');
   assert.deepEqual(lineChanges('a\n','a'),{added:1,removed:1});
+  const middle=Array.from({length:1999},(_,i)=>`line ${i}\n`).join('');
+  assert.deepEqual(lineChanges(`first\n${middle}last\n`,`FIRST\n${middle}LAST\n`),{added:2,removed:2},'common lines of large files are found');
+  assert.deepEqual(lineChanges('a\nb\nc\nd\ne\n','x\nb\ny\nd\nz\n'),{added:3,removed:3});
 });
 
 test('an edit block without a file path is matched to the one file its text belongs to',async()=>{
