@@ -477,7 +477,7 @@ test('Codex can be asked to fix its findings once per head commit',async()=>{
 });
 
 test('Codex can be asked to review code it has not reviewed, once per head commit',async()=>{
-  const calls=[],{env}=environment(),fetchImpl=github({calls,codex:'none'});
+  const calls=[],{env,store}=environment(),fetchImpl=github({calls,codex:'none'});
   const auth=await session(env,fetchImpl);
   const ask=(extra={},fetch=fetchImpl)=>handle(post('/api/codex-review',auth,{repository:'owner/repo',number:7,sha:'b'.repeat(40),...extra}),env,{fetchImpl:fetch});
   assert.deepEqual(await (await ask()).json(),{asked:true});
@@ -488,6 +488,9 @@ test('Codex can be asked to review code it has not reviewed, once per head commi
   calls.length=0;
   assert.deepEqual(await (await ask()).json(),{asked:true,already:true});
   assert.equal(calls.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false,'asked at most once per commit');
+  const seen=github({calls:[],codex:'none'}),visible=async(url,options)=>url.endsWith('/issues/7/comments?per_page=100')?Response.json([{user:{login:'owner'},body:'@codex review',created_at:'2026-10-13T12:00:00Z'}]):seen(url,options);
+  assert.deepEqual(await (await ask({},visible)).json(),{asked:true,already:true},'a retry after the posted request shows up on GitHub is still answered as already asked');
+  store.rows('DELETE FROM codex_reviews');
   for(const [codex,reason] of [['clear',/already cleared/],['findings',/has findings/]]) {
     const seen=[],refused=await ask({sha:'b'.repeat(40)},github({calls:seen,codex}));
     assert.equal(refused.status,409);assert.match((await refused.json()).error,reason);

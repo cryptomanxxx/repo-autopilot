@@ -423,6 +423,9 @@ async function askCodex(kind,body,{store,github,access}) {
   catch(error) {if(error instanceof GitHubError&&error.status===404) throw new UserError(404,`PR #${number} was not found.`);throw error;}
   if(pull.state!=='open'||pull.merged) throw new UserError(409,`PR #${number} is no longer open.`);
   if(pull.head?.sha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
+  // A request already made for this commit is answered as such first: once posted, the comment itself
+  // changes Codex's state (to requested, for a review), so a retry after a lost response is no error.
+  if(await store.hasCodexRequest(kind,repository,number,body.sha)) return json(200,{asked:true,already:true});
   // Codex's state may have changed since the dashboard showed it.
   const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
   const {item}=await status.pullDetails(repository,pull);
