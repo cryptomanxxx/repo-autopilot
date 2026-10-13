@@ -353,6 +353,8 @@ async function chat(body,{env,store,github,config,access,fetchImpl}) {
   try {
     // GitHub is read before the answer starts streaming, so its refusals keep their HTTP status.
     const client=github(repository),head=await client.head(),archive=(await client.archive(head.sha)).files,files=textFiles(archive);
+    // The latest commit just read is also what the chat compares answers with.
+    await store.setCache(`head:${repository.toLowerCase()}`,head,HEAD_CACHE_MS);
     const history=conversation?.messages||[];
     const query=[...history.filter(m=>m.role==='user').slice(-2).map(m=>m.content),text].join('\n');
     const context=selectContext(files,query,Number(env.CONTEXT_CHARS)||DEFAULT_CONTEXT_CHARS);

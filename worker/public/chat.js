@@ -76,6 +76,7 @@ function renderContent(text,{hideTitle=false}={}) {
 }
 
 const shortSha=sha=>sha.slice(0,7);
+const targetText=(base,branch,moved)=>`Opens a pull request into ${base} from the new branch ${branch}.${moved?` The edits are applied to the latest ${base}; if they no longer fit, you will be told.`:''}`;
 // Which code an answer is based on; marked when the branch has moved on since.
 function renderMeta(meta) {
   const line=document.createElement('p');line.className='meta muted small';
@@ -110,7 +111,8 @@ function renderMessage(message) {
     } else if(message.id) {
       // Pull requests are opened from a new branch on the latest default branch (see /api/pull-request).
       const target=document.createElement('p');target.className='muted small target';
-      target.textContent=`Opens a pull request into ${message.meta?.branch||'the default branch'} from the new branch autopilot/chat-${(state.conversation||'').slice(0,12)}-${message.id}.`;
+      target.dataset.branch=`autopilot/chat-${(state.conversation||'').slice(0,12)}-${message.id}`;
+      target.textContent=targetText(message.meta?.branch||'the default branch',target.dataset.branch,false);
       box.append(target);
       const button=document.createElement('button');button.textContent='Create pull request';
       button.onclick=()=>createPullRequest(message.id,button);box.append(button);
@@ -129,9 +131,11 @@ function renderMessages(messages) {
 }
 
 // Live details of the open conversation: whether the branch has moved on since each answer, and the
-// status of pull requests opened from it. Webhook events move the repository's version on.
-let threadVersion=null;
+// status of pull requests opened from it. Webhook events move the repository's version on; without
+// them the details are still read again every few minutes.
+let threadVersion=null,threadRefreshed=0;
 async function refreshThread() {
+  threadRefreshed=Date.now();
   const conversation=state.conversation,repository=state.repository,container=$('messages');
   const metas=[...container.querySelectorAll('.meta')],pulls=[...container.querySelectorAll('.pr-status')];
   if(!conversation||(!metas.length&&!pulls.length)) return;
@@ -143,12 +147,14 @@ async function refreshThread() {
   if(metas.length) api(`/api/head?${repo}`).then(head=>{
     if(!current()) return;
     for(const line of metas) {
-      const stale=line.querySelector('.stale');stale.hidden=line.dataset.branch!==head.branch||line.dataset.sha===head.sha;
-      stale.textContent=` · ${head.branch} has moved on to ${shortSha(head.sha)}`;
+      // A renamed or replaced default branch counts as a change too.
+      const stale=line.querySelector('.stale');stale.hidden=line.dataset.branch===head.branch&&line.dataset.sha===head.sha;
+      stale.textContent=line.dataset.branch===head.branch?` · ${head.branch} has moved on to ${shortSha(head.sha)}`:` · the default branch is now ${head.branch} @ ${shortSha(head.sha)}`;
     }
+    // Pull requests are always opened on the latest default branch.
     for(const target of container.querySelectorAll('.target')) {
       const line=target.closest('.message')?.querySelector('.meta');
-      if(line&&!line.querySelector('.stale').hidden) target.textContent=target.textContent.replace(/( The edits are applied to the latest .*)?$/,` The edits are applied to the latest ${head.branch}; if they no longer fit, you will be told.`);
+      target.textContent=targetText(head.branch,target.dataset.branch,Boolean(line&&!line.querySelector('.stale').hidden));
     }
   }).catch(()=>{});
   for(const element of pulls) api(`/api/dashboard/pulls/${element.dataset.number}?${repo}`).then(pr=>{if(current()) element.textContent=pullStatusText(pr);}).catch(()=>{});
@@ -157,7 +163,7 @@ setInterval(async()=>{
   if(state.tab!=='chat'||document.hidden||!state.conversation||!$('messages').querySelector('.meta,.pr-status')) return;
   try {
     const {version}=await api(`/api/dashboard/version?repo=${encodeURIComponent(state.repository)}`);
-    if(version!==threadVersion) refreshThread();
+    if(version!==threadVersion||Date.now()-threadRefreshed>=180000) refreshThread();
   } catch {}
 },15000);
 

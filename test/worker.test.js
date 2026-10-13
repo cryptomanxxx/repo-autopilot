@@ -343,7 +343,10 @@ test('chat answers from repository files and opens a pull request on request',as
   const head=await (await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl})).json();
   assert.deepEqual(head,{branch:'main',sha:'a'.repeat(40)});
   await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl});
-  assert.equal(calls.length,2,'the latest commit is cached briefly');
+  assert.equal(calls.length,0,'the commit the chat just read is cached for comparisons');
+  store.rows("DELETE FROM cache WHERE key = 'head:owner/repo'");
+  await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl});await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl});
+  assert.equal(calls.length,2,'the latest commit is read once and cached briefly');
   assert.equal(JSON.stringify(thread).includes('ghu_user'),false);
   const created=await handle(post('/api/pull-request',auth,{conversation,message:reply.id}),env,{fetchImpl});
   assert.deepEqual(await created.json(),{url:'https://github.com/owner/repo/pull/7'});
