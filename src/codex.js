@@ -4,7 +4,7 @@ const matchesHead = (sha, head) => typeof sha === 'string' && /^[a-f0-9]{7,40}$/
 const time = value => Date.parse(value) || 0;
 
 // Reactions belong to a PR, not a commit. Require separate current-head evidence.
-export function codexStatus(head, {reviews = [], comments = [], inline = [], reactions = [], truncated = false} = {}) {
+export function codexStatus(head, {reviews = [], comments = [], inline = [], reactions = [], truncated = false, headAt = null} = {}) {
   const result = (state, label, evidence = {}) => ({state, label, ...evidence});
   if (truncated) return result('unknown', 'Codex: incomplete history');
   const events = [];
@@ -32,7 +32,10 @@ export function codexStatus(head, {reviews = [], comments = [], inline = [], rea
   }
   events.sort((a,b)=>b.at-a.at || (a.state === 'findings' ? -1 : 1));
   const latest=events[0];
-  const request=comments.filter(c=>!isBot(c) && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '')).reduce((at,c)=>Math.max(at,time(c.created_at)),0);
+  // Review requests are PR-wide comments; one made before the current head was committed asked about
+  // earlier code, so it does not count as a request for this commit.
+  const since=time(headAt);
+  const request=comments.filter(c=>!isBot(c) && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '') && time(c.created_at)>=since).reduce((at,c)=>Math.max(at,time(c.created_at)),0);
   if(latest && request>latest.at) return result('requested','Codex: review requested (commit unverified)');
   if(latest) {const {at,...event}=latest;return event;}
   if(request) return result('requested','Codex: review requested (commit unverified)');

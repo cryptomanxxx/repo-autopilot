@@ -226,7 +226,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity,codex='clear',commentStatus=201,closeAfter=Infinity}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity,codex='clear',commentStatus=201,closeAfter=Infinity,headAfter=Infinity}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -246,7 +246,7 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(method==='GET'&&path===`/compare/${head}...commit1`) return ok({files:[{filename:'public/app.js',status:'modified',additions:1,deletions:1}]},compareStatus);
     if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},pullStatus);
     if(method==='GET'&&path.startsWith('/pulls?state=open&head=owner%3Aautopilot%2Fchat-')) return ok(openPulls);
-    if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:calls.filter(c=>c.url.endsWith('/pulls/7')).length>closeAfter?'closed':'open',merged:false,title:'New title',base:{ref:calls.filter(c=>c.url.endsWith('/pulls/7')).length>retargetAfter?'release':mergeBase},head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
+    if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:calls.filter(c=>c.url.endsWith('/pulls/7')).length>closeAfter?'closed':'open',merged:false,title:'New title',base:{ref:calls.filter(c=>c.url.endsWith('/pulls/7')).length>retargetAfter?'release':mergeBase},head:{sha:calls.filter(c=>c.url.endsWith('/pulls/7')).length>headAfter?'d'.repeat(40):'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
     if(path==='/pulls/7/reviews?per_page=100'&&codex==='findings') return ok([{user:{login:'chatgpt-codex-connector[bot]'},state:'COMMENTED',commit_id:'b'.repeat(40),submitted_at:'2026-10-13T12:00:00Z',body:'Here are some automated review suggestions for this pull request.'}],detailStatus);
     if(path==='/issues/7/comments?per_page=100'&&codex==='clear') return ok([{user:{login:'chatgpt-codex-connector[bot]'},body:"Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `bbbbbbbbbb`",created_at:'2026-10-13T12:00:00Z'}],detailStatus);
     if(/^\/(pulls\/7\/(reviews|comments|commits)|issues\/7\/(comments|reactions))\?per_page=100$/.test(path)) return ok([],detailStatus);
@@ -494,6 +494,9 @@ test('Codex can be asked to review code it has not reviewed, once per head commi
     assert.equal(seen.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
   }
   assert.equal((await ask({sha:'c'.repeat(40)})).status,409,'only for the head commit that was shown');
+  const pushing=[],pushed=await ask({},github({calls:pushing,codex:'none',headAfter:2}));
+  assert.equal(pushed.status,409);assert.match((await pushed.json()).error,/new commits/,'a push during the status check is caught before posting');
+  assert.equal(pushing.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
 });
 
 test('pull requests keep file modes and can be retried after a partial failure',async()=>{

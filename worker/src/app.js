@@ -430,6 +430,11 @@ async function askCodex(kind,body,{store,github,access}) {
   if(item.headSha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
   const unwanted=request.wanted(item.codex?.state);
   if(unwanted) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number}: ${unwanted}`);}
+  // The comment applies to the whole pull request, so its head is read once more right before claiming
+  // and posting: a push during the status check must not get a request recorded for the older commit.
+  const latest=await client.api(`pulls/${number}`);
+  if(latest.state!=='open'||latest.merged) {await store.invalidate(repository,{overview:true,pulls:[number]});throw new UserError(409,`PR #${number} is no longer open.`);}
+  if(latest.head?.sha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
   // Asking again for the same commit is not an error: the button then shows that Codex was asked.
   if(!await store.claimCodexRequest(kind,repository,number,body.sha)) return json(200,{asked:true,already:true});
   try {await client.api(`issues/${number}/comments`,{method:'POST',body:{body:request.comment}});}
