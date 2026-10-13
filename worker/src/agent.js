@@ -110,7 +110,8 @@ export function buildMessages({repository,head,context,history,text,image,rule=e
   return [{role:'system',content:system},...earlier,{role:'user',content:current}];
 }
 
-const BLOCK=/^<<<<<<< SEARCH[ \t]+(\S+)[ \t]*\n([\s\S]*?)^=======[ \t]*\n([\s\S]*?)^>>>>>>> REPLACE[ \t]*$/gm;
+// The path after SEARCH is optional: models sometimes leave it out, and findFile then locates the file.
+const BLOCK=/^<<<<<<< SEARCH(?:[ \t]+(\S+))?[ \t]*\n([\s\S]*?)^=======[ \t]*\n([\s\S]*?)^>>>>>>> REPLACE[ \t]*$/gm;
 
 // Returns {edits, title} or throws when the answer contains malformed edit blocks.
 export function parseEdits(answer) {
@@ -119,7 +120,7 @@ export function parseEdits(answer) {
     // Each section ends with the newline before its marker. Dropping it from both sides lets an
     // edit replace part of a line; a removal keeps it so whole lines disappear without a blank line.
     const [search,replace]=match[2]&&match[3]?[match[2].slice(0,-1),match[3].slice(0,-1)]:[match[2],match[3]];
-    edits.push({path:match[1],search,replace});
+    edits.push({path:match[1]||null,search,replace});
   }
   const opened=(text.match(/^<<<<<<< SEARCH/gm)||[]).length;
   if(opened!==edits.length) throw new PublicError('An edit block is incomplete or malformed.');
@@ -149,6 +150,21 @@ function locate(source,search,path) {
 }
 
 // Applies search/replace edits to the current files. Throws a message the model can act on.
+// The file an edit block without a path refers to: the one editable file its SEARCH text matches exactly.
+export function findFile(search,files,allowed=editablePath) {
+  if(!search) throw new PublicError('An edit block that creates a file must name it after SEARCH.');
+  const first=search.split('\n').find(line=>line.trim())||search,hits=[];
+  for(const [path,text] of Object.entries(files)) {
+    if(!text.includes(first)) continue;
+    try {locate(text,search,path);hits.push(path);} catch {}
+  }
+  const editable=hits.filter(path=>allowed(path));
+  if(editable.length===1) return editable[0];
+  if(editable.length>1) throw new PublicError(`An edit block names no file after SEARCH and its text matches several files (${editable.slice(0,3).join(', ')}).`);
+  if(hits.length) throw new PublicError(`${hits[0]} may not be edited by the chat agent.`);
+  throw new PublicError('An edit block names no file after SEARCH, and its SEARCH text matches no file exactly.');
+}
+
 export function applyEdits(edits,files,existingPaths,allowed=editablePath) {
   const updated={},existing=new Set(existingPaths);
   for(const edit of edits) {
@@ -218,15 +234,16 @@ export async function answer(env,{messages,files,existingPaths,allowed=editableP
     // never become a proposal; a correction round would most likely be cut off as well.
     if(result.truncated) return {reply,proposal:null,error:/^<<<<<<< SEARCH/m.test(result.text)?'The answer was cut off at the output limit, so its edits may be incomplete. Ask for a smaller change.':null};
     try {
-      const {edits,title}=parseEdits(reply);
-      if(!edits.length) return {reply,proposal:null,error:null};
+      const parsed=parseEdits(reply),title=parsed.title;
+      if(!parsed.edits.length) return {reply,proposal:null,error:null};
+      const edits=parsed.edits.map(edit=>edit.path?edit:{...edit,path:findFile(edit.search,files,allowed)});
       onStep(`Checking ${edits.length} proposed edit${edits.length===1?'':'s'} against the current files…`);
       applyEdits(edits,files,existingPaths,allowed);
       return {reply,proposal:{edits,title},error:null};
     } catch(error) {
       if(attempt>0) return {reply,proposal:null,error:error.message};
       onStep(`An edit did not apply (${error.message}) Asking the model to correct it…`);
-      try {result=await callModel(env,[...messages,{role:'assistant',content:reply},{role:'user',content:`Your edit blocks could not be applied: ${error.message} Send your complete answer again with corrected edit blocks. Copy SEARCH text exactly from the supplied file contents.`}],{fetchImpl});}
+      try {result=await callModel(env,[...messages,{role:'assistant',content:reply},{role:'user',content:`Your edit blocks could not be applied: ${error.message} Send your complete answer again with corrected edit blocks. Start every block with the line "<<<<<<< SEARCH path/to/file" naming the file, and copy SEARCH text exactly from the supplied file contents.`}],{fetchImpl});}
       catch {return {reply,proposal:null,error:error.message};}
     }
   }
