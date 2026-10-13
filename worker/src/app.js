@@ -469,20 +469,21 @@ async function mergePullRequest(body,{store,github,config,access}) {
   const lock=randomHex(16);
   if(!await store.acquireLock('merge',lock,60000)) throw new UserError(429,'A merge is already in progress. Wait a moment.');
   try {
+    // Every refusal drops the chat's cached status for this pull request, so the refresh that follows
+    // it shows the current state instead of the one that was refused.
+    const refuse=async message=>{await store.invalidate(repository,{pulls:[number]});throw new UserError(409,message);};
     const client=github(repository),pull=await client.api(`pulls/${number}`);
-    if(pull.merged) return json(200,{merged:true});
-    if(pull.state!=='open') throw new UserError(409,`PR #${number} is closed.`);
+    if(pull.merged) {await store.invalidate(repository,{overview:true,pulls:[number]});return json(200,{merged:true});}
+    if(pull.state!=='open') await refuse(`PR #${number} is closed.`);
     // The chat promises a merge into the default branch; a retargeted pull request is merged on GitHub.
     const {default_branch:defaultBranch}=await client.api('');
-    if(pull.base?.ref!==defaultBranch) throw new UserError(409,`PR #${number} now targets ${pull.base?.ref||'another branch'} instead of the default branch ${defaultBranch}. Merge it on GitHub if that is intended.`);
-    if(body.sha!==pull.head?.sha) throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again before merging.`);
+    if(pull.base?.ref!==defaultBranch) await refuse(`PR #${number} now targets ${pull.base?.ref||'another branch'} instead of the default branch ${defaultBranch}. Merge it on GitHub if that is intended.`);
+    if(body.sha!==pull.head?.sha) await refuse(`PR #${number} has new commits since its status was shown. Check it again before merging.`);
     // Blockers can appear without a new commit (failed CI, Codex findings, requested changes), so the
-    // readiness the chat shows is computed again here and enforced, not only in the browser.
+    // readiness the chat shows is computed again here and enforced, not only in the browser. It fails
+    // closed: a status that cannot be read, or unverified items the owner did not confirm, refuse the merge.
     const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
     const {item}=await status.pullDetails(repository,pull);
-    // It fails closed: a status that cannot be read, or unverified items the owner did not confirm,
-    // refuse the merge, and the chat's cached status is dropped so it shows the current state.
-    const refuse=async message=>{await store.invalidate(repository,{pulls:[number]});throw new UserError(409,message);};
     // GitHub's merge call guards the head but not the base, so a retarget during the check is caught here.
     if(item.baseRef!==defaultBranch) await refuse(`PR #${number} now targets ${item.baseRef||'another branch'} instead of the default branch ${defaultBranch}. Merge it on GitHub if that is intended.`);
     if(item.headSha!==body.sha) await refuse(`PR #${number} has new commits since its status was shown. Check it again before merging.`);
@@ -494,8 +495,8 @@ async function mergePullRequest(body,{store,github,config,access}) {
     try {await client.api(`pulls/${number}/merge`,{method:'PUT',body:{sha:body.sha,merge_method:'squash',commit_title:`${pull.title} (#${number})`}});}
     catch(error) {
       if(!(error instanceof GitHubError)) throw error;
-      if(error.status===405) throw new UserError(409,`GitHub cannot merge PR #${number} yet: required checks, reviews or branch rules are not satisfied, or it has conflicts.`);
-      if(error.status===409) throw new UserError(409,`PR #${number} changed while merging. Check it again.`);
+      if(error.status===405) await refuse(`GitHub cannot merge PR #${number} yet: required checks, reviews or branch rules are not satisfied, or it has conflicts.`);
+      if(error.status===409) await refuse(`PR #${number} changed while merging. Check it again.`);
       if([403,404].includes(error.status)) throw new UserError(403,`GitHub refused to merge PR #${number} (HTTP ${error.status}). Check that the GitHub App has Contents and Pull requests set to Read and write.`);
       throw error;
     }

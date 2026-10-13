@@ -418,7 +418,9 @@ test('chat answers from repository files and opens a pull request on request',as
   const confirmed=shown.readiness.reasons;
   const merge=(extra={},fetch=fetchImpl)=>handle(post('/api/merge',auth,{conversation,message:reply.id,sha:'b'.repeat(40),confirmed,...extra}),env,{fetchImpl:fetch});
   calls.length=0;
+  store.setCache('pull:owner/repo:7:',{stale:true},60000);assert.ok(store.getCache('pull:owner/repo:7:'));
   assert.equal((await merge({sha:'c'.repeat(40)})).status,409,'a pull request with new commits is not merged');
+  assert.equal(store.getCache('pull:owner/repo:7:'),null,'the refused status is not served again from the cache');
   const unconfirmed=await merge({confirmed:undefined});
   assert.equal(unconfirmed.status,409);assert.match((await unconfirmed.json()).error,/status changed: .*Check it again/,'unverified items must have been confirmed');
   assert.equal(calls.some(c=>c.method==='PUT'),false);
