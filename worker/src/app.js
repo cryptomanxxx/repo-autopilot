@@ -192,8 +192,8 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     const repository=await resolveRepository(url.searchParams.get('repo'),access),key=`head:${repository.toLowerCase()}`;
     const cached=await store.getCache(key);
     if(cached) return json(200,cached);
-    const head=await github(repository).head();
-    await store.setCache(key,head,HEAD_CACHE_MS);
+    const load=await store.startDashboardLoad(repository),head=await github(repository).head();
+    await store.setDashboardCache(key,head,HEAD_CACHE_MS,{repository,...load});
     return json(200,head);
   });
   if(request.method!=='POST') throw new UserError(405,'Unsupported request.');
@@ -352,9 +352,10 @@ async function chat(body,{env,store,github,config,access,fetchImpl}) {
   let streaming=false;
   try {
     // GitHub is read before the answer starts streaming, so its refusals keep their HTTP status.
+    const load=await store.startDashboardLoad(repository);
     const client=github(repository),head=await client.head(),archive=(await client.archive(head.sha)).files,files=textFiles(archive);
-    // The latest commit just read is also what the chat compares answers with.
-    await store.setCache(`head:${repository.toLowerCase()}`,head,HEAD_CACHE_MS);
+    // The latest commit just read is also what the chat compares answers with, unless a push arrived meanwhile.
+    await store.setDashboardCache(`head:${repository.toLowerCase()}`,head,HEAD_CACHE_MS,{repository,...load});
     const history=conversation?.messages||[];
     const query=[...history.filter(m=>m.role==='user').slice(-2).map(m=>m.content),text].join('\n');
     const context=selectContext(files,query,Number(env.CONTEXT_CHARS)||DEFAULT_CONTEXT_CHARS);

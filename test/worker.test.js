@@ -347,6 +347,10 @@ test('chat answers from repository files and opens a pull request on request',as
   store.rows("DELETE FROM cache WHERE key = 'head:owner/repo'");
   await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl});await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl});
   assert.equal(calls.length,2,'the latest commit is read once and cached briefly');
+  store.rows("DELETE FROM cache WHERE key = 'head:owner/repo'");
+  const pushed=async(url,options)=>{if(url.endsWith('/git/ref/heads/main')) store.invalidate('owner/repo',{head:true});return fetchImpl(url,options);};
+  await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl:pushed});
+  assert.equal(store.getCache('head:owner/repo'),null,'a commit read while a push arrived is not cached');
   assert.equal(JSON.stringify(thread).includes('ghu_user'),false);
   const created=await handle(post('/api/pull-request',auth,{conversation,message:reply.id}),env,{fetchImpl});
   assert.deepEqual(await created.json(),{url:'https://github.com/owner/repo/pull/7'});

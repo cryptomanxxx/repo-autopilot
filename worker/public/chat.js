@@ -137,14 +137,14 @@ let threadVersion=null,threadRefreshed=0;
 async function refreshThread() {
   threadRefreshed=Date.now();
   const conversation=state.conversation,repository=state.repository,container=$('messages');
-  const metas=[...container.querySelectorAll('.meta')],pulls=[...container.querySelectorAll('.pr-status')];
-  if(!conversation||(!metas.length&&!pulls.length)) return;
+  const metas=[...container.querySelectorAll('.meta')],pulls=[...container.querySelectorAll('.pr-status')],targets=container.querySelectorAll('.target');
+  if(!conversation||(!metas.length&&!pulls.length&&!targets.length)) return;
   const repo=`repo=${encodeURIComponent(repository)}`;
   const current=()=>state.conversation===conversation&&state.repository===repository;
   // The version is read first, so an event that arrives during this refresh triggers another one.
   try {const {version}=await api(`/api/dashboard/version?${repo}`);if(current()) threadVersion=version;} catch {}
   if(!current()) return;
-  if(metas.length) api(`/api/head?${repo}`).then(head=>{
+  if(metas.length||targets.length) api(`/api/head?${repo}`).then(head=>{
     if(!current()) return;
     for(const line of metas) {
       // A renamed or replaced default branch counts as a change too.
@@ -152,7 +152,7 @@ async function refreshThread() {
       stale.textContent=line.dataset.branch===head.branch?` · ${head.branch} has moved on to ${shortSha(head.sha)}`:` · the default branch is now ${head.branch} @ ${shortSha(head.sha)}`;
     }
     // Pull requests are always opened on the latest default branch.
-    for(const target of container.querySelectorAll('.target')) {
+    for(const target of targets) {
       const line=target.closest('.message')?.querySelector('.meta');
       target.textContent=targetText(head.branch,target.dataset.branch,Boolean(line&&!line.querySelector('.stale').hidden));
     }
@@ -160,7 +160,7 @@ async function refreshThread() {
   for(const element of pulls) api(`/api/dashboard/pulls/${element.dataset.number}?${repo}`).then(pr=>{if(current()) element.textContent=pullStatusText(pr);}).catch(()=>{});
 }
 setInterval(async()=>{
-  if(state.tab!=='chat'||document.hidden||!state.conversation||!$('messages').querySelector('.meta,.pr-status')) return;
+  if(state.tab!=='chat'||document.hidden||!state.conversation||!$('messages').querySelector('.meta,.pr-status,.target')) return;
   try {
     const {version}=await api(`/api/dashboard/version?repo=${encodeURIComponent(state.repository)}`);
     if(version!==threadVersion||Date.now()-threadRefreshed>=180000) refreshThread();
