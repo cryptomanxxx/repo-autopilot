@@ -76,6 +76,8 @@ To add a repository, open **Add repositories** (GitHub → Settings → Applicat
 
 The **Dashboard** tab reads live data from GitHub with your sign-in: the 6 most recently updated pull requests with merge readiness, CI, Codex progress and activity flow, and 15 recent GitHub Actions runs. The overview takes three GitHub requests and each pull request is loaded by its own request with at most ten, so every Worker call stays well under the Workers subrequest limit. Results are cached in the Durable Object for a minute (an hour for merged or closed pull requests); a pull request whose `updatedAt` changed, and the **Refresh** button, bypass the cache. With the [webhook](#live-updates-with-the-webhook) set up, the tab reloads within about 15 seconds of a change on GitHub; without it, every three minutes while it is open. When a chat answer has become a pull request, **Follow in dashboard** opens that pull request's row. Addresses keep the view: `#dashboard`, `#pr-<number>`, `#chat` and `#chat/<conversation>`.
 
+The header shows which version is live: the commit the deploy workflow shipped (linking to it on GitHub) and when. After a merge, the version changes once the **Agent chat Worker** workflow has deployed; a merge that touches no Worker files deploys nothing, so the version stays. A Worker deployed some other way shows "version unknown".
+
 ### Agent chat
 
 The **Agent chat** tab lets you talk to the coding agent directly. You sign in with GitHub, ask about the code or describe a change, and can attach or paste a screenshot. For each message the Worker downloads the current default branch as one archive. It sends whole relevant files, not excerpts, to the model together with the conversation. Answers arrive within seconds once the model replies.

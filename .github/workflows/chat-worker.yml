@@ -75,7 +75,8 @@ jobs:
             echo "::error::AUTOPILOT_CHAT_MODEL_PROVIDER is set; also set AUTOPILOT_CHAT_MODEL to the provider's model name."
             exit 1
           fi
-          args=(--config worker/wrangler.jsonc --var "REPOSITORY:$REPOSITORY" --var "AUTOPILOT_USER:$OWNER" --var "GITHUB_CLIENT_ID:$CLIENT_ID")
+          # The dashboard shows which commit is live and since when.
+          args=(--config worker/wrangler.jsonc --var "DEPLOYED_COMMIT:$GITHUB_SHA" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)" --var "REPOSITORY:$REPOSITORY" --var "AUTOPILOT_USER:$OWNER" --var "GITHUB_CLIENT_ID:$CLIENT_ID")
           for name in MODEL MODEL_PROVIDER MODEL_BASE_URL CONTEXT_CHARS; do
             if [ -n "${!name}" ]; then args+=(--var "$name:${!name}"); fi
           done

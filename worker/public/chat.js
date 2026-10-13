@@ -1,5 +1,5 @@
 import {startDashboard,showDashboard,showPull,setRepository} from './dashboard.js';
-const state={csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',conversationRequest:0};
+const state={csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
 const status=text=>{$('status').textContent=text;};
 const MAX_SIDE=1600,MAX_DATA_URL=1400000;
@@ -173,7 +173,17 @@ function repoLabel(name) {
   const [owner,repo]=name.split('/');
   return sameRepo(owner,state.home.split('/')[0])?repo:name;
 }
-function showAccount() {$('account').textContent=`${state.login} · model ${state.model}`;}
+// The live version: the commit the deploy workflow shipped, linked to GitHub, and when.
+function showAccount() {
+  const account=$('account'),deployed=state.deployed;
+  account.replaceChildren(`${state.login} · model ${state.model} · `);
+  if(!deployed) {account.append('version unknown');return;}
+  const link=document.createElement('a');
+  link.href=`https://github.com/${state.home}/commit/${deployed.commit}`;link.target='_blank';link.rel='noopener noreferrer';
+  link.textContent=`version ${deployed.commit.slice(0,7)}`;link.id='deployed-version';
+  account.append(link);
+  if(deployed.at) account.append(` · deployed ${new Date(deployed.at).toLocaleString()}`);
+}
 function addRepoOption(name) {
   const picker=$('repo-picker');
   if(![...picker.options].some(option=>sameRepo(option.value,name))) picker.append(new Option(repoLabel(name),name));
@@ -331,7 +341,7 @@ try {
   const session=await api('/api/session');
   if(!session.login) showSignedOut(signInProblem?`${signInProblem} Sign in with the owner account of ${session.repository}.`:`Sign in with the owner account of ${session.repository}.`);
   else {
-    Object.assign(state,{csrf:session.csrf,home:session.repository,repository:session.repository,login:session.login,model:session.model});
+    Object.assign(state,{csrf:session.csrf,home:session.repository,repository:session.repository,login:session.login,model:session.model,deployed:session.deployed||null});
     showAccount();
     // The remembered repository is used when it is still reachable; otherwise the app's own.
     let repositories=[{fullName:session.repository,private:false}],remembered=null;
