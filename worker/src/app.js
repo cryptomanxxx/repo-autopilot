@@ -8,7 +8,8 @@ const encoder=new TextEncoder();
 const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
 // Each dashboard request stays far below the Workers subrequest limit: the overview needs three GitHub
 // calls and each pull request is loaded by its own request with at most ten.
-export const DASHBOARD_PULLS=6,HEAD_CACHE_MS=60000,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR,ERROR_CACHE_MS=30000,REPOS_CACHE_MS=300000,WEBHOOK_MAX_BYTES=5000000;
+// "Show more" raises the overview's limits in steps, up to a maximum.
+export const DASHBOARD_PULLS=6,DASHBOARD_MAX_PULLS=30,DASHBOARD_RUNS=15,DASHBOARD_MAX_RUNS=60,HEAD_CACHE_MS=60000,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR,ERROR_CACHE_MS=30000,REPOS_CACHE_MS=300000,WEBHOOK_MAX_BYTES=5000000;
 const hex=bytes=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
 const randomHex=(bytes=32)=>hex(crypto.getRandomValues(new Uint8Array(bytes)));
 const base64url=bytes=>{let s='';for(const b of bytes) s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
@@ -213,7 +214,6 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   if(url.pathname==='/api/chat') return run(()=>chat(body,{env,store,github,config,access,fetchImpl}));
   if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github,config,access}));
   if(url.pathname==='/api/merge') return run(()=>mergePullRequest(body,{store,github,access}));
-  if(url.pathname==='/api/codex-fix') return run(()=>askCodex('fix',body,{store,github,access}));
   if(url.pathname==='/api/codex-review') return run(()=>askCodex('review',body,{store,github,access}));
   throw new UserError(404,'Not found.');
 }
@@ -303,17 +303,24 @@ async function webhook(request,env,store) {
 // Live dashboard data from GitHub, cached briefly so several tabs and refreshes share requests.
 // The client passes each pull request's updatedAt, so new commits or comments bypass the cache.
 async function dashboard(url,{store,session,fetchImpl,repository}) {
-  const client=createGitHub({token:session.token,fetchImpl,pullLimit:DASHBOARD_PULLS,userAgent:'repo-autopilot-chat'});
+  const limit=(name,step,max)=>{
+    const value=url.searchParams.get(name);
+    if(value===null) return step;
+    if(!/^[1-9]\d{0,2}$/.test(value)||Number(value)%step||Number(value)>max) throw new UserError(400,'Invalid request.');
+    return Number(value);
+  };
+  const pullLimit=limit('pulls',DASHBOARD_PULLS,DASHBOARD_MAX_PULLS),runLimit=limit('runs',DASHBOARD_RUNS,DASHBOARD_MAX_RUNS);
+  const client=createGitHub({token:session.token,fetchImpl,pullLimit,runLimit,userAgent:'repo-autopilot-chat'});
   const fresh=url.searchParams.get('fresh')==='1';
   const pull=/^\/api\/dashboard\/pulls\/([1-9]\d{0,8})$/.exec(url.pathname);
   if(url.pathname!=='/api/dashboard'&&!pull) throw new UserError(404,'Not found.');
   const updated=url.searchParams.get('updated')||'';
   if(updated.length>40) throw new UserError(400,'Invalid request.');
-  const repo=repository.toLowerCase(),key=pull?`pull:${repo}:${pull[1]}:${updated}`:`overview:${repo}`;
+  const repo=repository.toLowerCase(),key=pull?`pull:${repo}:${pull[1]}:${updated}`:`overview:${repo}${pullLimit===DASHBOARD_PULLS&&runLimit===DASHBOARD_RUNS?'':`:${pullLimit}:${runLimit}`}`;
   const cached=fresh?null:await store.getCache(key);
   if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
-  // Whether Codex was already asked to fix the head is read on every response, outside the cache.
-  const withAsked=async item=>pull&&item?.state==='open'&&item.headSha?{...item,codexFixAsked:await store.hasCodexRequest('fix',repository,item.number,item.headSha),codexReviewAsked:await store.hasCodexRequest('review',repository,item.number,item.headSha)}:item;
+  // Whether Codex was already asked to review the head is read on every response, outside the cache.
+  const withAsked=async item=>pull&&item?.state==='open'&&item.headSha?{...item,codexReviewAsked:await store.hasCodexRequest('review',repository,item.number,item.headSha)}:item;
   if(cached) return json(200,await withAsked(cached));
   const load=await store.startDashboardLoad(repository);
   let value,changed=false;
@@ -412,11 +419,10 @@ export function pullDescription({request,explanation,changes,sha}) {
   ].filter(Boolean).join('\n\n');
 }
 
-// Asks Codex on the pull request to fix its own review findings (Codex then pushes a commit) or to
-// review the current code. The comment is posted with the owner's GitHub account, at most once per kind
-// and head commit, and only while Codex's state for the head shown still calls for it.
+// Asks Codex on the pull request to review the current code. The comment is posted with the owner's
+// GitHub account, at most once per head commit, and only while Codex's state for the head shown still
+// calls for it.
 const CODEX_REQUESTS={
-  fix:{comment:'@codex address that feedback',wanted:state=>state==='findings'?'':'Codex reports no findings on the current code any more.'},
   // A review is asked for only when there is no review evidence at all for the current commit.
   review:{comment:'@codex review',wanted:state=>({findings:'Codex already reviewed the current code and has findings.',clear:'Codex already cleared the current code.',running:'Codex is reviewing the current code.',requested:'A Codex review was already requested.',incomplete:'its Codex history is too long to check here; request a review on GitHub if needed.'})[state]||''},
 };

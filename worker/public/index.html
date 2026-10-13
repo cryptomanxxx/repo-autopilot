@@ -7,8 +7,8 @@
 <section id="dashboard-view" role="tabpanel" aria-labelledby="tab-dashboard" hidden>
 <div class="toolbar"><div id="summary" class="summary"></div><button type="button" id="refresh" class="secondary">Refresh</button></div>
 <p id="data-age" class="muted small"></p><p id="dashboard-status" role="status" class="muted"></p>
-<h2>Pull requests</h2><label class="filter-label">Show <select id="pr-filter"><option value="all">All</option><option value="open">Open</option><option value="attention">Needs attention</option><option value="merged">Merged</option></select></label><div id="pulls" class="compact-list"></div>
-<h2>GitHub Actions</h2><label class="filter-label">Show <select id="workflow-filter"><option value="all">All</option><option value="ci">CI</option><option value="deployment">Deployment</option><option value="other">Other</option></select></label><div id="workflows" class="compact-list"></div>
+<h2>Pull requests</h2><label class="filter-label">Show <select id="pr-filter"><option value="all">All</option><option value="open">Open</option><option value="attention">Needs attention</option><option value="merged">Merged</option></select></label><div id="pulls" class="compact-list"></div><button type="button" id="more-pulls" class="secondary more" hidden>Show more pull requests</button>
+<h2>GitHub Actions</h2><label class="filter-label">Show <select id="workflow-filter"><option value="all">All</option><option value="ci">CI</option><option value="deployment">Deployment</option><option value="other">Other</option></select></label><div id="workflows" class="compact-list"></div><button type="button" id="more-runs" class="secondary more" hidden>Show more runs</button>
 <p id="scope" class="muted small"></p>
 </section>
 <section id="chat" class="layout" role="tabpanel" aria-labelledby="tab-chat" hidden>

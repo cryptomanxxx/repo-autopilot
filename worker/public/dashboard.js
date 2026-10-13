@@ -2,6 +2,9 @@ import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,l
 
 const $=id=>document.getElementById(id);
 const REFRESH_MS=180000,VERSION_MS=15000;
+// "Show more" raises these in steps, up to the server's maximum.
+const PULLS={step:6,max:30},RUNS={step:15,max:60};
+let pullLimit=PULLS.step,runLimit=RUNS.step;
 let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,version=null,merging=false,retried=null,reloadAfter=false,notice='',noticeFrom=0,loads=0;
 const askedCodex=new Set();
 const status=text=>{$('dashboard-status').replaceChildren(text);};
@@ -49,15 +52,19 @@ export async function loadDashboard({fresh=false}={}) {
   try {
     // The version is read first, so a change reported while loading triggers one more load.
     const seen=(await api(`/api/dashboard/version?${query}`)).version;
-    const overview=await api(`/api/dashboard?${query}${fresh?'&fresh=1':''}`);
+    const limits=`${pullLimit>PULLS.step?`&pulls=${pullLimit}`:''}${runLimit>RUNS.step?`&runs=${runLimit}`:''}`;
+    const overview=await api(`/api/dashboard?${query}${limits}${fresh?'&fresh=1':''}`);
     // Each pull request is loaded by its own request so every Worker call stays within its GitHub budget.
     const pulls=await Promise.all(overview.pulls.map(pr=>api(`/api/dashboard/pulls/${pr.number}?${query}&updated=${encodeURIComponent(pr.updatedAt)}${fresh?'&fresh=1':''}`).catch(error=>unavailable(pr,error))));
     if(target!==repository()) return;
     version=seen>0?seen:version;
     data={...overview,pulls,warnings:[...overview.warnings,...pulls.flatMap(pr=>pr.warnings||[])]};
     renderSummary($('summary'),data);
-    renderPulls($('pulls'),data.pulls,{onMerge:mergePull,onCodex:askCodex,askedCodex:(kind,pr)=>pr[kind==='fix'?'codexFixAsked':'codexReviewAsked']===true||askedCodex.has(`${kind}:${target}#${pr.number}@${pr.headSha}`)});
+    renderPulls($('pulls'),data.pulls,{onMerge:mergePull,onCodex:askCodex,askedCodex:(kind,pr)=>pr.codexReviewAsked===true||askedCodex.has(`${kind}:${target}#${pr.number}@${pr.headSha}`)});
     renderWorkflows($('workflows'),data.workflows);
+    // More can exist only when a list came back full.
+    $('more-pulls').hidden=data.pulls.length<pullLimit||pullLimit>=PULLS.max;
+    $('more-runs').hidden=data.workflows.length<runLimit||runLimit>=RUNS.max;
     filters();
     $('scope').textContent=[data.scope,...data.warnings].join(' ');
     // A merge outcome stays until a load started after the merge shows its result.
@@ -96,16 +103,15 @@ async function mergePull(pr,button) {
   }
 }
 
-// Asks Codex to fix its findings or to review, for the head shown; the server posts the comment once per
-// commit.
+// Asks Codex to review the head shown; the server posts the comment once per commit.
 async function askCodex(action,pr,button) {
-  const target=repository(),verb=action.kind==='fix'?'fix':'review';
-  button.disabled=true;status(`Asking Codex to ${verb} PR #${pr.number}…`);
+  const target=repository();
+  button.disabled=true;status(`Asking Codex to review PR #${pr.number}…`);
   try {
     const {already}=await api(`/api/codex-${action.kind}`,{repository:target,number:pr.number,sha:pr.headSha});
     askedCodex.add(`${action.kind}:${target}#${pr.number}@${pr.headSha}`);
     button.textContent=action.asked;
-    if(target===repository()) status(already?`Codex was already asked to ${verb} PR #${pr.number} at this commit.`:action.kind==='fix'?`Asked Codex to fix PR #${pr.number}. It pushes a commit when done; then ask it to review again.`:`Asked Codex to review PR #${pr.number}. Its result appears here when done.`);
+    if(target===repository()) status(already?`Codex was already asked to review PR #${pr.number} at this commit.`:`Asked Codex to review PR #${pr.number}. Its result appears here when done.`);
   } catch(error) {
     button.disabled=false;
     if(target===repository()) status(error.message);
@@ -124,7 +130,8 @@ async function checkVersion() {
 
 // Called when another repository is selected: forget the old data and load the new one if visible.
 export function setRepository() {
-  data=null;version=null;pendingPull=null;retried=null;notice='';
+  data=null;version=null;pendingPull=null;retried=null;notice='';pullLimit=PULLS.step;runLimit=RUNS.step;
+  $('more-pulls').hidden=true;$('more-runs').hidden=true;
   for(const id of ['summary','pulls','workflows']) $(id).replaceChildren();
   $('scope').textContent='';$('data-age').textContent='';status('');
   loadDashboard();
@@ -135,6 +142,10 @@ export function startDashboard(request,{isVisible,selected}) {
   setInterval(()=>{if(isVisible()) checkVersion();},VERSION_MS);
   for(const id of ['pr-filter','workflow-filter']) $(id).addEventListener('change',filters);
   $('refresh').onclick=()=>loadDashboard({fresh:true});
+  // A load already running finishes first; the larger list is loaded right after it.
+  const more=(id,raise)=>{$(id).onclick=()=>{raise();$(id).hidden=true;if(loading) reloadAfter=true;else loadDashboard();};};
+  more('more-pulls',()=>{pullLimit=Math.min(PULLS.max,pullLimit+PULLS.step);});
+  more('more-runs',()=>{runLimit=Math.min(RUNS.max,runLimit+RUNS.step);});
   setInterval(()=>{
     updateAge();
     if(isVisible()&&!document.hidden&&Date.now()-lastLoad>=REFRESH_MS) loadDashboard();

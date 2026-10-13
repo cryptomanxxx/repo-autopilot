@@ -21,7 +21,7 @@ export function ciState(checks, statuses) {
   if (states.some(s => !['success', 'neutral', 'skipped'].includes(s))) return 'pending';
   return 'success';
 }
-export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgent} = {}) {
+export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit = 15, userAgent} = {}) {
   // Browsers send their own User-Agent; server runtimes such as Cloudflare Workers must set one for GitHub.
   const agent = userAgent ? {'User-Agent': userAgent} : {};
   async function get(path) {
@@ -49,9 +49,9 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
   async function overview(value) {
     const repo = repositoryName(value), root = `/repos/${repo}`;
     // Workflow runs are optional: without access to them the pull requests still load, with a warning.
-    const [metadata, pulls, runs] = await Promise.all([get(root), get(`${root}/pulls?state=all&sort=updated&direction=desc&per_page=${pullLimit}`), get(`${root}/actions/runs?per_page=15`).catch(error => ({error}))]);
+    const [metadata, pulls, runs] = await Promise.all([get(root), get(`${root}/pulls?state=all&sort=updated&direction=desc&per_page=${pullLimit}`), get(`${root}/actions/runs?per_page=${runLimit}`).catch(error => ({error}))]);
     const warnings = runs.error ? [`GitHub Actions runs are unavailable: ${runs.error.message}`] : [];
-    return {repo, repository:metadata.full_name, url:metadata.html_url, fetchedAt:new Date().toISOString(), autonomy:false, scope:`${pullLimit} most recently updated PRs; 15 recent workflow runs. Review lists are limited to 100 entries. CI is informational, not merge eligibility.`, warnings, pulls, workflows:(runs.workflow_runs || []).map(r => ({id:r.id, runNumber:r.run_number, name:r.name, title:r.display_title, status:r.status, conclusion:r.conclusion, branch:r.head_branch, sha:r.head_sha, url:r.html_url, updatedAt:r.updated_at}))};
+    return {repo, repository:metadata.full_name, url:metadata.html_url, fetchedAt:new Date().toISOString(), autonomy:false, scope:`${pullLimit} most recently updated PRs; ${runLimit} recent workflow runs. Review lists are limited to 100 entries. CI is informational, not merge eligibility.`, warnings, pulls, workflows:(runs.workflow_runs || []).map(r => ({id:r.id, runNumber:r.run_number, name:r.name, title:r.display_title, status:r.status, conclusion:r.conclusion, branch:r.head_branch, sha:r.head_sha, url:r.html_url, updatedAt:r.updated_at}))};
   }
   // Reviews, comments, checks, Codex state and merge readiness of one listed pull request: at most nine
   // requests. An open pull request is fetched again afterwards: that catches pushes made while loading and
