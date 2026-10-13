@@ -2,7 +2,7 @@
 
 An open-source GitHub dashboard and coding-agent chat for your repositories. MIT licensed.
 
-Repo Autopilot is one app on Cloudflare Workers with GitHub sign-in: a live dashboard and the agent chat in two tabs, for any repository where its GitHub App is installed. See [Repo Autopilot app on Cloudflare Workers](#repo-autopilot-app-on-cloudflare-workers).
+Repo Autopilot is one app on Cloudflare Workers with GitHub sign-in: a live dashboard and the agent chat in two tabs, for any repository where its GitHub App is installed. To run your own, follow the [Quick start](#quick-start); details are in [Repo Autopilot app on Cloudflare Workers](#repo-autopilot-app-on-cloudflare-workers).
 
 Automatic merge is **off**. The coding agent proposes changes as pull requests; it does not execute generated code or merge changes. A successful CI indicator is informational: it does not establish branch protection, resolved conversations, current review approval, or merge eligibility.
 
@@ -25,6 +25,30 @@ The flow:
 This loop has been run end to end with Claude Code as the coding agent. With Codex as the coding agent, check that its fixes are pushed to the pull request's own branch: a fix that opens a new pull request or stays in a Codex task does not move the loop on.
 
 The agent chat built into Repo Autopilot is experimental and is not part of this flow; see [Agent chat](#agent-chat).
+
+## Quick start
+
+You run your own copy of Repo Autopilot, in your own free Cloudflare account; nobody else holds your GitHub access. Setting it up takes about 15 minutes. You need a GitHub account and a free [Cloudflare](https://dash.cloudflare.com/sign-up) account.
+
+1. **Fork this repository** to your GitHub account. In the fork, open **Actions** and enable workflows (GitHub turns them off in new forks).
+2. **Find your Workers address.** In the Cloudflare dashboard, open **Workers & Pages**: your subdomain is shown there (`<your-subdomain>.workers.dev`). The app will live at `https://repo-autopilot-chat.<your-subdomain>.workers.dev`.
+3. **Create a GitHub App** at GitHub → Settings → Developer settings → GitHub Apps → **New GitHub App**. If your fork belongs to an organization, create the app under the organization instead (the organization's Settings → Developer settings → GitHub Apps), since an app can only be installed on the account that owns it:
+   - **GitHub App name:** any name not taken on GitHub, for example `Repo Autopilot <your-login>`.
+   - **Homepage URL:** `https://repo-autopilot-chat.<your-subdomain>.workers.dev`.
+   - **Callback URL:** `https://repo-autopilot-chat.<your-subdomain>.workers.dev/auth/callback`. Keep **Expire user authorization tokens** checked.
+   - **Webhook:** uncheck **Active** for now (you can [turn it on later](#live-updates-with-the-webhook)).
+   - **Repository permissions:** *Contents* and *Pull requests*: Read and write. *Actions*, *Checks*, *Commit statuses* and *Issues*: Read-only.
+   - **Where can this GitHub App be installed?** Keep **Only on this account**.
+   - Create the app, note its **Client ID**, and click **Generate a new client secret**.
+   - Open **Install App** and install it on the repositories you want to see, including your fork.
+4. **Create a Cloudflare API token:** My Profile → API Tokens → **Create Token** → template **Edit Cloudflare Workers**. Also copy your **Account ID** (on the Workers & Pages overview).
+5. **Add them to your fork** under *Settings → Secrets and variables → Actions*:
+   - Secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `AUTOPILOT_CHAT_CLIENT_SECRET` (the app's client secret).
+   - Variable: `AUTOPILOT_CHAT_CLIENT_ID` (the app's Client ID).
+6. **Deploy:** in **Actions**, run the **Agent chat Worker** workflow. When it is green, open `https://repo-autopilot-chat.<your-subdomain>.workers.dev` and sign in with GitHub.
+7. **Set up the review loop** described in [How it works best](#how-it-works-best): connect Codex code review to your repositories with reviews on every push, and use Claude Code or Codex as the coding agent.
+
+Only the owner of the fork can sign in. For an organization's fork, also set the repository variable `AUTOPILOT_TASK_USER` to the GitHub login allowed to sign in; see [Set up the app](#set-up-the-app). Updates: sync your fork with this repository on GitHub (**Sync fork**); the workflow deploys the new version when Worker files changed. The header shows which version is live. Something not working? [Open an issue](https://github.com/cryptomanxxx/repo-autopilot/issues).
 
 ## Screenshots
 
