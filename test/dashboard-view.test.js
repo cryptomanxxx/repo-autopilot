@@ -14,5 +14,5 @@ test('the dashboard offers to ask Codex to fix findings, or to review code it ha
   const offered=state=>CODEX_ACTIONS.filter(a=>a.show(state)).map(a=>a.kind);
   assert.deepEqual(offered('findings'),['fix']);
   for(const state of ['unknown','unverified']) assert.deepEqual(offered(state),['review']);
-  for(const state of ['clear','running','requested']) assert.deepEqual(offered(state),[],'nothing to ask while Codex is busy or done');
+  for(const state of ['clear','running','requested','incomplete']) assert.deepEqual(offered(state),[],'nothing to ask while Codex is busy or done, or its history is cut off');
 });

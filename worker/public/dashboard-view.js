@@ -16,7 +16,7 @@ export function mergeBlocker(pr) {
   return '';
 }
 // Codex can be asked, once per commit, to fix its findings on the current code, or to review code it
-// has not reviewed yet.
+// has not reviewed yet; an incomplete history offers neither, since it may hide either.
 export const CODEX_ACTIONS=[
   {kind:'fix',show:state=>state==='findings',label:'Ask Codex to fix',asked:'Codex asked to fix',title:'Comments "@codex address that feedback" on the pull request; Codex then pushes a fix.'},
   {kind:'review',show:state=>['unknown','unverified'].includes(state),label:'Ask Codex to review',asked:'Codex review requested',title:'Comments "@codex review" on the pull request.'},

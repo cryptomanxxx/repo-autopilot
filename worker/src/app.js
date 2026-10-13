@@ -410,7 +410,8 @@ export function pullDescription({request,explanation,changes,sha}) {
 // and head commit, and only while Codex's state for the head shown still calls for it.
 const CODEX_REQUESTS={
   fix:{comment:'@codex address that feedback',wanted:state=>state==='findings'?'':'Codex reports no findings on the current code any more.'},
-  review:{comment:'@codex review',wanted:state=>({findings:'Codex already reviewed the current code and has findings.',clear:'Codex already cleared the current code.',running:'Codex is reviewing the current code.',requested:'A Codex review was already requested.'})[state]||''},
+  // A review is asked for only when there is no review evidence at all for the current commit.
+  review:{comment:'@codex review',wanted:state=>({findings:'Codex already reviewed the current code and has findings.',clear:'Codex already cleared the current code.',running:'Codex is reviewing the current code.',requested:'A Codex review was already requested.',incomplete:'its Codex history is too long to check here; request a review on GitHub if needed.'})[state]||''},
 };
 async function askCodex(kind,body,{store,github,access}) {
   const request=CODEX_REQUESTS[kind];

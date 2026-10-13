@@ -6,7 +6,9 @@ const time = value => Date.parse(value) || 0;
 // Reactions belong to a PR, not a commit. Require separate current-head evidence.
 export function codexStatus(head, {reviews = [], comments = [], inline = [], reactions = [], truncated = false, headAt = null} = {}) {
   const result = (state, label, evidence = {}) => ({state, label, ...evidence});
-  if (truncated) return result('unknown', 'Codex: incomplete history');
+  // A history cut off at the page limit may hide a request, a running review or an outcome for this
+  // commit, so it is told apart from finding no review evidence at all.
+  if (truncated) return result('incomplete', 'Codex: incomplete history');
   const events = [];
   for (const r of reviews.filter(isBot)) {
     if (matchesHead(r.commit_id,head) && ['CHANGES_REQUESTED','COMMENTED'].includes(r.state) && /automated review suggestions|CHANGES_REQUESTED/i.test(`${r.body} ${r.state}`)) events.push({state:'findings',label:'Codex: findings',at:time(r.submitted_at),commit:r.commit_id,url:r.html_url});

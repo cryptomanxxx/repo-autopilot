@@ -494,6 +494,10 @@ test('Codex can be asked to review code it has not reviewed, once per head commi
     assert.equal(seen.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
   }
   assert.equal((await ask({sha:'c'.repeat(40)})).status,409,'only for the head commit that was shown');
+  const base=github({calls:[],codex:'none'}),cut=[];
+  const full=await ask({},async(url,options)=>{cut.push({url,method:options?.method||'GET'});return url.endsWith('/issues/7/reactions?per_page=100')?Response.json(Array.from({length:100},()=>({user:{login:'someone'},content:'+1'}))):base(url,options);});
+  assert.equal(full.status,409);assert.match((await full.json()).error,/history is too long/,'a cut-off history may hide a request, so no review is asked for');
+  assert.equal(cut.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
   const pushing=[],pushed=await ask({},github({calls:pushing,codex:'none',headAfter:2}));
   assert.equal(pushed.status,409);assert.match((await pushed.json()).error,/new commits/,'a push during the status check is caught before posting');
   assert.equal(pushing.some(c=>c.method==='POST'&&c.url.endsWith('/comments')),false);
