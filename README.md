@@ -56,7 +56,7 @@ Readiness distinguishes merged, closed, known blockers and unverified state. It 
 
 ## Activity flow and filters
 
-PR rows expand to a chronological activity flow: PR opened, explicit Codex review requests, observed running/completed reviews, subsequent commits, current-commit Codex thumbs-up and merge. This is observed history, not proof that an agent fixed a finding. Commit timestamps may precede their push, summaries are edited in place, and older/truncated events may be missing. No missing steps are invented.
+PR rows expand to the pull request's Codex findings: each with its priority, headline (linking to the comment), file and line, whether it is about the current code or an older commit, and whether its review thread is resolved on GitHub. Open findings are listed first, newest first; resolved ones are folded away. Below that is a chronological activity flow: PR opened, explicit Codex review requests, observed running/completed reviews, subsequent commits, current-commit Codex thumbs-up and merge. This is observed history, not proof that an agent fixed a finding. Commit timestamps may precede their push, summaries are edited in place, and older/truncated events may be missing. No missing steps are invented.
 
 Filter PRs by open, needs attention, merged or all, and workflows by CI, deployment or all. On wide screens, shared column headings reduce repetition.
 

@@ -32,14 +32,16 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
   async function mergeVerification(repo, number) {
     if (!token) return {complete:false};
     const [owner,name]=repo.split('/');
-    const query=`query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid mergeStateStatus reviewDecision reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}`;
+    const query=`query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid mergeStateStatus reviewDecision reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved comments(first:1){nodes{databaseId}}}}}}}`;
     try {
       const response=await fetchImpl('https://api.github.com/graphql',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json',...agent},body:JSON.stringify({query,variables:{owner,name,number}}),signal:AbortSignal.timeout(15000)});
       if(!response.ok) return {complete:false};
       const data=await response.json();
       const pr=data.data?.repository?.pullRequest;
       if(data.errors?.length || !pr?.reviewThreads?.nodes || pr.reviewThreads.pageInfo?.hasNextPage !== false) return {complete:false};
-      return {complete:true,headSha:pr.headRefOid,mergeStateStatus:pr.mergeStateStatus,reviewDecision:pr.reviewDecision,unresolvedThreads:pr.reviewThreads.nodes.filter(t=>!t.isResolved).length};
+      // Each thread's first comment identifies it, so a Codex finding can show whether it was resolved.
+      const resolvedById=new Map(pr.reviewThreads.nodes.filter(t=>Number.isInteger(t.comments?.nodes?.[0]?.databaseId)).map(t=>[t.comments.nodes[0].databaseId,t.isResolved]));
+      return {complete:true,headSha:pr.headRefOid,mergeStateStatus:pr.mergeStateStatus,reviewDecision:pr.reviewDecision,unresolvedThreads:pr.reviewThreads.nodes.filter(t=>!t.isResolved).length,resolvedById};
     } catch {return {complete:false};}
   }
   // Repository, recent pull requests (as listed) and workflow runs: three requests.
@@ -77,6 +79,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, userAgen
     // The listed state decides, so a pull request merged during loading is not verified twice.
     if(listed.state !== 'open') {verification=await mergeVerification(repo,pr.number);if(verification.headSha !== pr.head.sha) verification={complete:false};}
     details.unresolvedThreads=verification.complete ? verification.unresolvedThreads : null;
+    for(const item of details.progress.findings?.items||[]) item.resolved=verification.complete&&verification.resolvedById.has(item.id)?verification.resolvedById.get(item.id):null;
     const readiness=mergeReadiness(pr,{ci:details.ci,codex:details.codex,checksComplete:details.checksComplete,verification});
     return {warnings, changed, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, baseRef:pr.base?.ref, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details}};
   }

@@ -55,3 +55,19 @@ test('a snapshot without access to workflow runs still lists pull requests, with
   const browser=createGitHub({fetchImpl:async(url,options)=>{assert.equal(options.headers['User-Agent'],undefined,'browsers keep their own User-Agent');return {ok:true,json:async()=>url.includes('/actions/runs')?{workflow_runs:[]}:url.includes('/pulls?')?[]:{full_name:'a/b'}};}});
   await browser.snapshot('a/b');
 });
+
+test('Codex findings show whether their review thread was resolved on GitHub',async()=>{
+ const head='abcdef1234567890',pr={number:1,state:'open',head:{sha:head},mergeable:true};
+ const finding=(id,title)=>({id,user:{login:'chatgpt-codex-connector[bot]'},body:`**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub></sub>  ${title}**`,original_commit_id:head,created_at:'2026-10-10T12:00:00Z',html_url:`https://github.com/a/b/pull/1#discussion_r${id}`});
+ const fetchImpl=async url=>{
+  let data=[];
+  if(url.endsWith('/graphql')) data={data:{repository:{pullRequest:{headRefOid:head,mergeStateStatus:'BLOCKED',reviewDecision:null,reviewThreads:{pageInfo:{hasNextPage:false},nodes:[{isResolved:true,comments:{nodes:[{databaseId:11}]}},{isResolved:false,comments:{nodes:[{databaseId:12}]}}]}}}}};
+  else if(url.endsWith('/pulls/1')) data=pr;
+  else if(url.includes('/pulls/1/comments')) data=[finding(11,'Fixed already'),finding(12,'Still open'),finding(13,'Not a thread yet')];
+  else if(url.includes('/check-runs')) data={check_runs:[]};
+  else if(url.includes('/status?')) data={statuses:[]};
+  return {ok:true,json:async()=>data};
+ };
+ const {item}=await createGitHub({token:'test-token',fetchImpl}).pullDetails('a/b',pr);
+ assert.deepEqual(item.progress.findings.items.map(f=>[f.title,f.resolved]),[['Fixed already',true],['Still open',false],['Not a thread yet',null]]);
+});
