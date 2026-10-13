@@ -1,8 +1,8 @@
-import {renderSummary,renderPulls,renderWorkflows,applyFilters,el,link} from './dashboard-view.js';
+import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,link} from './dashboard-view.js';
 
 const $=id=>document.getElementById(id);
 const REFRESH_MS=180000,VERSION_MS=15000;
-let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,version=null;
+let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,version=null,merging=false,retried=null;
 const status=text=>{$('dashboard-status').replaceChildren(text);};
 const filters=()=>applyFilters({pullFilter:$('pr-filter'),workflowFilter:$('workflow-filter'),pulls:$('pulls'),workflows:$('workflows')});
 
@@ -24,9 +24,15 @@ function openPending() {
   const number=pendingPull;pendingPull=null;
   const row=$('pulls').querySelector(`details[data-number="${number}"]`);
   if(row) {
+    retried=null;
     $('pr-filter').value='all';filters();
     row.open=true;row.scrollIntoView({block:'start'});
+  } else if(retried!==number) {
+    // A pull request opened moments ago may be missing from earlier data: load fresh data once.
+    retried=number;pendingPull=number;
+    setTimeout(()=>loadDashboard({fresh:true}),0);
   } else {
+    retried=null;
     status(el('span',`PR #${number} is not among the ${data.pulls.length} most recently updated pull requests. `));
     $('dashboard-status').append(link('Open it on GitHub',`https://github.com/${data.repository}/pull/${number}`));
   }
@@ -48,7 +54,7 @@ export async function loadDashboard({fresh=false}={}) {
     version=seen>0?seen:version;
     data={...overview,pulls,warnings:[...overview.warnings,...pulls.flatMap(pr=>pr.warnings||[])]};
     renderSummary($('summary'),data);
-    renderPulls($('pulls'),data.pulls);
+    renderPulls($('pulls'),data.pulls,{onMerge:mergePull});
     renderWorkflows($('workflows'),data.workflows);
     filters();
     $('scope').textContent=[data.scope,...data.warnings].join(' ');
@@ -59,6 +65,28 @@ export async function loadDashboard({fresh=false}={}) {
     loading=false;lastLoad=Date.now();$('refresh').disabled=false;
     // The repository changed while loading: load the one now selected.
     if(target!==repository()) loadDashboard();
+  }
+}
+
+// Squash-merges after confirmation. The server checks everything again and merges only the head shown
+// here, and only if the unverified items it finds are the ones confirmed in this dialog.
+async function mergePull(pr,button) {
+  if(merging||mergeBlocker(pr)) return;
+  const confirmed=pr.readiness.state==='ready'?[]:pr.readiness.reasons;
+  const unverified=confirmed.length?`\n\nNot everything is verified:\n- ${confirmed.join('\n- ')}`:'';
+  if(!confirm(`Merge PR #${pr.number} "${pr.title}" into the default branch?${unverified}`)) return;
+  const target=repository();
+  merging=true;button.disabled=true;status(`Merging PR #${pr.number}…`);
+  let outcome;
+  try {
+    await api('/api/merge',{repository:target,number:pr.number,sha:pr.headSha,confirmed},60000);
+    outcome=`PR #${pr.number} merged.`;
+  } catch(error) {outcome=error.message;}
+  finally {
+    merging=false;
+    // The outcome stays visible after the reload, which clears the status line.
+    await loadDashboard();
+    if(target===repository()) status(outcome);
   }
 }
 
@@ -74,7 +102,7 @@ async function checkVersion() {
 
 // Called when another repository is selected: forget the old data and load the new one if visible.
 export function setRepository() {
-  data=null;version=null;pendingPull=null;
+  data=null;version=null;pendingPull=null;retried=null;
   for(const id of ['summary','pulls','workflows']) $(id).replaceChildren();
   $('scope').textContent='';$('data-age').textContent='';status('');
   loadDashboard();

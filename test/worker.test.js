@@ -226,7 +226,7 @@ function environment({time=()=>1000}={}) {
   return {env,store};
 }
 const files={'public/app.js':'const title="Old";\n','README.md':'# Repo\n'};
-function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity}) {
+function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFiles=files,writeStatus=201,executable=[],refStatus=201,pullStatus=201,openPulls=[],mergeStatus=200,mergeBase='main',mergeCi='success',detailStatus=200,retargetAfter=Infinity,compareStatus=200,defaultAfter=Infinity,codex='clear'}) {
   return async(url,options={})=>{
     const method=options.method||'GET';calls.push({url,method,options});
     const ok=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
@@ -247,6 +247,7 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
     if(method==='POST'&&path==='/pulls') return ok({html_url:'https://github.com/owner/repo/pull/7'},pullStatus);
     if(method==='GET'&&path.startsWith('/pulls?state=open&head=owner%3Aautopilot%2Fchat-')) return ok(openPulls);
     if(method==='GET'&&path==='/pulls/7') return ok({number:7,state:'open',merged:false,title:'New title',base:{ref:calls.filter(c=>c.url.endsWith('/pulls/7')).length>retargetAfter?'release':mergeBase},head:{sha:'b'.repeat(40),ref:'autopilot/chat-abc-2',repo:{full_name:'owner/repo'}}});
+    if(path==='/issues/7/comments?per_page=100'&&codex==='clear') return ok([{user:{login:'chatgpt-codex-connector[bot]'},body:"Codex Review: Didn't find any major issues.\n\n**Reviewed commit:** `bbbbbbbbbb`",created_at:'2026-10-13T12:00:00Z'}],detailStatus);
     if(/^\/(pulls\/7\/(reviews|comments|commits)|issues\/7\/(comments|reactions))\?per_page=100$/.test(path)) return ok([],detailStatus);
     if(path===`/commits/${'b'.repeat(40)}/status?per_page=100`) return ok({statuses:[]});
     if(path===`/commits/${'b'.repeat(40)}/check-runs?per_page=100`) return ok({total_count:1,check_runs:[{name:'test',status:'completed',conclusion:mergeCi}]});
@@ -388,11 +389,11 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.equal(calls.filter(c=>c.method==='POST').length,writes,'a second click reuses the existing pull request');
   assert.equal((await handle(post('/api/pull-request',auth,{conversation,message:thread.messages[0].id}),env,{fetchImpl})).status,404);
   assert.equal(store.acquireLock('model','t',1),true,'the model lock is released after answering');
-  // The chat sends the unverified items it showed and the owner confirmed; the server checks them again.
+  // The dashboard sends the unverified items it showed and the owner confirmed; the server checks them again.
   const shown=await (await handle(request('/api/dashboard/pulls/7',{cookie:auth.cookie}),env,{fetchImpl})).json();
-  assert.equal(shown.readiness.state,'unknown');
+  assert.equal(shown.readiness.state,'unknown');assert.equal(shown.codex.state,'clear');
   const confirmed=shown.readiness.reasons;
-  const merge=(extra={},fetch=fetchImpl)=>handle(post('/api/merge',auth,{conversation,message:reply.id,sha:'b'.repeat(40),confirmed,...extra}),env,{fetchImpl:fetch});
+  const merge=(extra={},fetch=fetchImpl)=>handle(post('/api/merge',auth,{repository:'owner/repo',number:7,sha:'b'.repeat(40),confirmed,...extra}),env,{fetchImpl:fetch});
   calls.length=0;
   store.setCache('pull:owner/repo:7:',{stale:true},60000);assert.ok(store.getCache('pull:owner/repo:7:'));
   assert.equal((await merge({sha:'c'.repeat(40)})).status,409,'a pull request with new commits is not merged');
@@ -402,6 +403,9 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.equal(calls.some(c=>c.method==='PUT'),false);
   const unreadable=await merge({},github({calls:[],detailStatus:503}));
   assert.equal(unreadable.status,409);assert.match((await unreadable.json()).error,/Could not check PR #7's current status/,'a status that cannot be read refuses the merge');
+  const uncleared=[],waiting=await merge({},github({calls:uncleared,codex:'none'}));
+  assert.equal(waiting.status,409);assert.match((await waiting.json()).error,/no Codex 👍 for its current code/,'merging needs a Codex 👍 on the current head');
+  assert.equal(uncleared.some(c=>c.method==='PUT'),false);
   const failing=[],red=await merge({},github({calls:failing,mergeCi:'failure'}));
   assert.equal(red.status,409);assert.match((await red.json()).error,/not ready to merge: CI failed/);
   assert.equal(failing.some(c=>c.method==='PUT'),false,'blockers are checked again on the server before merging');
@@ -425,7 +429,9 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.deepEqual(JSON.parse(calls.find(c=>c.method==='PUT').options.body),{sha:'b'.repeat(40),merge_method:'squash',commit_title:'New title (#7)'},'merged exactly at the head that was shown');
   assert.ok(calls.some(c=>c.method==='DELETE'&&c.url.endsWith('/git/refs/heads/autopilot/chat-abc-2')),'the chat branch is removed');
   assert.ok(store.getVersion('owner/repo')>0,'open dashboards reload');
-  assert.equal((await handle(post('/api/merge',auth,{conversation,message:thread.messages[0].id,sha:'b'.repeat(40)}),env,{fetchImpl})).status,404,'only answers with a pull request can be merged');
+  assert.equal((await merge({number:8})).status,404,'an unknown pull request is not found');
+  for(const extra of [{repository:undefined},{number:'7'},{number:0}]) assert.equal((await merge(extra)).status,400);
+
 });
 
 test('pull requests keep file modes and can be retried after a partial failure',async()=>{
