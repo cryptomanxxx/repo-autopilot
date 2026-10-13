@@ -167,7 +167,12 @@ test('pull request line counts come from the actual change',()=>{
   const big=Array.from({length:4000},(_,i)=>`${i}\n`).join(''),other=Array.from({length:4000},(_,i)=>`x${i}\n`).join('');
   let started=Date.now();assert.deepEqual(lineChanges(undefined,big),{added:4000,removed:0});
   assert.deepEqual(lineChanges(big,other),{added:4000,removed:4000},'a full rewrite stops at the step budget');
-  assert.ok(Date.now()-started<200,'large files are counted quickly');
+  const unique=Array.from({length:300},(_,i)=>`u${i}\n`);
+  assert.deepEqual(lineChanges(unique.join(''),[...unique].reverse().join('')),{added:299,removed:299},'past the step budget, moved lines still count');
+  const half=(line)=>line.repeat(2000);
+  const swapped=lineChanges(half('a\n')+half('b\n'),half('b\n')+half('a\n'));
+  assert.ok(swapped.added>=2000&&swapped.added===swapped.removed&&swapped.added<=4000,'repeated lines stay within the pair budget and never undercount');
+  assert.ok(Date.now()-started<300,'large files are counted quickly');
 });
 
 test('an edit block without a file path is matched to the one file its text belongs to',async()=>{

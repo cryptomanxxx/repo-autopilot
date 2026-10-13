@@ -399,30 +399,40 @@ export function lineChanges(before,after) {
   let endA=a.length,endB=b.length;while(endA>start&&endB>start&&a[endA-1]===b[endB-1]) {endA--;endB--;}
   const x=a.slice(start,endA),y=b.slice(start,endB),n=x.length,m=y.length;
   // Myers' O((N+M)·D) diff finds the fewest added plus removed lines D; it is fast when the change is
-  // small, whatever the file size. Past a fixed number of steps it falls back to comparing which lines occur how often.
+  // small, whatever the file size. Past a fixed number of steps it falls back to a bounded ordered match.
   // Only additions or only removals need no diff; the step budget keeps the Worker's CPU use small.
   if(!n||!m) return {added:m,removed:n};
   const limit=Math.min(n+m,4000),offset=limit+1,v=new Int32Array(2*limit+3);
   let steps=0;
   for(let d=0;d<=limit;d++) {
     for(let k=-d;k<=d;k+=2) {
-      if(++steps>100000) return multisetChanges(x,y);
+      if(++steps>100000) return orderedChanges(x,y);
       let i=k===-d||(k!==d&&v[offset+k-1]<v[offset+k+1])?v[offset+k+1]:v[offset+k-1]+1,j=i-k;
       while(i<n&&j<m&&x[i]===y[j]) {i++;j++;steps++;}
       v[offset+k]=i;
       if(i>=n&&j>=m) return {added:(d+m-n)/2,removed:(d-m+n)/2};
     }
   }
-  return multisetChanges(x,y);
+  return orderedChanges(x,y);
 }
-// Fallback for very large changes: lines present more often on one side; exact except for moved lines.
-function multisetChanges(x,y) {
-  const counts=new Map();
-  for(const line of x) counts.set(line,(counts.get(line)||0)+1);
-  for(const line of y) counts.set(line,(counts.get(line)||0)-1);
-  let added=0,removed=0;
-  for(const count of counts.values()) count>0?removed+=count:added-=count;
-  return {added,removed};
+// Fallback for very large changes: the longest run of lines kept in order among a bounded number of
+// matching line pairs (Hunt–Szymanski). Moved lines count as changed; past the pair budget the count
+// can only be too high, never too low.
+function orderedChanges(x,y) {
+  const positions=new Map();
+  for(let j=y.length-1;j>=0;j--) {const list=positions.get(y[j]);list?list.push(j):positions.set(y[j],[j]);}
+  // tails[k] is the smallest position in y that ends a kept run of k+1 lines.
+  const tails=[];let pairs=0;
+  for(const line of x) {
+    for(const j of positions.get(line)||[]) {
+      if(++pairs>200000) break;
+      let low=0,high=tails.length;
+      while(low<high) {const mid=(low+high)>>1;tails[mid]<j?low=mid+1:high=mid;}
+      tails[low]=j;
+    }
+    if(pairs>200000) break;
+  }
+  return {added:y.length-tails.length,removed:x.length-tails.length};
 }
 
 // The pull request description: what the owner asked for, the agent's explanation and what changes.
