@@ -388,19 +388,32 @@ function progressStream(work) {
   return new Response(readable,{status:200,headers:{'Content-Type':'application/x-ndjson; charset=utf-8','Cache-Control':'no-store'}});
 }
 
-// The pull request description: what the owner asked for, the agent's explanation and what changes.
-export function pullDescription({request,explanation,edits,sha}) {
-  const lines=text=>text?text.split('\n').length:0,files=new Map();
-  for(const edit of edits) {
-    const counts=files.get(edit.path)||{added:0,removed:0};
-    counts.added+=lines(edit.replace);counts.removed+=lines(edit.search);files.set(edit.path,counts);
+// Lines added and removed between two versions of a file: common lines at both ends are skipped and
+// the rest is compared line by line (a longest-common-subsequence diff, bounded for very large edits).
+export function lineChanges(before,after) {
+  const a=before===undefined?[]:before.replace(/\r\n/g,'\n').split('\n'),b=after.replace(/\r\n/g,'\n').split('\n');
+  let start=0;while(start<a.length&&start<b.length&&a[start]===b[start]) start++;
+  let endA=a.length,endB=b.length;while(endA>start&&endB>start&&a[endA-1]===b[endB-1]) {endA--;endB--;}
+  const x=a.slice(start,endA),y=b.slice(start,endB);
+  if(x.length*y.length>4000000) return {added:y.length,removed:x.length};
+  let previous=new Array(y.length+1).fill(0);
+  for(let i=1;i<=x.length;i++) {
+    const row=new Array(y.length+1).fill(0);
+    for(let j=1;j<=y.length;j++) row[j]=x[i-1]===y[j-1]?previous[j-1]+1:Math.max(previous[j],row[j-1]);
+    previous=row;
   }
-  const plural=(n,word)=>`${n} line${n===1?'':'s'} ${word}`;
+  const common=previous[y.length];
+  return {added:y.length-common,removed:x.length-common};
+}
+
+// The pull request description: what the owner asked for, the agent's explanation and what changes.
+export function pullDescription({request,explanation,changes,sha}) {
   const quote=text=>text.trim().slice(0,1500).split('\n').map(line=>`> ${line}`).join('\n');
+  const file=({path,added,removed,created})=>`- \`${path}\`${created?' (new file)':''}: +${added} −${removed} line${added+removed===1?'':'s'}`;
   return [
     request.trim()?`## Request\n\n${quote(request)}`:'',
     explanation.trim()?`## What the agent changed\n\n${explanation.trim().slice(0,3000)}`:'',
-    `## Files\n\n${[...files].map(([path,{added,removed}])=>`- \`${path}\`: ${removed?`${plural(removed,'replaced')}, `:''}${plural(added,removed?'now':'added')}`).join('\n')}`,
+    `## Files\n\n${changes.map(file).join('\n')}`,
     `---\nCreated from the Repo Autopilot chat on ${sha.slice(0,10)}. Agent-generated: review the diff and CI before merging.`,
   ].filter(Boolean).join('\n\n');
 }
@@ -457,13 +470,13 @@ async function pullRequest(body,{store,github,config,access}) {
     const repository=await resolveRepository(info?.repository||config.repository,access),policy=editPolicy(repository,config.repository);
     const client=github(repository),head=await client.head(),{files:archive,executable}=await client.archive(head.sha);
     const edited=new Set(message.proposal.edits.map(e=>e.path));
-    let files;
-    try {files=applyEdits(message.proposal.edits,textFiles(new Map([...archive].filter(([path])=>edited.has(path)))),[...archive.keys()],policy.allowed);}
+    let files;const originals=textFiles(new Map([...archive].filter(([path])=>edited.has(path))));
+    try {files=applyEdits(message.proposal.edits,originals,[...archive.keys()],policy.allowed);}
     catch(error) {throw new UserError(409,`The change no longer applies to the current code: ${error.message} Ask the agent to redo it.`);}
     const title=message.proposal.title||info?.title||'Change from the agent chat';
     const conversation=await store.getConversation(body.conversation);
     const request=conversation?.messages.filter(m=>m.role==='user'&&m.id<message.id).at(-1)?.content||'';
-    const description=pullDescription({request,explanation:displayText(message.content),edits:message.proposal.edits,sha:head.sha});
+    const description=pullDescription({request,explanation:displayText(message.content),changes:files.map(f=>({path:f.path,created:originals[f.path]===undefined,...lineChanges(originals[f.path],f.content)})),sha:head.sha});
     let url;
     try {url=await client.createPullRequest({base:head.branch,parent:head.sha,files,executable,branch:`autopilot/chat-${body.conversation.slice(0,12)}-${body.message}`,title,body:description});}
     catch(error) {

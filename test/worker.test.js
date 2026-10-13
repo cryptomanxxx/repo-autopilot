@@ -12,7 +12,7 @@ import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFi
 import {createHmac} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
-import {handle,validateImage,webhookTargets} from '../worker/src/app.js';
+import {handle,validateImage,webhookTargets,lineChanges} from '../worker/src/app.js';
 
 // Adapter giving node:sqlite the Durable Object `sql.exec(query, ...bindings).toArray()` shape.
 const sqlite=()=>{const db=new DatabaseSync(':memory:');return {exec:(query,...bindings)=>{const rows=db.prepare(query).all(...bindings);return {toArray:()=>rows};}};};
@@ -149,6 +149,14 @@ test('messages carry files, history and the current image',()=>{
   assert.match(messages[1].content,/no longer available/);
   assert.equal(messages[2].role,'assistant');
   assert.deepEqual(messages[3].content[1],{type:'image_url',image_url:{url:'data:image/jpeg;base64,AAAA'}});
+});
+
+test('pull request line counts come from the actual change',()=>{
+  assert.deepEqual(lineChanges('a\nb\nc\n','a\nB\nc\n'),{added:1,removed:1},'context lines are not counted');
+  assert.deepEqual(lineChanges('a\nb\n','a\nb\nc\n'),{added:1,removed:0});
+  assert.deepEqual(lineChanges('a\r\nb\r\nc\r\n','a\nc\n'),{added:0,removed:1},'line endings do not count as changes');
+  assert.deepEqual(lineChanges(undefined,'x\ny'),{added:2,removed:0},'a new file');
+  assert.deepEqual(lineChanges('1\n2\n3\n4\n','1\n3\n2\n4\n'),{added:1,removed:1});
 });
 
 test('an edit block without a file path is matched to the one file its text belongs to',async()=>{
@@ -377,7 +385,7 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.deepEqual(tree,{base_tree:'tree0',tree:[{path:'public/app.js',mode:'100644',type:'blob',content:'const title="New";\n'}]});
   const pull=JSON.parse(calls.find(c=>c.url.endsWith('/pulls')).options.body);
   assert.equal(pull.title,'New title');assert.equal(pull.base,'main');assert.match(pull.head,/^autopilot\/chat-/);assert.equal(pull.body.includes('<<<<<<<'),false);
-  assert.match(pull.body,/^## Request\n\n> Change the title in public\/app\.js\n\n## What the agent changed\n\nRenaming the title\.\n\n## Files\n\n- `public\/app\.js`: 1 line replaced, 1 line now\n\n---\nCreated from the Repo Autopilot chat/,'the description is written from the request, the explanation and the edits');
+  assert.match(pull.body,/^## Request\n\n> Change the title in public\/app\.js\n\n## What the agent changed\n\nRenaming the title\.\n\n## Files\n\n- `public\/app\.js`: \+1 −1 lines\n\n---\nCreated from the Repo Autopilot chat/,'the description is written from the request, the explanation and the edits');
   const writes=calls.filter(c=>c.method==='POST').length;
   assert.deepEqual(await (await handle(post('/api/pull-request',auth,{conversation,message:reply.id}),env,{fetchImpl})).json(),{url:'https://github.com/owner/repo/pull/7'});
   assert.equal(calls.filter(c=>c.method==='POST').length,writes,'a second click reuses the existing pull request');
