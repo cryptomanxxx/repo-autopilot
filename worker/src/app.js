@@ -476,6 +476,12 @@ async function mergePullRequest(body,{store,github,config,access}) {
     const {default_branch:defaultBranch}=await client.api('');
     if(pull.base?.ref!==defaultBranch) throw new UserError(409,`PR #${number} now targets ${pull.base?.ref||'another branch'} instead of the default branch ${defaultBranch}. Merge it on GitHub if that is intended.`);
     if(body.sha!==pull.head?.sha) throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again before merging.`);
+    // Blockers can appear without a new commit (failed CI, Codex findings, requested changes), so the
+    // readiness the chat shows is computed again here and enforced, not only in the browser.
+    const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
+    const {item}=await status.pullDetails(repository,pull);
+    if(item.headSha!==body.sha) throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again before merging.`);
+    if(item.readiness.state==='not_ready') throw new UserError(409,`PR #${number} is not ready to merge: ${item.readiness.reasons.join('; ')}.`);
     try {await client.api(`pulls/${number}/merge`,{method:'PUT',body:{sha:body.sha,merge_method:'squash',commit_title:`${pull.title} (#${number})`}});}
     catch(error) {
       if(!(error instanceof GitHubError)) throw error;
