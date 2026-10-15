@@ -39,7 +39,8 @@ export function codexStatus(head, {reviews = [], comments = [], inline = [], rea
   const since=time(headAt);
   const request=comments.filter(c=>!isBot(c) && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '') && time(c.created_at)>=since).reduce((at,c)=>Math.max(at,time(c.created_at)),0);
   if(latest && request>latest.at) return result('requested','Codex: review requested (commit unverified)');
-  if(latest) {const {at,...event}=latest;return event;}
+  // A clearance keeps its time, so the dashboard counts it only for findings reported before it.
+  if(latest) {const {at,...event}=latest;return event.state === 'clear' && at ? {...event,clearedAt:new Date(at).toISOString()} : event;}
   if(request) return result('requested','Codex: review requested (commit unverified)');
   if(reactions.some(r=>isBot(r) && ['+1','eyes'].includes(r.content)) || [...reviews,...comments,...inline].some(isBot)) return result('unverified','Codex: activity found; current commit unverified');
   return result('unknown','Codex: no review evidence found');
