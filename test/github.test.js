@@ -61,13 +61,13 @@ test('Codex findings show whether their review thread was resolved on GitHub',as
  const finding=(id,title)=>({id,user:{login:'chatgpt-codex-connector[bot]'},body:`**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub></sub>  ${title}**`,original_commit_id:head,created_at:'2026-10-10T12:00:00Z',html_url:`https://github.com/a/b/pull/1#discussion_r${id}`});
  const fetchImpl=async url=>{
   let data=[];
-  if(url.endsWith('/graphql')) data={data:{repository:{pullRequest:{headRefOid:head,mergeStateStatus:'BLOCKED',reviewDecision:null,reviewThreads:{pageInfo:{hasNextPage:false},nodes:[{isResolved:true,comments:{nodes:[{fullDatabaseId:'11'}]}},{isResolved:false,comments:{nodes:[{fullDatabaseId:'12'}]}}]}}}}};
+  if(url.endsWith('/graphql')) data={data:{repository:{pullRequest:{headRefOid:head,mergeStateStatus:'BLOCKED',reviewDecision:null,reviewThreads:{pageInfo:{hasNextPage:false},nodes:[{isResolved:true,isOutdated:true,comments:{nodes:[{fullDatabaseId:'11'}]}},{isResolved:false,isOutdated:false,comments:{nodes:[{fullDatabaseId:'12'}]}},{isResolved:false,isOutdated:true,comments:{nodes:[{fullDatabaseId:'14'}]}}]}}}}};
   else if(url.endsWith('/pulls/1')) data=pr;
-  else if(url.includes('/pulls/1/comments')) data=[finding(11,'Fixed already'),finding(12,'Still open'),finding(13,'Not a thread yet')];
+  else if(url.includes('/pulls/1/comments')) data=[finding(11,'Fixed already'),finding(12,'Still open'),finding(13,'Not a thread yet'),finding(14,'Code changed since')];
   else if(url.includes('/check-runs')) data={check_runs:[]};
   else if(url.includes('/status?')) data={statuses:[]};
   return {ok:true,json:async()=>data};
  };
  const {item}=await createGitHub({token:'test-token',fetchImpl}).pullDetails('a/b',pr);
- assert.deepEqual(item.progress.findings.items.map(f=>[f.title,f.resolved]),[['Fixed already',true],['Still open',false],['Not a thread yet',null]]);
+ assert.deepEqual(item.progress.findings.items.map(f=>[f.title,f.resolved,f.outdated]),[['Fixed already',true,true],['Still open',false,false],['Not a thread yet',null,null],['Code changed since',false,true]]);
 });
