@@ -16,3 +16,8 @@ test('a review request made before the current head was committed does not count
   assert.equal(codexStatus(head,{comments:[ask],headAt:'2026-10-10T12:01:00Z'}).state,'requested','asked after this commit');
   assert.equal(codexStatus(head,{comments:[ask]}).state,'requested','without the commit time every request counts, as before');
 });
+
+test('a Codex clearance carries the time it was given',()=>{
+  assert.equal(codexStatus(head,{comments:[summary()],reactions:[thumb]}).clearedAt,new Date(thumb.created_at).toISOString());
+  assert.equal(codexStatus(head,{reactions:[thumb]}).clearedAt,undefined);
+});

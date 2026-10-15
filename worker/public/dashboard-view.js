@@ -39,17 +39,19 @@ function mergeBar(pr,{onMerge,onCodex,askedCodex}) {
 }
 
 // Where a Codex finding stands. It is fixed once its review thread is resolved on GitHub, or once Codex has
-// given the current code a 👍 (it then found nothing left). Changed code is not proof of a fix: such a
-// finding waits for Codex to review the change.
+// given the current code a 👍 after the finding was reported (it then found nothing left). Reviews can
+// overlap, so a finding reported after the 👍 is not covered by it. Changed code is not proof of a fix:
+// such a finding waits for Codex to review the change.
 export const FINDING_STATES={
   fixed:{icon:'✅',label:'fixed',order:3},
   changed:{icon:'🔄',label:'code changed, waiting for Codex',order:1},
   open:{icon:'⚠',label:'open',order:0},
   unverified:{icon:'❔',label:'status unverified',order:2},
 };
-export function findingStatus(f,{cleared=false}={}) {
+export function findingStatus(f,{clearedAt=null}={}) {
   if(f.resolved===true) return {state:'fixed',why:'resolved on GitHub'};
-  if(cleared) return {state:'fixed',why:'Codex 👍 on the current code'};
+  const cleared=Date.parse(clearedAt),reported=Date.parse(f.at);
+  if(cleared&&reported&&reported<=cleared) return {state:'fixed',why:'Codex 👍 on the current code'};
   if(f.outdated===true) return {state:'changed'};
   return {state:f.resolved===false?'open':'unverified'};
 }
@@ -63,8 +65,8 @@ function findingItem(f,status) {
 }
 // Codex's findings on the pull request: open ones first, fixed ones last with a green check; newest first
 // within each group.
-export function findingsSection(findings,{cleared=false}={}) {
-  const items=(findings?.items||[]).map(f=>({f,status:findingStatus(f,{cleared})}));
+export function findingsSection(findings,{clearedAt=null}={}) {
+  const items=(findings?.items||[]).map(f=>({f,status:findingStatus(f,{clearedAt})}));
   if(!items.length) return null;
   items.sort((a,b)=>FINDING_STATES[a.status.state].order-FINDING_STATES[b.status.state].order||Date.parse(b.f.at)-Date.parse(a.f.at));
   const section=el('div','','findings');
@@ -87,7 +89,7 @@ export function renderPull(pr,{open=false,onMerge,onCodex,askedCodex=()=>false}=
   node.append(summary);
   const detail=el('div','','pr-detail');
   if(pr.state==='open'&&!pr.detailError&&onMerge) detail.append(mergeBar(pr,{onMerge,onCodex,askedCodex}));
-  const findings=findingsSection(progress.findings,{cleared:pr.codex?.state==='clear'});
+  const findings=findingsSection(progress.findings,{clearedAt:pr.codex?.state==='clear'?pr.codex.clearedAt:null});
   if(findings) detail.append(findings);
   const flow=el('ol','','review-flow');
   for(const event of progress.events||[]) {const step=el('li','',`flow-${event.kind}`);step.append(el('strong',event.label),el('span',`${new Date(event.at).toLocaleString()}${event.commit?' · '+event.commit.slice(0,10):''}`,'muted'));flow.append(step);}

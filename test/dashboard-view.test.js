@@ -17,12 +17,16 @@ test('the dashboard offers to ask Codex to review code it has not reviewed, and 
   for(const state of ['clear','running','requested','incomplete']) assert.deepEqual(offered(state),[],'nothing to ask while Codex is busy or done, or its history is cut off');
 });
 
-test('a Codex finding is fixed when its thread is resolved or Codex cleared the current code, never just because code changed',()=>{
-  const state=(f,cleared)=>findingStatus(f,{cleared}).state;
+test('a Codex finding is fixed when its thread is resolved or a later Codex 👍 cleared the code, never just because code changed',()=>{
+  const at='2026-10-15T01:00:00Z',later='2026-10-15T02:00:00Z',earlier='2026-10-15T00:00:00Z';
+  const state=(f,clearedAt)=>findingStatus({at,...f},{clearedAt}).state;
   assert.equal(state({resolved:true,outdated:false}),'fixed');
   assert.equal(findingStatus({resolved:true}).why,'resolved on GitHub');
-  assert.equal(state({resolved:false,outdated:false},true),'fixed','a Codex 👍 on the current code clears earlier findings');
-  assert.match(findingStatus({resolved:null},{cleared:true}).why,/Codex 👍/);
+  assert.equal(state({resolved:false,outdated:false},later),'fixed','a Codex 👍 after the finding clears it');
+  assert.match(findingStatus({at,resolved:null},{clearedAt:later}).why,/Codex 👍/);
+  assert.equal(state({resolved:false,outdated:false},earlier),'open','a 👍 from before the finding was reported does not cover it');
+  assert.equal(state({resolved:false,outdated:true},earlier),'changed');
+  assert.equal(findingStatus({resolved:false},{clearedAt:later}).state,'open','a finding without a time is not cleared');
   assert.equal(state({resolved:false,outdated:true}),'changed','changed code waits for Codex');
   assert.equal(state({resolved:false,outdated:false}),'open');
   assert.equal(state({resolved:null,outdated:null}),'unverified');
