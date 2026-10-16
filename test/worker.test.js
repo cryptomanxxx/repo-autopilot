@@ -892,9 +892,10 @@ test('a chat app connects through OAuth, reads through MCP, keeps working after 
   const refreshed=await (await form('/oauth/token',{grant_type:'refresh_token',refresh_token:tokens.refresh_token,client_id})).json();
   assert.equal((await (await form('/oauth/token',{grant_type:'refresh_token',refresh_token:tokens.refresh_token,client_id})).json()).error,'invalid_grant','refresh tokens rotate');
   store.rows("DELETE FROM cache WHERE key LIKE 'repos:%'");
-  const later=await (await rpc('tools/call',{name:'list_repositories',arguments:{}},refreshed.access_token)).json();
-  assert.match(later.result.content[0].text,/owner\/repo/);
-  assert.equal(renewals,1);
+  // Two calls at once renew GitHub's token only once; both get an answer and the connection stays.
+  const both=await Promise.all([1,2].map(async()=>(await rpc('tools/call',{name:'list_repositories',arguments:{}},refreshed.access_token)).json()));
+  for(const later of both) assert.match(later.result.content[0].text,/owner\/repo/);
+  assert.equal(renewals,1,'GitHub is asked to renew once');
   assert.equal(calls.filter(c=>c.url.includes('/user/installations')).at(-1).options.headers.Authorization,'Bearer ghu_renewed1');
 
   // The owner sees the app in the dashboard and revokes it.

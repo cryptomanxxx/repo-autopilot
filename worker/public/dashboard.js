@@ -70,10 +70,12 @@ export async function loadDashboard({fresh=false}={}) {
     // A merge outcome stays until a load started after the merge shows its result.
     status(notice);if(load>=noticeFrom) notice='';
     updateAge();openPending();
-    loadConnections();
   } catch(error) {
     if(target===repository()) status(data?`Refresh failed; showing earlier data. ${error.message}`:error.message);
   } finally {
+    // Connected apps do not depend on GitHub, so they load even when the dashboard data fails, and the
+    // owner can always revoke one.
+    loadConnections();
     loading=false;lastLoad=Date.now();$('refresh').disabled=false;
     // The repository changed while loading, or a merge finished during it: load again.
     if(target!==repository()||reloadAfter) {reloadAfter=false;lastLoad=0;loadDashboard();}

@@ -180,35 +180,50 @@ async function token(request,{store,now}) {
 }
 
 // The GitHub token of a connected app, renewed with GitHub when it is about to expire. Returns null when
-// GitHub no longer accepts the grant, which is then removed so the app asks the owner to connect again.
+// GitHub no longer accepts the grant, which is then removed so the app asks the owner to connect again,
+// and undefined when it cannot be renewed right now.
+//
+// GitHub invalidates a refresh token once it is used, so renewals of one grant are serialized with a lock:
+// a request that finds another one renewing waits for it and uses the tokens it stored.
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 export async function githubToken(grant,{store,env,fetchImpl,now}) {
-  for(let attempt=0;attempt<2;attempt++) {
-    const github=await unseal(env.GITHUB_CLIENT_SECRET,GRANT,grant.github);
-    if(!github?.access) {await store.deleteGrant(grant.id);return null;}
-    if(!github.accessExpires||github.accessExpires-60000>now()) return github.access;
-    if(!github.refresh||(github.refreshExpires&&github.refreshExpires<=now())) {await store.deleteGrant(grant.id);return null;}
-    let renewed={};
-    try {
-      const response=await fetchImpl('https://github.com/login/oauth/access_token',{method:'POST',redirect:'manual',headers:{Accept:'application/json','Content-Type':'application/json','User-Agent':'repo-autopilot-chat'},body:JSON.stringify({client_id:env.GITHUB_CLIENT_ID,client_secret:env.GITHUB_CLIENT_SECRET,grant_type:'refresh_token',refresh_token:github.refresh}),signal:AbortSignal.timeout(20000)});
-      renewed=response.ok?await response.json().catch(()=>({})):{};
-    } catch {return undefined;}
-    const at=now();
-    if(renewed.access_token) {
-      const next={access:renewed.access_token,accessExpires:Number.isFinite(renewed.expires_in)&&renewed.expires_in>0?at+renewed.expires_in*1000:null,refresh:renewed.refresh_token||github.refresh,refreshExpires:Number.isFinite(renewed.refresh_token_expires_in)&&renewed.refresh_token_expires_in>0?at+renewed.refresh_token_expires_in*1000:github.refreshExpires};
-      const sealed=await seal(env.GITHUB_CLIENT_SECRET,GRANT,next);
-      if(await store.replaceGrantGithub(grant.id,grant.github,sealed,next.refreshExpires||grant.expires)) return next.access;
-    }
-    // Another request may have renewed the tokens first, which makes this refresh token invalid: read the
-    // grant again once. Otherwise GitHub refused the grant.
+  const open=async value=>unseal(env.GITHUB_CLIENT_SECRET,GRANT,value);
+  const usable=github=>github?.access&&(!github.accessExpires||github.accessExpires-60000>now());
+  let github=await open(grant.github);
+  if(!github?.access) {await store.deleteGrant(grant.id);return null;}
+  if(usable(github)) return github.access;
+  const lock=`grant-renewal:${grant.id}`,owner=randomHex(8);
+  for(let attempt=0;!await store.acquireLock(lock,owner,30000);attempt++) {
+    if(attempt>=40) return undefined;
+    await sleep(250);
     const latest=await store.getGrant(grant.id);
     if(!latest) return null;
-    if(latest.github===grant.github) {
-      if(renewed.error) {await store.deleteGrant(grant.id);return null;}
+    if(latest.github!==grant.github) {const renewed=await open(latest.github);if(usable(renewed)) return renewed.access;}
+  }
+  try {
+    // Read the grant again under the lock: another request may have renewed it meanwhile.
+    const latest=await store.getGrant(grant.id);
+    if(!latest) return null;
+    github=await open(latest.github);
+    if(!github?.access) {await store.deleteGrant(grant.id);return null;}
+    if(usable(github)) return github.access;
+    if(!github.refresh||(github.refreshExpires&&github.refreshExpires<=now())) {await store.deleteGrant(grant.id);return null;}
+    let renewed;
+    try {
+      const response=await fetchImpl('https://github.com/login/oauth/access_token',{method:'POST',redirect:'manual',headers:{Accept:'application/json','Content-Type':'application/json','User-Agent':'repo-autopilot-chat'},body:JSON.stringify({client_id:env.GITHUB_CLIENT_ID,client_secret:env.GITHUB_CLIENT_SECRET,grant_type:'refresh_token',refresh_token:github.refresh}),signal:AbortSignal.timeout(20000)});
+      if(!response.ok) return undefined;
+      renewed=await response.json();
+    } catch {return undefined;}
+    if(!renewed?.access_token) {
+      // GitHub answers an unusable refresh token with an error: the grant cannot be renewed any more.
+      if(renewed?.error) {await store.deleteGrant(grant.id);return null;}
       return undefined;
     }
-    grant=latest;
-  }
-  return undefined;
+    const at=now(),seconds=value=>Number.isFinite(value)&&value>0?value*1000:null;
+    const next={access:renewed.access_token,accessExpires:seconds(renewed.expires_in)&&at+seconds(renewed.expires_in),refresh:renewed.refresh_token||github.refresh,refreshExpires:seconds(renewed.refresh_token_expires_in)?at+seconds(renewed.refresh_token_expires_in):github.refreshExpires};
+    if(!await store.replaceGrantGithub(grant.id,latest.github,await seal(env.GITHUB_CLIENT_SECRET,GRANT,next),next.refreshExpires||latest.expires)) return undefined;
+    return next.access;
+  } finally {await store.releaseLock(lock,owner);}
 }
 
 const rpcResult=(id,result)=>json(200,{jsonrpc:'2.0',id,result});
