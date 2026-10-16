@@ -8,6 +8,13 @@ import {CARD_TOOL_META} from './card.js';
 // or are marked as not loaded, so a call stays within the Workers subrequest limit.
 export const FRESH_DETAILS=2;
 const READ_ONLY={readOnlyHint:true,openWorldHint:false};
+// Asking again with fresh reads GitHub instead of the cache, as the card's Refresh does. CI changes, for
+// example, do not change a pull request's update time, which keys the cache.
+const FRESH={type:'boolean',description:'Read GitHub again instead of the cached data. Only when the user asks for an update.'};
+const freshOf=args=>{
+  if(args.fresh!==undefined&&typeof args.fresh!=='boolean') throw Object.assign(new Error('fresh must be true or false.'),{expose:true});
+  return args.fresh===true;
+};
 const REPOSITORY={type:'string',description:'Repository as owner/name, for example "octocat/hello-world". Defaults to the Repo Autopilot repository itself.'};
 
 // "unknown" CI after a failed read of the checks means they could not be read, not that there are none.
@@ -87,20 +94,23 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
   },{
     name:'list_pull_requests',title:'List pull requests',
     description:`Lists the ${pullLimit} most recently updated pull requests of a repository, as the Repo Autopilot dashboard shows them: merge readiness, CI, Codex review status and Codex findings. Older pull requests are not listed; use pull_request_status with a number for any pull request, and for the full details of one.`,
-    inputSchema:{type:'object',properties:{repository:REPOSITORY},additionalProperties:false},
+    inputSchema:{type:'object',properties:{repository:REPOSITORY,fresh:FRESH},additionalProperties:false},
     annotations:READ_ONLY,_meta:CARD_TOOL_META,
     run:async(args,{token,grantId})=>{
+      const reload=freshOf(args);
       const repository=await repositoryOf(args,token,grantId);
-      const overview=await dashboardData({store,token,fetchImpl,repository});
+      const overview=await dashboardData({store,token,fetchImpl,repository,fresh:reload});
       let fresh=0;
       const pulls=[];
       for(const pr of overview.pulls) {
         // One pull request that cannot be read does not take the whole list down; it is listed as not loaded.
         let item=null,error=null;
         try {
-          item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,cachedOnly:true});
-          // Open pull requests matter most, so they are loaded from GitHub first, within the budget.
-          if(!item&&pr.state==='open'&&fresh<FRESH_DETAILS) {fresh++;item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt});}
+          // Open pull requests matter most, so they are loaded from GitHub first, within the budget; a fresh
+          // list reloads them, within the same budget, and takes the rest from the cache.
+          const again=reload&&pr.state==='open'&&fresh<FRESH_DETAILS;
+          item=again?null:await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,cachedOnly:true});
+          if(!item&&pr.state==='open'&&fresh<FRESH_DETAILS) {fresh++;item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,fresh:again});}
         } catch(failure) {
           // Only owner-facing GitHub failures are isolated; a 401 or an internal error reaches the handler.
           if(failure?.status===401||!(failure instanceof PublicError||failure?.expose)) throw failure;
@@ -126,16 +136,17 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
   },{
     name:'pull_request_status',title:'Pull request status',
     description:'Shows one pull request as the Repo Autopilot dashboard does: whether it is ready to merge and why not, CI, Codex review status, every Codex finding with its state (open, waiting for Codex, fixed) and recent activity.',
-    inputSchema:{type:'object',properties:{repository:REPOSITORY,number:{type:'integer',minimum:1,description:'Pull request number.'}},required:['number'],additionalProperties:false},
+    inputSchema:{type:'object',properties:{repository:REPOSITORY,number:{type:'integer',minimum:1,description:'Pull request number.'},fresh:FRESH},required:['number'],additionalProperties:false},
     annotations:READ_ONLY,_meta:CARD_TOOL_META,
     run:async(args,{token,grantId})=>{
       if(!Number.isSafeInteger(args.number)||args.number<1) throw Object.assign(new Error('number must be a pull request number.'),{expose:true});
+      const reload=freshOf(args);
       const repository=await repositoryOf(args,token,grantId);
       // The overview gives the pull request's last update, which keys the dashboard's cache.
-      const overview=await dashboardData({store,token,fetchImpl,repository});
+      const overview=await dashboardData({store,token,fetchImpl,repository,fresh:reload});
       const listed=overview.pulls.find(p=>p.number===args.number);
       let item;
-      try {item=await dashboardData({store,token,fetchImpl,repository,number:args.number,updated:listed?.updatedAt||''});}
+      try {item=await dashboardData({store,token,fetchImpl,repository,number:args.number,updated:listed?.updatedAt||'',fresh:reload});}
       catch(error) {if(error?.status===404) throw Object.assign(new Error(`${repository} has no pull request #${args.number}.`),{expose:true});throw error;}
       const summary=pullSummary(item);
       return {content:[{type:'text',text:statusText(repository,summary)}],structuredContent:{repository,...summary}};

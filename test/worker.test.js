@@ -985,6 +985,10 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.deepEqual(tools.map(t=>t._meta?.ui?.resourceUri??null),[null,card,card]);
   assert.equal(tools[1]._meta['ui/resourceUri'],card,'older hosts read the flat key');
   assert.deepEqual((await rpc('initialize',{protocolVersion:'2025-06-18'})).result.capabilities.resources,{listChanged:false});
+  // MCP Apps is answered in kind: only a chat app that declares the extension hears it back.
+  assert.equal((await rpc('initialize',{protocolVersion:'2025-06-18'})).result.capabilities.extensions,undefined);
+  const declared=await rpc('initialize',{protocolVersion:'2025-06-18',capabilities:{extensions:{'io.modelcontextprotocol/ui':{mimeTypes:['text/html;profile=mcp-app']}}}});
+  assert.deepEqual(declared.result.capabilities.extensions,{'io.modelcontextprotocol/ui':{mimeTypes:['text/html;profile=mcp-app']}});
   const {result:{resources}}=await rpc('resources/list');
   assert.deepEqual(resources.map(r=>[r.uri,r.mimeType]),[[card,'text/html;profile=mcp-app']]);
   const {result:{contents:[content]}}=await rpc('resources/read',{uri:card});
@@ -1010,6 +1014,11 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   calls.length=0;
   const status=await tool('pull_request_status',{number:1});
   assert.equal(calls.filter(c=>c.url.startsWith('https://api.github.com/repos/')).length,0,'the status comes from the cache the list filled');
+  calls.length=0;
+  await tool('pull_request_status',{number:1,fresh:true});
+  assert.ok(calls.some(c=>c.url.endsWith('/repos/owner/repo/pulls/1')),'fresh reads GitHub again instead of the cache');
+  assert.match((await tool('pull_request_status',{number:1,fresh:'yes'})).content[0].text,/fresh must be true or false/);
+  calls.length=0;
   assert.match(status.content[0].text,/Merge: Not ready to merge/);
   assert.match(status.content[0].text,/🔄 P2 Fix sampling parameters \(research\/bench\.py:68; older commit aaaaaaa; code changed, waiting for Codex\)/);
   assert.equal(status.structuredContent.findings[0].commit,'a'.repeat(40));

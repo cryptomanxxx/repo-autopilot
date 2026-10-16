@@ -91,7 +91,8 @@ function cardView(protocol) {
     if(!caps.serverTools) return null;
     const name=tool||(data?(data.pulls?'list_pull_requests':'pull_request_status'):null);
     const call=args||(data?(data.pulls?{repository:data.repository}:{repository:data.repository,number:data.number}):null);
-    return name&&call?{name,arguments:call}:null;
+    // Refresh reads GitHub again rather than the cache the first answer came from.
+    return name&&call?{name,arguments:{...call,fresh:true}}:null;
   };
   const time=at=>{
     const date=new Date(at);
