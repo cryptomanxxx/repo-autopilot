@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Connector for Claude and ChatGPT.** Add Repo Autopilot as a custom connector and ask about your pull requests in the chat. Sign-in goes through GitHub with OAuth; each connected app is listed in the dashboard under **Connected apps** and can be revoked there.
+- **Read-only tools.** `list_repositories`, `list_pull_requests` and `pull_request_status` show the same data as the dashboard: merge readiness, CI, Codex status, every Codex finding with its state, and recent activity. They say when something could not be read instead of reporting it as absent. Merging stays in the dashboard.
+- **Codex findings show when they are fixed.** A finding is marked ✅ once Codex has given the current code a 👍, and 🔄 while changed code waits for Codex.
+
 ## v0.1.0 — 2026-10-13
 
 The first release: a self-hosted dashboard for the Codex review loop on GitHub pull requests.
