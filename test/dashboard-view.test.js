@@ -31,3 +31,12 @@ test('a Codex finding is fixed when its thread is resolved or a later Codex 👍
   assert.equal(state({resolved:false,outdated:false}),'open');
   assert.equal(state({resolved:null,outdated:null}),'unverified');
 });
+
+test('connector summaries keep unknown findings and unknown commits apart from known ones',async()=>{
+  const {pullSummary}=await import('../worker/src/tools.js');
+  const base={number:1,title:'T',readiness:{state:'unknown',label:'Details unavailable',reasons:[]},codex:{state:'unknown',label:'Codex: details unavailable'}};
+  const failed=pullSummary({...base,progress:{reviewCount:null},detailError:'GitHub request failed (502).'});
+  assert.deepEqual([failed.findingsAvailable,failed.findingCounts],[false,null],'a failed load is not "no findings"');
+  const unknown=pullSummary({...base,progress:{findings:{items:[{priority:'P2',title:'F',at:'2026-10-16T00:00:00Z',commit:null,current:false,resolved:null}]}}});
+  assert.equal(unknown.findings[0].commit,null);
+});

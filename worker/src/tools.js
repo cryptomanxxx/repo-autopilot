@@ -24,13 +24,15 @@ const countsText=c=>[`${c.open} open`,c.waiting&&`${c.waiting} waiting for Codex
 
 // One pull request as the tools report it: what the dashboard row and its details show.
 export function pullSummary(item) {
-  const findings=findingLines(item);
+  // Without loaded findings (a GitHub request failed), the findings are unknown, not absent.
+  const available=Boolean(item.progress?.findings);
+  const findings=available?findingLines(item):[];
   return {
     number:item.number,title:item.title,url:item.url,state:item.state,draft:Boolean(item.draft),headSha:item.headSha,updatedAt:item.updatedAt,mergedAt:item.mergedAt||null,
     readiness:{state:item.readiness?.state,label:item.readiness?.label,reasons:item.readiness?.reasons||[]},
     ci:item.ci,codex:{state:item.codex?.state,label:item.codex?.label},
-    findings:findings.map(f=>({priority:f.priority,title:f.title,path:f.path,line:f.line,url:f.url,current:f.current,state:f.status.state,why:f.status.why||null})),
-    findingCounts:findingCounts(findings),findingsIncomplete:Boolean(item.progress?.findings?.incomplete),
+    findings:findings.map(f=>({priority:f.priority,title:f.title,path:f.path,line:f.line,url:f.url,commit:f.commit||null,current:f.current,state:f.status.state,why:f.status.why||null})),
+    findingsAvailable:available,findingCounts:available?findingCounts(findings):null,findingsIncomplete:Boolean(item.progress?.findings?.incomplete),
     activity:(item.progress?.events||[]).slice(-10).map(e=>({kind:e.kind,label:e.label,at:e.at,commit:e.commit||null})),
     detailError:item.detailError||null,
   };
@@ -39,9 +41,11 @@ function statusText(repository,s) {
   const lines=[`${repository} #${s.number} ${s.title} (${s.state}${s.draft?', draft':''})`,s.url,'',`Merge: ${s.readiness.label}`];
   for(const reason of s.readiness.reasons) lines.push(`  - ${reason}`);
   lines.push(`CI: ${ciText(s.ci)}`,`Codex: ${s.codex.label}`);
-  if(s.findings.length) {
+  const version=f=>f.current?'current code':f.commit?`older commit ${short(f.commit)}`:'commit unknown';
+  if(!s.findingsAvailable) lines.push('Codex findings: unknown, the details could not be read from GitHub');
+  else if(s.findings.length) {
     lines.push(`Codex findings: ${countsText(s.findingCounts)}${s.findingsIncomplete?' (list may be incomplete)':''}`);
-    for(const f of s.findings) lines.push(`  ${FINDING_STATES[f.state].icon} ${f.priority} ${f.title} (${f.path?`${f.path}${f.line?`:${f.line}`:''}`:'location unknown'}; ${f.current?'current code':'older commit'}; ${FINDING_STATES[f.state].label}${f.why?`: ${f.why}`:''}) ${f.url||''}`.trimEnd());
+    for(const f of s.findings) lines.push(`  ${FINDING_STATES[f.state].icon} ${f.priority} ${f.title} (${f.path?`${f.path}${f.line?`:${f.line}`:''}`:'location unknown'}; ${version(f)}; ${FINDING_STATES[f.state].label}${f.why?`: ${f.why}`:''}) ${f.url||''}`.trimEnd());
   } else lines.push('Codex findings: none');
   if(s.activity.length) {
     lines.push('Recent activity:');
@@ -90,7 +94,8 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       for(const p of pulls) {
         if(p.detailsLoaded===false) {lines.push(`#${p.number} ${p.title} (${p.state}): details not loaded; ask for pull_request_status`);continue;}
         const parts=[p.state,p.readiness.label,`CI ${ciText(p.ci)}`,p.codex.label];
-        if(p.findings.length) parts.push(`findings ${countsText(p.findingCounts)}`);
+        if(!p.findingsAvailable) parts.push('findings unknown');
+        else if(p.findings.length) parts.push(`findings ${countsText(p.findingCounts)}`);
         lines.push(`#${p.number} ${p.title}: ${parts.join(' · ')}`);
       }
       if(!pulls.length) lines.push('No pull requests found.');

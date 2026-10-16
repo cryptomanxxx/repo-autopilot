@@ -992,7 +992,8 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   const status=await tool('pull_request_status',{number:1});
   assert.equal(calls.filter(c=>c.url.startsWith('https://api.github.com/repos/')).length,0,'the status comes from the cache the list filled');
   assert.match(status.content[0].text,/Merge: Not ready to merge/);
-  assert.match(status.content[0].text,/🔄 P2 Fix sampling parameters \(research\/bench\.py:68; older commit; code changed, waiting for Codex\)/);
+  assert.match(status.content[0].text,/🔄 P2 Fix sampling parameters \(research\/bench\.py:68; older commit aaaaaaa; code changed, waiting for Codex\)/);
+  assert.equal(status.structuredContent.findings[0].commit,'a'.repeat(40));
   assert.equal(status.structuredContent.findings[0].state,'changed');
   assert.match((await tool('pull_request_status',{number:9})).content[0].text,/no pull request #9/);
   const other=await tool('pull_request_status',{repository:'someone/else',number:1});
