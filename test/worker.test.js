@@ -856,6 +856,10 @@ test('a chat app connects through OAuth, reads through MCP, keeps working after 
   const fields={request:sealed,consent:nonce,decision:'allow'};
   assert.equal((await form('/oauth/authorize',fields,{Origin:'https://evil.example',Cookie:consentCookie})).status,400,'another site cannot submit the consent');
   assert.equal((await form('/oauth/authorize',fields,{Origin:ORIGIN})).status,400,'the consent cookie must come with it');
+  assert.equal(consent.headers.get('Referrer-Policy'),'same-origin','browsers may name the origin when the form is sent');
+  assert.equal((await form('/oauth/authorize',fields,{Origin:'null',Cookie:consentCookie,'Sec-Fetch-Site':'cross-site'})).status,400,'a withheld origin needs the browser\'s same-site signal');
+  const nullOrigin=await form('/oauth/authorize',{...fields,decision:'deny'},{Origin:'null',Cookie:consentCookie,'Sec-Fetch-Site':'same-origin'});
+  assert.equal(nullOrigin.status,303,'a browser that withholds the origin but reports same-origin is accepted');
   const denied=await form('/oauth/authorize',{...fields,decision:'deny'},{Origin:ORIGIN,Cookie:consentCookie});
   assert.match(denied.headers.get('Location'),/^https:\/\/claude\.ai\/api\/mcp\/auth_callback\?error=access_denied/);
   const allowed=await form('/oauth/authorize',fields,{Origin:ORIGIN,Cookie:consentCookie});

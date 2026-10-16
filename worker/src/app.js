@@ -45,8 +45,8 @@ const SECURITY_HEADERS={
 };
 function withHeaders(response,secure,extra={}) {
   const result=new Response(response.body,response);
-  // A page that sets its own policy (the connector's consent page) keeps it.
-  for(const [k,v] of Object.entries({...SECURITY_HEADERS,...extra})) if(!(k==='Content-Security-Policy'&&response.headers.has(k))) result.headers.set(k,v);
+  // A page that sets its own policies (the connector's consent page) keeps them.
+  for(const [k,v] of Object.entries({...SECURITY_HEADERS,...extra})) if(!(['Content-Security-Policy','Referrer-Policy'].includes(k)&&response.headers.has(k))) result.headers.set(k,v);
   if(secure) result.headers.set('Strict-Transport-Security','max-age=31536000');
   return result;
 }
