@@ -48,4 +48,17 @@ test('connector summaries say when CI could not be read and when the activity ma
   // A failure after the checks were read (here the merge verification) does not make "no checks" unreadable.
   const later=pullSummary({number:1,title:'T',ci:'unknown',detailError:'GitHub request failed (503).',readiness:{label:'x',reasons:[]},codex:{},progress:{findings:{items:[]},events:[]}});
   assert.equal(later.ciAvailable,true);
+  // CI read from a capped list of checks is not final, and an empty but capped findings list is not "none".
+  const capped=pullSummary({number:1,title:'T',ci:'success',checksComplete:false,readiness:{label:'x',reasons:[]},codex:{},progress:{findings:{incomplete:true,items:[]},events:[]}});
+  assert.deepEqual([capped.ciAvailable,capped.ciComplete,capped.findingsIncomplete],[true,false,true]);
+});
+
+test('the pull request list says when older pull requests may be missing',async()=>{
+  const {connectorTools}=await import('../worker/src/tools.js');
+  const pulls=[1,2].map(n=>({number:n,title:`P${n}`,url:'',state:'closed',updatedAt:''}));
+  const dashboardData=async({number})=>number?null:{pulls};
+  const tools=connectorTools({store:{},config:{},readRepos:null,resolveRepository:async()=>'o/r',dashboardData,pullLimit:2});
+  const result=await tools.find(t=>t.name==='list_pull_requests').run({},{token:'t',grantId:'g'});
+  assert.equal(result.structuredContent.mayHaveMore,true);
+  assert.match(result.content[0].text,/Older pull requests are not listed and may include open ones/);
 });

@@ -11,6 +11,8 @@ const REPOSITORY={type:'string',description:'Repository as owner/name, for examp
 
 // "unknown" CI after a failed read of the checks means they could not be read, not that there are none.
 const ciText=(ci,failed)=>ci==='unknown'&&failed?'unavailable (could not be read)':({success:'passed',failure:'failed',pending:'running',unknown:'no checks reported'})[ci]||ci;
+// A CI state read from a capped list of checks may miss a failing or pending one; it is not reported as final.
+const ciLabel=(ci,{available,complete})=>`${ciText(ci,!available)}${available&&!complete?' (not verified as complete)':''}`;
 const short=sha=>sha?String(sha).slice(0,7):'';
 function findingLines(item) {
   const clearedAt=item.codex?.state==='clear'?item.codex.clearedAt:null;
@@ -34,7 +36,7 @@ export function pullSummary(item) {
     readiness:{state:item.readiness?.state,label:item.readiness?.label,reasons:item.readiness?.reasons||[]},
     // Checks and findings are read in the same GitHub batch, so loaded findings mean the checks were read too;
     // a later failure (such as the merge verification) leaves a read CI state as it is.
-    ci:item.ci,ciAvailable:available,codex:{state:item.codex?.state,label:item.codex?.label},
+    ci:item.ci,ciAvailable:available,ciComplete:available&&item.checksComplete!==false,codex:{state:item.codex?.state,label:item.codex?.label},
     findings:findings.map(f=>({priority:f.priority,title:f.title,path:f.path,line:f.line,url:f.url,commit:f.commit||null,current:f.current,state:f.status.state,why:f.status.why||null})),
     findingsAvailable:available,findingCounts:available?findingCounts(findings):null,findingsIncomplete:Boolean(item.progress?.findings?.incomplete),
     activity:(item.progress?.events||[]).slice(-10).map(e=>({kind:e.kind,label:e.label,at:e.at,commit:e.commit||null})),
@@ -46,13 +48,13 @@ export function pullSummary(item) {
 function statusText(repository,s) {
   const lines=[`${repository} #${s.number} ${s.title} (${s.state}${s.draft?', draft':''})`,s.url,'',`Merge: ${s.readiness.label}`];
   for(const reason of s.readiness.reasons) lines.push(`  - ${reason}`);
-  lines.push(`CI: ${ciText(s.ci,!s.ciAvailable)}`,`Codex: ${s.codex.label}`);
+  lines.push(`CI: ${ciLabel(s.ci,{available:s.ciAvailable,complete:s.ciComplete})}`,`Codex: ${s.codex.label}`);
   const version=f=>f.current?'current code':f.commit?`older commit ${short(f.commit)}`:'commit unknown';
   if(!s.findingsAvailable) lines.push('Codex findings: unknown, the details could not be read from GitHub');
   else if(s.findings.length) {
     lines.push(`Codex findings: ${countsText(s.findingCounts)}${s.findingsIncomplete?' (list may be incomplete)':''}`);
     for(const f of s.findings) lines.push(`  ${FINDING_STATES[f.state].icon} ${f.priority} ${f.title} (${f.path?`${f.path}${f.line?`:${f.line}`:''}`:'location unknown'}; ${version(f)}; ${FINDING_STATES[f.state].label}${f.why?`: ${f.why}`:''}) ${f.url||''}`.trimEnd());
-  } else lines.push('Codex findings: none');
+  } else lines.push(s.findingsIncomplete?'Codex findings: none found, but the list may be incomplete (the history is longer than one GitHub page)':'Codex findings: none');
   if(s.activity.length) {
     lines.push(`Recent activity${s.activityIncomplete?' (may be incomplete: the history is longer than one GitHub page)':''}:`);
     for(const e of s.activity) lines.push(`  ${e.at.slice(0,16).replace('T',' ')} ${e.label}${e.commit?` (${short(e.commit)})`:''}`);
@@ -63,7 +65,7 @@ function statusText(repository,s) {
   return lines.join('\n');
 }
 
-export function connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData}) {
+export function connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData,pullLimit}) {
   const access=(token,grantId)=>({store,session:{token},hash:`grant:${grantId}`,config,fetchImpl});
   const repositoryOf=async(args,token,grantId)=>{
     if(args.repository!==undefined&&typeof args.repository!=='string') throw Object.assign(new Error('repository must be a string like "owner/name".'),{expose:true});
@@ -83,7 +85,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
     },
   },{
     name:'list_pull_requests',title:'List pull requests',
-    description:'Lists the most recently updated pull requests of a repository, as the Repo Autopilot dashboard shows them: merge readiness, CI, Codex review status and Codex findings. Use pull_request_status for the full details of one.',
+    description:`Lists the ${pullLimit} most recently updated pull requests of a repository, as the Repo Autopilot dashboard shows them: merge readiness, CI, Codex review status and Codex findings. Older pull requests are not listed; use pull_request_status with a number for any pull request, and for the full details of one.`,
     inputSchema:{type:'object',properties:{repository:REPOSITORY},additionalProperties:false},
     annotations:READ_ONLY,
     run:async(args,{token,grantId})=>{
@@ -105,16 +107,20 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
         }
         pulls.push(item?pullSummary(item):{number:pr.number,title:pr.title,url:pr.url,state:pr.state,updatedAt:pr.updatedAt,detailsLoaded:false,error});
       }
-      const lines=[`${repository}: ${pulls.length} most recently updated pull requests`];
+      // The overview reads a fixed number of the most recently updated pull requests; older ones are not in it.
+      const mayHaveMore=overview.pulls.length>=pullLimit;
+      const lines=[`${repository}: the ${pulls.length} most recently updated pull requests`];
+      if(mayHaveMore) lines.push('Older pull requests are not listed and may include open ones; use pull_request_status with a number to see one.');
       for(const p of pulls) {
         if(p.detailsLoaded===false) {lines.push(`#${p.number} ${p.title} (${p.state}): ${p.error?`details could not be read (${p.error})`:'details not loaded'}; ask for pull_request_status`);continue;}
-        const parts=[p.state,p.readiness.label,`CI ${ciText(p.ci,!p.ciAvailable)}`,p.codex.label];
+        const parts=[p.state,p.readiness.label,`CI ${ciLabel(p.ci,{available:p.ciAvailable,complete:p.ciComplete})}`,p.codex.label];
         if(!p.findingsAvailable) parts.push('findings unknown');
-        else if(p.findings.length) parts.push(`findings ${countsText(p.findingCounts)}`);
+        else if(p.findings.length) parts.push(`findings ${countsText(p.findingCounts)}${p.findingsIncomplete?' (may be incomplete)':''}`);
+        else if(p.findingsIncomplete) parts.push('no findings seen (list may be incomplete)');
         lines.push(`#${p.number} ${p.title}: ${parts.join(' · ')}`);
       }
       if(!pulls.length) lines.push('No pull requests found.');
-      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,pulls}};
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,pulls,limit:pullLimit,mayHaveMore}};
     },
   },{
     name:'pull_request_status',title:'Pull request status',

@@ -81,7 +81,7 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
       if(config.error) return withHeaders(json(503,{error:config.error}),secure);
       if(!config.sameOrigin) return withHeaders(json(404,{error:'Not found.'}),secure);
       const store=chatStore(env);
-      return withHeaders(await connector(request,url,{store,env,origin:config.origin,secure,fetchImpl,now,tools:connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData})}),secure);
+      return withHeaders(await connector(request,url,{store,env,origin:config.origin,secure,fetchImpl,now,tools:connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData,pullLimit:DASHBOARD_PULLS})}),secure);
     }
     if(!url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/auth/')) {
       if(!env.ASSETS) return withHeaders(new Response('Not found',{status:404}),secure);

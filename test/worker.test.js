@@ -985,6 +985,8 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   const [open,merged]=listed.structuredContent.pulls;
   assert.deepEqual([open.number,open.ci,open.findingCounts.waiting],[1,'pending',1]);
   assert.equal(merged.detailsLoaded,false,'closed pull requests are not loaded from GitHub by the list');
+  assert.deepEqual([listed.structuredContent.limit,listed.structuredContent.mayHaveMore],[6,false],'two pull requests are all there are');
+  assert.match(tools[1].description,/Lists the 6 most recently updated/);
   assert.match(listed.content[0].text,/#1 Add the benchmark: open · Not ready to merge · CI running/);
   assert.match(listed.content[0].text,/#2 Update sources \(merged\): details not loaded/);
 
