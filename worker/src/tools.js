@@ -2,6 +2,7 @@
 // the GitHub sign-in of the connected app.
 import {findingStatus,FINDING_STATES} from '../public/dashboard-view.js';
 import {PublicError} from './errors.js';
+import {CARD_TOOL_META} from './card.js';
 
 // At most this many pull requests are loaded from GitHub in one list call; the rest come from the cache
 // or are marked as not loaded, so a call stays within the Workers subrequest limit.
@@ -87,7 +88,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
     name:'list_pull_requests',title:'List pull requests',
     description:`Lists the ${pullLimit} most recently updated pull requests of a repository, as the Repo Autopilot dashboard shows them: merge readiness, CI, Codex review status and Codex findings. Older pull requests are not listed; use pull_request_status with a number for any pull request, and for the full details of one.`,
     inputSchema:{type:'object',properties:{repository:REPOSITORY},additionalProperties:false},
-    annotations:READ_ONLY,
+    annotations:READ_ONLY,_meta:CARD_TOOL_META,
     run:async(args,{token,grantId})=>{
       const repository=await repositoryOf(args,token,grantId);
       const overview=await dashboardData({store,token,fetchImpl,repository});
@@ -126,7 +127,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
     name:'pull_request_status',title:'Pull request status',
     description:'Shows one pull request as the Repo Autopilot dashboard does: whether it is ready to merge and why not, CI, Codex review status, every Codex finding with its state (open, waiting for Codex, fixed) and recent activity.',
     inputSchema:{type:'object',properties:{repository:REPOSITORY,number:{type:'integer',minimum:1,description:'Pull request number.'}},required:['number'],additionalProperties:false},
-    annotations:READ_ONLY,
+    annotations:READ_ONLY,_meta:CARD_TOOL_META,
     run:async(args,{token,grantId})=>{
       if(!Number.isSafeInteger(args.number)||args.number<1) throw Object.assign(new Error('number must be a pull request number.'),{expose:true});
       const repository=await repositoryOf(args,token,grantId);

@@ -7,6 +7,7 @@
 import {hex,randomHex,base64url,sha256,seal,unseal,sealState} from './crypto.js';
 import {readLimited} from './github.js';
 import {PublicError} from './errors.js';
+import {cardResource,cardContents,CARD_URI} from './card.js';
 
 const HOUR=3600000,DAY=24*HOUR;
 export const ACCESS_MS=HOUR,CODE_MS=60000,PENDING_MS=600000,NO_EXPIRY_MS=180*DAY;
@@ -272,9 +273,13 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
   await store.touchGrant(grant.id);
   if(method==='initialize') {
     const requested=params?.protocolVersion;
-    return rpcResult(id,{protocolVersion:MCP_PROTOCOLS.includes(requested)?requested:MCP_PROTOCOLS[0],capabilities:{tools:{listChanged:false}},serverInfo:{name:'repo-autopilot',title:'Repo Autopilot',version:'0.2.0'},instructions:'Read-only access to the owner\'s Repo Autopilot: the repositories it reads and, for each, the pull requests with merge readiness, CI, Codex review status and Codex findings, the same as its dashboard shows. Nothing can be changed through these tools; merging happens in the Repo Autopilot dashboard.'});
+    return rpcResult(id,{protocolVersion:MCP_PROTOCOLS.includes(requested)?requested:MCP_PROTOCOLS[0],capabilities:{tools:{listChanged:false},resources:{listChanged:false}},serverInfo:{name:'repo-autopilot',title:'Repo Autopilot',version:'0.3.0'},instructions:'Read-only access to the owner\'s Repo Autopilot: the repositories it reads and, for each, the pull requests with merge readiness, CI, Codex review status and Codex findings, the same as its dashboard shows. Chat apps that support MCP Apps also show the pull request tools\' results as a Repo Autopilot card. Nothing can be changed through these tools; merging happens in the Repo Autopilot dashboard.'});
   }
   if(method==='ping') return rpcResult(id,{});
+  // The card the pull request tools are shown with (MCP Apps). It is read with the same sign-in as the tools.
+  if(method==='resources/list') return rpcResult(id,{resources:[cardResource]});
+  if(method==='resources/templates/list') return rpcResult(id,{resourceTemplates:[]});
+  if(method==='resources/read') return params?.uri===CARD_URI?rpcResult(id,cardContents(origin)):rpcError(id,-32002,`Resource not found: ${params?.uri}`);
   if(method==='tools/list') return rpcResult(id,{tools:tools.map(({run,...tool})=>tool)});
   if(method==='tools/call') {
     const tool=tools.find(t=>t.name===params?.name);

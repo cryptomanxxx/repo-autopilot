@@ -979,6 +979,23 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   const tool=async(name,args)=>(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json()).result;
   const {result:{tools}}=await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/list'},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json();
   assert.deepEqual(tools.map(t=>t.name),['list_repositories','list_pull_requests','pull_request_status']);
+  // The pull request tools are shown with the Repo Autopilot card (MCP Apps); the card is read with the same sign-in.
+  const rpc=async(method,params)=>(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method,params},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json());
+  const card='ui://repo-autopilot/pull-requests.html';
+  assert.deepEqual(tools.map(t=>t._meta?.ui?.resourceUri??null),[null,card,card]);
+  assert.equal(tools[1]._meta['ui/resourceUri'],card,'older hosts read the flat key');
+  assert.deepEqual((await rpc('initialize',{protocolVersion:'2025-06-18'})).result.capabilities.resources,{listChanged:false});
+  const {result:{resources}}=await rpc('resources/list');
+  assert.deepEqual(resources.map(r=>[r.uri,r.mimeType]),[[card,'text/html;profile=mcp-app']]);
+  const {result:{contents:[content]}}=await rpc('resources/read',{uri:card});
+  assert.equal(content.mimeType,'text/html;profile=mcp-app');
+  assert.deepEqual(content._meta.ui.csp,{connectDomains:[],resourceDomains:[]},'the card loads nothing and connects nowhere');
+  assert.match(content.text,/^<!doctype html>/);assert.match(content.text,/ui\/initialize/);
+  assert.match(content.text,/<a id="dashboard" href="https:\/\/[^"]+\/">/,'the card links to this dashboard');
+  assert.doesNotMatch(content.text,/<script[^>]+src=/,'no external scripts');
+  assert.equal((await rpc('resources/read',{uri:'ui://other'})).error.code,-32002);
+  const unsigned=await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'resources/read',params:{uri:card}}}),env,{fetchImpl});
+  assert.equal(unsigned.status,401,'the card is not served without a sign-in');
 
   const listed=await tool('list_pull_requests',{});
   assert.equal(listed.structuredContent.repository,'owner/repo','the app\'s own repository is the default');
