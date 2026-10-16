@@ -9,7 +9,7 @@ export const FRESH_DETAILS=2;
 const READ_ONLY={readOnlyHint:true,openWorldHint:false};
 const REPOSITORY={type:'string',description:'Repository as owner/name, for example "octocat/hello-world". Defaults to the Repo Autopilot repository itself.'};
 
-// "unknown" CI after a failed GitHub read means the checks could not be read, not that there are none.
+// "unknown" CI after a failed read of the checks means they could not be read, not that there are none.
 const ciText=(ci,failed)=>ci==='unknown'&&failed?'unavailable (could not be read)':({success:'passed',failure:'failed',pending:'running',unknown:'no checks reported'})[ci]||ci;
 const short=sha=>sha?String(sha).slice(0,7):'';
 function findingLines(item) {
@@ -32,7 +32,9 @@ export function pullSummary(item) {
   return {
     number:item.number,title:item.title,url:item.url,state:item.state,draft:Boolean(item.draft),headSha:item.headSha,updatedAt:item.updatedAt,mergedAt:item.mergedAt||null,
     readiness:{state:item.readiness?.state,label:item.readiness?.label,reasons:item.readiness?.reasons||[]},
-    ci:item.ci,codex:{state:item.codex?.state,label:item.codex?.label},
+    // Checks and findings are read in the same GitHub batch, so loaded findings mean the checks were read too;
+    // a later failure (such as the merge verification) leaves a read CI state as it is.
+    ci:item.ci,ciAvailable:available,codex:{state:item.codex?.state,label:item.codex?.label},
     findings:findings.map(f=>({priority:f.priority,title:f.title,path:f.path,line:f.line,url:f.url,commit:f.commit||null,current:f.current,state:f.status.state,why:f.status.why||null})),
     findingsAvailable:available,findingCounts:available?findingCounts(findings):null,findingsIncomplete:Boolean(item.progress?.findings?.incomplete),
     activity:(item.progress?.events||[]).slice(-10).map(e=>({kind:e.kind,label:e.label,at:e.at,commit:e.commit||null})),
@@ -44,7 +46,7 @@ export function pullSummary(item) {
 function statusText(repository,s) {
   const lines=[`${repository} #${s.number} ${s.title} (${s.state}${s.draft?', draft':''})`,s.url,'',`Merge: ${s.readiness.label}`];
   for(const reason of s.readiness.reasons) lines.push(`  - ${reason}`);
-  lines.push(`CI: ${ciText(s.ci,Boolean(s.detailError))}`,`Codex: ${s.codex.label}`);
+  lines.push(`CI: ${ciText(s.ci,!s.ciAvailable)}`,`Codex: ${s.codex.label}`);
   const version=f=>f.current?'current code':f.commit?`older commit ${short(f.commit)}`:'commit unknown';
   if(!s.findingsAvailable) lines.push('Codex findings: unknown, the details could not be read from GitHub');
   else if(s.findings.length) {
@@ -106,7 +108,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       const lines=[`${repository}: ${pulls.length} most recently updated pull requests`];
       for(const p of pulls) {
         if(p.detailsLoaded===false) {lines.push(`#${p.number} ${p.title} (${p.state}): ${p.error?`details could not be read (${p.error})`:'details not loaded'}; ask for pull_request_status`);continue;}
-        const parts=[p.state,p.readiness.label,`CI ${ciText(p.ci,Boolean(p.detailError))}`,p.codex.label];
+        const parts=[p.state,p.readiness.label,`CI ${ciText(p.ci,!p.ciAvailable)}`,p.codex.label];
         if(!p.findingsAvailable) parts.push('findings unknown');
         else if(p.findings.length) parts.push(`findings ${countsText(p.findingCounts)}`);
         lines.push(`#${p.number} ${p.title}: ${parts.join(' · ')}`);

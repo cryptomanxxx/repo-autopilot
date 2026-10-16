@@ -44,5 +44,8 @@ test('connector summaries keep unknown findings and unknown commits apart from k
 test('connector summaries say when CI could not be read and when the activity may be incomplete',async()=>{
   const {pullSummary}=await import('../worker/src/tools.js');
   const s=pullSummary({number:1,title:'T',ci:'unknown',detailError:'GitHub request failed (502).',readiness:{label:'x',reasons:[]},codex:{},progress:{truncated:true,events:[]},warnings:['Review history is limited to 100 entries.']});
-  assert.deepEqual([s.activityIncomplete,s.warnings.length],[true,1]);
+  assert.deepEqual([s.activityIncomplete,s.warnings.length,s.ciAvailable],[true,1,false]);
+  // A failure after the checks were read (here the merge verification) does not make "no checks" unreadable.
+  const later=pullSummary({number:1,title:'T',ci:'unknown',detailError:'GitHub request failed (503).',readiness:{label:'x',reasons:[]},codex:{},progress:{findings:{items:[]},events:[]}});
+  assert.equal(later.ciAvailable,true);
 });
