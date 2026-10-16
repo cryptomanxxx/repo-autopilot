@@ -40,3 +40,9 @@ test('connector summaries keep unknown findings and unknown commits apart from k
   const unknown=pullSummary({...base,progress:{findings:{items:[{priority:'P2',title:'F',at:'2026-10-16T00:00:00Z',commit:null,current:false,resolved:null}]}}});
   assert.equal(unknown.findings[0].commit,null);
 });
+
+test('connector summaries say when CI could not be read and when the activity may be incomplete',async()=>{
+  const {pullSummary}=await import('../worker/src/tools.js');
+  const s=pullSummary({number:1,title:'T',ci:'unknown',detailError:'GitHub request failed (502).',readiness:{label:'x',reasons:[]},codex:{},progress:{truncated:true,events:[]},warnings:['Review history is limited to 100 entries.']});
+  assert.deepEqual([s.activityIncomplete,s.warnings.length],[true,1]);
+});

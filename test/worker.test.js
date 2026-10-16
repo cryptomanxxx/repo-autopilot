@@ -949,7 +949,7 @@ async function connectApp(env,fetchImpl) {
 }
 
 test('the connector lists pull requests and shows one as the dashboard does, from the same cache',async()=>{
-  const {env}=environment(),calls=[];
+  const {env,store}=environment(),calls=[];
   const bot={login:'chatgpt-codex-connector[bot]'},head='b'.repeat(40);
   const pulls=[
     {number:1,title:'Add the benchmark',html_url:'https://github.com/owner/repo/pull/1',state:'open',merged_at:null,updated_at:'2026-10-16T10:00:00Z',created_at:'2026-10-16T09:00:00Z',draft:false,head:{sha:head},base:{ref:'main'},mergeable:true},
@@ -996,6 +996,15 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.equal(status.structuredContent.findings[0].commit,'a'.repeat(40));
   assert.equal(status.structuredContent.findings[0].state,'changed');
   assert.match((await tool('pull_request_status',{number:9})).content[0].text,/no pull request #9/);
+  // A pull request whose details fail is listed as not loaded; the rest of the list still comes back.
+  pulls[0].updated_at='2026-10-16T11:00:00Z';
+  const failing=fetchImpl;let broken=true;
+  const flaky=async(url,options)=>broken&&url.endsWith('/repos/owner/repo/pulls/1')?new Response('{}',{status:502}):failing(url,options);
+  store.rows("DELETE FROM cache WHERE key LIKE 'overview:%'");
+  const partial=(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'list_pull_requests',arguments:{}}},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl:flaky})).json()).result;
+  assert.equal(partial.isError,undefined);
+  assert.match(partial.content[0].text,/#1 Add the benchmark \(open\): details could not be read/);
+  broken=false;
   const other=await tool('pull_request_status',{repository:'someone/else',number:1});
   assert.equal(other.isError,true);assert.match(other.content[0].text,/cannot reach someone\/else/);
 });

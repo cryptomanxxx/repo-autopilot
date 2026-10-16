@@ -8,7 +8,8 @@ export const FRESH_DETAILS=2;
 const READ_ONLY={readOnlyHint:true,openWorldHint:false};
 const REPOSITORY={type:'string',description:'Repository as owner/name, for example "octocat/hello-world". Defaults to the Repo Autopilot repository itself.'};
 
-const ciText=ci=>({success:'passed',failure:'failed',pending:'running',unknown:'no checks reported'})[ci]||ci;
+// "unknown" CI after a failed GitHub read means the checks could not be read, not that there are none.
+const ciText=(ci,failed)=>ci==='unknown'&&failed?'unavailable (could not be read)':({success:'passed',failure:'failed',pending:'running',unknown:'no checks reported'})[ci]||ci;
 const short=sha=>sha?String(sha).slice(0,7):'';
 function findingLines(item) {
   const clearedAt=item.codex?.state==='clear'?item.codex.clearedAt:null;
@@ -34,13 +35,15 @@ export function pullSummary(item) {
     findings:findings.map(f=>({priority:f.priority,title:f.title,path:f.path,line:f.line,url:f.url,commit:f.commit||null,current:f.current,state:f.status.state,why:f.status.why||null})),
     findingsAvailable:available,findingCounts:available?findingCounts(findings):null,findingsIncomplete:Boolean(item.progress?.findings?.incomplete),
     activity:(item.progress?.events||[]).slice(-10).map(e=>({kind:e.kind,label:e.label,at:e.at,commit:e.commit||null})),
+    // A history cut off at GitHub's page size may miss the newest events; that is said, not hidden.
+    activityIncomplete:Boolean(item.progress?.truncated||item.progress?.findings?.incomplete),warnings:item.warnings||[],
     detailError:item.detailError||null,
   };
 }
 function statusText(repository,s) {
   const lines=[`${repository} #${s.number} ${s.title} (${s.state}${s.draft?', draft':''})`,s.url,'',`Merge: ${s.readiness.label}`];
   for(const reason of s.readiness.reasons) lines.push(`  - ${reason}`);
-  lines.push(`CI: ${ciText(s.ci)}`,`Codex: ${s.codex.label}`);
+  lines.push(`CI: ${ciText(s.ci,Boolean(s.detailError))}`,`Codex: ${s.codex.label}`);
   const version=f=>f.current?'current code':f.commit?`older commit ${short(f.commit)}`:'commit unknown';
   if(!s.findingsAvailable) lines.push('Codex findings: unknown, the details could not be read from GitHub');
   else if(s.findings.length) {
@@ -48,9 +51,10 @@ function statusText(repository,s) {
     for(const f of s.findings) lines.push(`  ${FINDING_STATES[f.state].icon} ${f.priority} ${f.title} (${f.path?`${f.path}${f.line?`:${f.line}`:''}`:'location unknown'}; ${version(f)}; ${FINDING_STATES[f.state].label}${f.why?`: ${f.why}`:''}) ${f.url||''}`.trimEnd());
   } else lines.push('Codex findings: none');
   if(s.activity.length) {
-    lines.push('Recent activity:');
+    lines.push(`Recent activity${s.activityIncomplete?' (may be incomplete: the history is longer than one GitHub page)':''}:`);
     for(const e of s.activity) lines.push(`  ${e.at.slice(0,16).replace('T',' ')} ${e.label}${e.commit?` (${short(e.commit)})`:''}`);
   }
+  for(const warning of s.warnings) lines.push('',`Note: ${warning}`);
   if(s.detailError) lines.push('',`Some details could not be read: ${s.detailError}`);
   lines.push('','Merging happens in the Repo Autopilot dashboard.');
   return lines.join('\n');
@@ -85,15 +89,22 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       let fresh=0;
       const pulls=[];
       for(const pr of overview.pulls) {
-        let item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,cachedOnly:true});
-        // Open pull requests matter most, so they are loaded from GitHub first, within the budget.
-        if(!item&&pr.state==='open'&&fresh<FRESH_DETAILS) {fresh++;item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt});}
-        pulls.push(item?pullSummary(item):{number:pr.number,title:pr.title,url:pr.url,state:pr.state,updatedAt:pr.updatedAt,detailsLoaded:false});
+        // One pull request that cannot be read does not take the whole list down; it is listed as not loaded.
+        let item=null,error=null;
+        try {
+          item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,cachedOnly:true});
+          // Open pull requests matter most, so they are loaded from GitHub first, within the budget.
+          if(!item&&pr.state==='open'&&fresh<FRESH_DETAILS) {fresh++;item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt});}
+        } catch(failure) {
+          if(failure?.status===401) throw failure;
+          error=failure?.message||'GitHub request failed.';
+        }
+        pulls.push(item?pullSummary(item):{number:pr.number,title:pr.title,url:pr.url,state:pr.state,updatedAt:pr.updatedAt,detailsLoaded:false,error});
       }
       const lines=[`${repository}: ${pulls.length} most recently updated pull requests`];
       for(const p of pulls) {
-        if(p.detailsLoaded===false) {lines.push(`#${p.number} ${p.title} (${p.state}): details not loaded; ask for pull_request_status`);continue;}
-        const parts=[p.state,p.readiness.label,`CI ${ciText(p.ci)}`,p.codex.label];
+        if(p.detailsLoaded===false) {lines.push(`#${p.number} ${p.title} (${p.state}): ${p.error?`details could not be read (${p.error})`:'details not loaded'}; ask for pull_request_status`);continue;}
+        const parts=[p.state,p.readiness.label,`CI ${ciText(p.ci,Boolean(p.detailError))}`,p.codex.label];
         if(!p.findingsAvailable) parts.push('findings unknown');
         else if(p.findings.length) parts.push(`findings ${countsText(p.findingCounts)}`);
         lines.push(`#${p.number} ${p.title}: ${parts.join(' · ')}`);
