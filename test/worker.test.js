@@ -906,3 +906,22 @@ test('a chat app connects through OAuth, reads through MCP, keeps working after 
   assert.equal((await rpc('tools/list',{},refreshed.access_token)).status,401,'a revoked app is signed out');
   assert.equal((await (await call('/api/connections',{cookie:auth.cookie})).json()).connections.length,0);
 });
+
+test('a cancelled GitHub sign-in returns the error to the connecting app, and pending connections are capped',async()=>{
+  const {env,store}=environment(),fetchImpl=github({calls:[]});
+  const call=(path,options={})=>handle(request(path,options),env,{fetchImpl});
+  const {client_id}=await (await call('/oauth/register',{method:'POST',body:{client_name:'ChatGPT',redirect_uris:['https://chatgpt.com/connector_platform_oauth_redirect']}})).json();
+  const start=async()=>{
+    const consent=await call(`/oauth/authorize?${new URLSearchParams({response_type:'code',client_id,redirect_uri:'https://chatgpt.com/connector_platform_oauth_redirect',code_challenge:'c'.repeat(43),code_challenge_method:'S256',state:'st'})}`);
+    const html=await consent.text();
+    const allowed=await handle(new Request(ORIGIN+'/oauth/authorize',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Origin:ORIGIN,Cookie:consent.headers.get('Set-Cookie').split(';')[0]},body:new URLSearchParams({request:html.match(/name="request" value="([^"]+)"/)[1],consent:html.match(/name="consent" value="([0-9a-f]+)"/)[1],decision:'allow'})}),env,{fetchImpl});
+    return {state:new URL(allowed.headers.get('Location')).searchParams.get('state'),browser:allowed.headers.getSetCookie().find(c=>c.startsWith('autopilot_login=')).match(/=([0-9a-f]+)/)[1]};
+  };
+  const {state,browser}=await start();
+  const cancelled=await call(`/auth/callback?error=access_denied&state=${encodeURIComponent(state)}`,{cookie:`autopilot_login=${browser}`});
+  const back=new URL(cancelled.headers.get('Location'));
+  assert.equal(back.origin+back.pathname,'https://chatgpt.com/connector_platform_oauth_redirect');
+  assert.deepEqual([back.searchParams.get('error'),back.searchParams.get('state')],['access_denied','st']);
+  for(let i=0;i<25;i++) await start();
+  assert.equal(store.rows('SELECT COUNT(*) AS n FROM oauth_pending')[0].n,20,'at most 20 connections wait for GitHub');
+});

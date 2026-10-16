@@ -123,6 +123,16 @@ async function decideConsent(request,{store,env,origin,secure,now}) {
   return new Response(null,{status:303,headers});
 }
 
+// Called by the sign-in callback when a connection's GitHub sign-in fails or is cancelled: the app gets the
+// error at its own redirect address instead of waiting. Returns null when nothing is pending any more.
+export async function failConnect({pending,reason,store,origin}) {
+  const request=await store.takePending(pending);
+  if(!request) return null;
+  const error=reason==='cancelled'?'access_denied':reason==='owner'||reason==='app'?'access_denied':'server_error';
+  const description={cancelled:'The GitHub sign-in was cancelled.',owner:'Only the owner of this Repo Autopilot can connect apps.',app:'The GitHub sign-in did not use the Repo Autopilot GitHub App.'}[reason]||'The GitHub sign-in failed. Try connecting again.';
+  return redirectBack(request,{error,error_description:description},origin);
+}
+
 // Called by the sign-in callback once GitHub confirmed the owner: the app is connected and gets its code.
 export async function finishConnect({pending,token,login,store,env,origin,now}) {
   const request=await store.takePending(pending);
@@ -192,13 +202,15 @@ export async function githubToken(grant,{store,env,fetchImpl,now}) {
   let github=await open(grant.github);
   if(!github?.access) {await store.deleteGrant(grant.id);return null;}
   if(usable(github)) return github.access;
+  // One store call per second while waiting keeps a request well within the Workers subrequest limit.
   const lock=`grant-renewal:${grant.id}`,owner=randomHex(8);
-  for(let attempt=0;!await store.acquireLock(lock,owner,30000);attempt++) {
-    if(attempt>=40) return undefined;
-    await sleep(250);
-    const latest=await store.getGrant(grant.id);
+  for(let attempt=0;;attempt++) {
+    const {locked,grant:latest}=await store.tryRenewal(grant.id,owner,30000);
+    if(locked) break;
     if(!latest) return null;
     if(latest.github!==grant.github) {const renewed=await open(latest.github);if(usable(renewed)) return renewed.access;}
+    if(attempt>=10) return undefined;
+    await sleep(1000);
   }
   try {
     // Read the grant again under the lock: another request may have renewed it meanwhile.

@@ -33,6 +33,7 @@ export class ChatStore extends DurableObject {
   createGrant(grant) {return this.logic.createGrant(grant);}
   getGrant(id) {return this.logic.getGrant(id);}
   replaceGrantGithub(id,previous,github,expires) {return this.logic.replaceGrantGithub(id,previous,github,expires);}
+  tryRenewal(id,owner,ms) {return this.logic.tryRenewal(id,owner,ms);}
   touchGrant(id) {return this.logic.touchGrant(id);}
   deleteGrant(id) {return this.logic.deleteGrant(id);}
   listGrants() {return this.logic.listGrants();}

@@ -2,7 +2,7 @@ import {githubClient,GitHubError,readLimited} from './github.js';
 import {repositoryName,createGitHub} from '../../src/github.js';
 import {PublicError,UserError} from './errors.js';
 import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
-import {connector,isConnectorPath,finishConnect} from './connector.js';
+import {connector,isConnectorPath,finishConnect,failConnect} from './connector.js';
 export {UserError};
 import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
 
@@ -119,7 +119,12 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     const reason=githubError?(githubError==='access_denied'?'cancelled':'github'):'expired';
     const pending=await openState(env.GITHUB_CLIENT_SECRET,url.searchParams.get('state'),now());
     if(!pending||pending.browser!==cookies(request).autopilot_login) return redirect(`/?signin=${reason}`);
-    const failed=reason=>redirect(`/?signin=${reason}`,[cookie('autopilot_login','',{path:'/auth'})]);
+    const failed=async reason=>{
+      // A connection in progress reports the failure to the app that started it.
+      const back=pending.connect&&await failConnect({pending:pending.connect,reason,store,origin:config.origin});
+      if(back) {back.headers.append('Set-Cookie',cookie('autopilot_login','',{path:'/auth'}));return back;}
+      return redirect(`/?signin=${reason}`,[cookie('autopilot_login','',{path:'/auth'})]);
+    };
     if(githubError) return failed(reason);
     if(!code) return failed('failed');
     let token,user;

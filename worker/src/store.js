@@ -59,9 +59,11 @@ export class ChatStoreLogic {
     const [row]=this.rows('SELECT id, name, redirect_uris FROM oauth_clients WHERE id = ?',id);
     return row?{id:row.id,name:row.name,redirectUris:JSON.parse(row.redirect_uris)}:null;
   }
+  // Pending connections are started before anyone signs in, so at most 20 are kept; the oldest give way.
   putPending(id,data,ms) {
     this.sql.exec('DELETE FROM oauth_pending WHERE expires <= ?',this.now());
     this.sql.exec('INSERT INTO oauth_pending (id, data, expires) VALUES (?, ?, ?)',id,JSON.stringify(data),this.now()+ms);
+    this.sql.exec('DELETE FROM oauth_pending WHERE id IN (SELECT id FROM oauth_pending ORDER BY expires DESC LIMIT -1 OFFSET 20)');
   }
   // A pending connection can be completed once.
   takePending(id) {
@@ -84,6 +86,11 @@ export class ChatStoreLogic {
   // refreshing at once cannot overwrite each other's newer tokens. Returns whether it replaced them.
   replaceGrantGithub(id,previous,github,expires) {
     return this.rows('UPDATE oauth_grants SET github = ?, expires = ? WHERE id = ? AND github = ? RETURNING id',github,expires,id,previous).length>0;
+  }
+  // Takes the renewal lock of a grant, or reports the grant's current sealed tokens, in one call.
+  tryRenewal(id,owner,ms) {
+    if(this.acquireLock(`grant-renewal:${id}`,owner,ms)) return {locked:true};
+    return {locked:false,grant:this.getGrant(id)};
   }
   touchGrant(id) {this.sql.exec('UPDATE oauth_grants SET used = ? WHERE id = ?',this.now(),id);}
   deleteGrant(id) {
