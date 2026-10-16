@@ -889,7 +889,9 @@ test('a chat app connects through OAuth, reads through MCP, keeps working after 
   // Hours later both tokens have expired: the app refreshes its own, and the Worker renews GitHub's.
   time+=9*3600000;
   assert.equal((await rpc('tools/list')).status,401,'access tokens last an hour');
+  assert.equal((await (await form('/oauth/token',{grant_type:'refresh_token',refresh_token:tokens.refresh_token,client_id:'f'.repeat(32)})).json()).error,'invalid_grant','another client cannot use it');
   const refreshed=await (await form('/oauth/token',{grant_type:'refresh_token',refresh_token:tokens.refresh_token,client_id})).json();
+  assert.ok(refreshed.access_token,'a wrong client does not burn the refresh token');
   assert.equal((await (await form('/oauth/token',{grant_type:'refresh_token',refresh_token:tokens.refresh_token,client_id})).json()).error,'invalid_grant','refresh tokens rotate');
   store.rows("DELETE FROM cache WHERE key LIKE 'repos:%'");
   // Two calls at once renew GitHub's token only once; both get an answer and the connection stays.

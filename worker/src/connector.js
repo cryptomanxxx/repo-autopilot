@@ -8,7 +8,7 @@ import {hex,randomHex,base64url,sha256,seal,unseal,sealState} from './crypto.js'
 import {readLimited} from './github.js';
 
 const HOUR=3600000,DAY=24*HOUR;
-export const ACCESS_MS=HOUR,REFRESH_MS=90*DAY,CODE_MS=60000,PENDING_MS=600000,NO_EXPIRY_MS=180*DAY;
+export const ACCESS_MS=HOUR,CODE_MS=60000,PENDING_MS=600000,NO_EXPIRY_MS=180*DAY;
 export const MCP_PROTOCOLS=['2025-11-25','2025-06-18','2025-03-26'];
 const GRANT='github-grant',CONSENT='connector-consent',MAX_FORM=16384,MAX_MCP=65536;
 
@@ -162,7 +162,8 @@ async function register(request,{store}) {
 async function issueTokens(grant,clientId,{store,now}) {
   const access=randomHex(),refresh=randomHex(),at=now();
   await store.putToken({hash:await tokenHash(access),grantId:grant.id,kind:'access',expires:at+ACCESS_MS});
-  await store.putToken({hash:await tokenHash(refresh),grantId:grant.id,kind:'refresh',data:{clientId},expires:Math.min(at+REFRESH_MS,grant.expires)});
+  // The app's refresh token lasts as long as the grant, so an app unused for months still reconnects.
+  await store.putToken({hash:await tokenHash(refresh),grantId:grant.id,kind:'refresh',data:{clientId},expires:grant.expires});
   return json(200,{access_token:access,token_type:'Bearer',expires_in:ACCESS_MS/1000,refresh_token:refresh,scope:'read'});
 }
 async function token(request,{store,now}) {
@@ -180,8 +181,11 @@ async function token(request,{store,now}) {
     return issueTokens(grant,params.client_id,{store,now});
   }
   if(params.grant_type==='refresh_token') {
-    const old=params.refresh_token?await store.takeToken(await tokenHash(params.refresh_token),'refresh'):null;
+    // Checked before it is used up, so a request with the wrong client cannot burn the app's token.
+    const hash=params.refresh_token?await tokenHash(params.refresh_token):null;
+    const old=hash&&await store.getToken(hash,'refresh');
     if(!old||(params.client_id&&old.data.clientId!==params.client_id)) return oauthError(400,'invalid_grant','The refresh token is invalid or expired. Connect again.');
+    if(!await store.takeToken(hash,'refresh')) return oauthError(400,'invalid_grant','The refresh token was already used. Connect again.');
     const grant=await store.getGrant(old.grantId);
     if(!grant) return oauthError(400,'invalid_grant','The connection was revoked. Connect again.');
     return issueTokens(grant,old.data.clientId,{store,now});

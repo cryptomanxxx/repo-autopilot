@@ -166,7 +166,7 @@ The chat shows what the agent works on and what it is doing:
 
 Claude and ChatGPT can read the same status the dashboard shows, through a connector in your own Worker. The address is shown under **Connected apps** in the dashboard: `https://repo-autopilot-chat.<your-subdomain>.workers.dev/mcp`. No review by Anthropic or OpenAI is needed; you add it yourself.
 
-- **Claude:** Customize → Connectors → **Add custom connector**, paste the address and click **Add**. If Claude asks how to identify itself, choose **Register automatically**. Custom connectors work on every Claude plan (the Free plan allows one).
+- **Claude:** Customize → Connectors → **Add custom connector**, paste the address and click **Add**. If Claude asks how to identify itself, choose **Register automatically**. Custom connectors work on every Claude plan, and the Free plan allows one ([Claude's documentation](https://claude.com/docs/connectors/custom/remote-mcp)).
 - **ChatGPT:** turn on **Developer mode** in the settings (a beta feature) and add an app with the same address.
 - Connecting shows a Repo Autopilot page naming the app and where it returns to. **Allow** signs you in with GitHub, then you are back in the chat app.
 
