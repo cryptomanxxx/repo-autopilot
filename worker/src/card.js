@@ -96,8 +96,8 @@ function cardView(protocol) {
   const time=at=>{
     const date=new Date(at);
     if(Number.isNaN(date.getTime())) return '';
-    // A locale the browser does not know falls back to its own.
-    try {return date.toLocaleString(context.locale||undefined,{dateStyle:'short',timeStyle:'short'});}
+    // The host's locale and time zone; one the browser does not know falls back to its own.
+    try {return date.toLocaleString(context.locale||undefined,{dateStyle:'short',timeStyle:'short',timeZone:context.timeZone||undefined});}
     catch {return date.toLocaleString(undefined,{dateStyle:'short',timeStyle:'short'});}
   };
   const short=sha=>sha?String(sha).slice(0,7):'';
@@ -146,6 +146,7 @@ function cardView(protocol) {
   function details(pr,single) {
     const box=el('div','details');
     if(!single&&pr.url) box.append(linkTo(el('a','gh',`Open #${pr.number} on GitHub`),pr.url));
+    if(pr.codex?.label) box.append(el('p','codex',pr.codex.label));
     if(pr.readiness?.reasons?.length&&!isReady(pr)) {
       const reasons=el('ul','reasons');
       for(const reason of pr.readiness.reasons) reasons.append(el('li','',reason));
@@ -167,7 +168,7 @@ function cardView(protocol) {
     const item=el('li',`pr ${tone(pr)}`);
     if(pr.detailsLoaded===false) {
       const head=el('div','pr-head');
-      head.append(el('span','number',`#${pr.number}`),el('span','title',pr.title));
+      head.append(el('span','number',`#${pr.number}`),pr.url?linkTo(el('a','title',pr.title),pr.url):el('span','title',pr.title));
       item.append(head,el('p','status',pr.error?`Details could not be read: ${pr.error}`:'Details not loaded yet. Ask about this pull request to load it.'));
       return item;
     }
@@ -308,6 +309,7 @@ a.f-title:hover{text-decoration:underline}
 .actions button[hidden]{display:none}
 .gh{align-self:flex-start;display:inline-flex;align-items:center;min-height:44px;color:var(--info);font-size:var(--font-text-xs-size,12px)}
 .problem{color:var(--bad)}
+.codex{margin:0;color:var(--fg2);font-size:var(--font-text-xs-size,12px);font-weight:var(--font-weight-medium,500)}
 .actions button:disabled{opacity:.5;cursor:default}
 `;
 
