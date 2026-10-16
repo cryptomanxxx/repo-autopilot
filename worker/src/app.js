@@ -3,6 +3,7 @@ import {repositoryName,createGitHub} from '../../src/github.js';
 import {PublicError,UserError} from './errors.js';
 import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
 import {connector,isConnectorPath,finishConnect,failConnect} from './connector.js';
+import {connectorTools} from './tools.js';
 export {UserError};
 import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
 
@@ -80,7 +81,7 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
       if(config.error) return withHeaders(json(503,{error:config.error}),secure);
       if(!config.sameOrigin) return withHeaders(json(404,{error:'Not found.'}),secure);
       const store=chatStore(env);
-      return withHeaders(await connector(request,url,{store,env,origin:config.origin,secure,fetchImpl,now,tools:connectorTools({store,fetchImpl})}),secure);
+      return withHeaders(await connector(request,url,{store,env,origin:config.origin,secure,fetchImpl,now,tools:connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData})}),secure);
     }
     if(!url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/auth/')) {
       if(!env.ASSETS) return withHeaders(new Response('Not found',{status:404}),secure);
@@ -218,23 +219,6 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   throw new UserError(404,'Not found.');
 }
 
-// The connector's tools. They only read, with the GitHub sign-in of the connected app.
-function connectorTools({store,fetchImpl}) {
-  return [{
-    name:'list_repositories',title:'List repositories',
-    description:'Lists the repositories Repo Autopilot can read: those where its GitHub App is installed, most recently pushed first.',
-    inputSchema:{type:'object',properties:{},additionalProperties:false},
-    annotations:{readOnlyHint:true,openWorldHint:false},
-    run:async(args,{token,grantId})=>{
-      const {list:repositories,truncated}=await readRepos({store,session:{token},hash:`grant:${grantId}`,fetchImpl});
-      // A list cut off at the limits says so, so a missing repository is not taken to be absent.
-      const note=truncated?'\n\nThis list may be incomplete: Repo Autopilot reads up to 5 GitHub App installations and 200 repositories each.':'';
-      const text=(repositories.length?repositories.map(r=>`${r.fullName}${r.private?' (private)':''}`).join('\n'):'No repositories yet: install the Repo Autopilot GitHub App on the ones you want to see.')+note;
-      return {content:[{type:'text',text}],structuredContent:{repositories,truncated}};
-    },
-  }];
-}
-
 // Repositories the owner can open: those where the GitHub App is installed, which are the only ones a
 // GitHub App user token reaches. Cached per session for a few minutes; most recently pushed first.
 async function accessibleRepos(options) {return (await readRepos(options)).list;}
@@ -335,23 +319,29 @@ async function dashboard(url,{store,session,fetchImpl,repository}) {
     return Number(value);
   };
   const pullLimit=limit('pulls',DASHBOARD_PULLS,DASHBOARD_MAX_PULLS),runLimit=limit('runs',DASHBOARD_RUNS,DASHBOARD_MAX_RUNS);
-  const client=createGitHub({token:session.token,fetchImpl,pullLimit,runLimit,userAgent:'repo-autopilot-chat'});
   const fresh=url.searchParams.get('fresh')==='1';
   const pull=/^\/api\/dashboard\/pulls\/([1-9]\d{0,8})$/.exec(url.pathname);
   if(url.pathname!=='/api/dashboard'&&!pull) throw new UserError(404,'Not found.');
   const updated=url.searchParams.get('updated')||'';
   if(updated.length>40) throw new UserError(400,'Invalid request.');
-  const repo=repository.toLowerCase(),key=pull?`pull:${repo}:${pull[1]}:${updated}`:`overview:${repo}${pullLimit===DASHBOARD_PULLS&&runLimit===DASHBOARD_RUNS?'':`:${pullLimit}:${runLimit}`}`;
+  const value=await dashboardData({store,token:session.token,fetchImpl,repository,number:pull?Number(pull[1]):null,updated,pullLimit,runLimit,fresh});
+  // Whether Codex was already asked to review the head is read on every response, outside the cache.
+  return json(200,pull&&value?.state==='open'&&value.headSha?{...value,codexReviewAsked:await store.hasCodexRequest('review',repository,value.number,value.headSha)}:value);
+}
+
+// The dashboard's data, from the cache when it is current: the overview of a repository, or one pull
+// request's details when a number is given. The connector's tools read the same data.
+export async function dashboardData({store,token,fetchImpl,repository,number=null,updated='',pullLimit=DASHBOARD_PULLS,runLimit=DASHBOARD_RUNS,fresh=false,cachedOnly=false}) {
+  const client=createGitHub({token,fetchImpl,pullLimit,runLimit,userAgent:'repo-autopilot-chat'});
+  const repo=repository.toLowerCase(),key=number?`pull:${repo}:${number}:${updated}`:`overview:${repo}${pullLimit===DASHBOARD_PULLS&&runLimit===DASHBOARD_RUNS?'':`:${pullLimit}:${runLimit}`}`;
   const cached=fresh?null:await store.getCache(key);
   if(cached?.refused) throw new UserError(cached.refused.status,cached.refused.message);
-  // Whether Codex was already asked to review the head is read on every response, outside the cache.
-  const withAsked=async item=>pull&&item?.state==='open'&&item.headSha?{...item,codexReviewAsked:await store.hasCodexRequest('review',repository,item.number,item.headSha)}:item;
-  if(cached) return json(200,await withAsked(cached));
+  if(cached||cachedOnly) return cached;
   const load=await store.startDashboardLoad(repository);
   let value,changed=false;
   try {
-    if(pull) {
-      const {item,warnings,changed:moved}=await client.pullDetails(repository,await client.pull(repository,Number(pull[1])));
+    if(number) {
+      const {item,warnings,changed:moved}=await client.pullDetails(repository,await client.pull(repository,number));
       value={...item,warnings};changed=moved;
     } else {
       const {repo:ignored,pulls,...rest}=await client.overview(repository);
@@ -372,8 +362,8 @@ async function dashboard(url,{store,session,fetchImpl,repository}) {
   }
   // A result with a failed part is cached only briefly, so a transient GitHub error does not stick. A pull
   // request that changed while loading is not cached at all: the next load should read it again.
-  if(!changed) await store.setDashboardCache(key,value,value.detailError?ERROR_CACHE_MS:pull&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS,{repository,...load,pull:pull?{number:Number(pull[1]),sha:value.headSha}:null});
-  return json(200,await withAsked(value));
+  if(!changed) await store.setDashboardCache(key,value,value.detailError?ERROR_CACHE_MS:number&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS,{repository,...load,pull:number?{number,sha:value.headSha}:null});
+  return value;
 }
 
 async function chat(body,{env,store,github,config,access,fetchImpl}) {

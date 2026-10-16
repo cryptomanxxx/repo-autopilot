@@ -1,0 +1,117 @@
+// The connector's tools. They only read: the same data the dashboard shows, through the same cache, with
+// the GitHub sign-in of the connected app.
+import {findingStatus,FINDING_STATES} from '../public/dashboard-view.js';
+
+// At most this many pull requests are loaded from GitHub in one list call; the rest come from the cache
+// or are marked as not loaded, so a call stays within the Workers subrequest limit.
+export const FRESH_DETAILS=2;
+const READ_ONLY={readOnlyHint:true,openWorldHint:false};
+const REPOSITORY={type:'string',description:'Repository as owner/name, for example "octocat/hello-world". Defaults to the Repo Autopilot repository itself.'};
+
+const ciText=ci=>({success:'passed',failure:'failed',pending:'running',unknown:'no checks reported'})[ci]||ci;
+const short=sha=>sha?String(sha).slice(0,7):'';
+function findingLines(item) {
+  const clearedAt=item.codex?.state==='clear'?item.codex.clearedAt:null;
+  const findings=(item.progress?.findings?.items||[]).map(f=>({...f,status:findingStatus(f,{clearedAt})}));
+  findings.sort((a,b)=>FINDING_STATES[a.status.state].order-FINDING_STATES[b.status.state].order||Date.parse(b.at)-Date.parse(a.at));
+  return findings;
+}
+function findingCounts(findings) {
+  const count=state=>findings.filter(f=>f.status.state===state).length;
+  return {open:count('open'),waiting:count('changed'),unverified:count('unverified'),fixed:count('fixed')};
+}
+const countsText=c=>[`${c.open} open`,c.waiting&&`${c.waiting} waiting for Codex`,c.unverified&&`${c.unverified} unverified`,c.fixed&&`${c.fixed} fixed`].filter(Boolean).join(' · ');
+
+// One pull request as the tools report it: what the dashboard row and its details show.
+export function pullSummary(item) {
+  const findings=findingLines(item);
+  return {
+    number:item.number,title:item.title,url:item.url,state:item.state,draft:Boolean(item.draft),headSha:item.headSha,updatedAt:item.updatedAt,mergedAt:item.mergedAt||null,
+    readiness:{state:item.readiness?.state,label:item.readiness?.label,reasons:item.readiness?.reasons||[]},
+    ci:item.ci,codex:{state:item.codex?.state,label:item.codex?.label},
+    findings:findings.map(f=>({priority:f.priority,title:f.title,path:f.path,line:f.line,url:f.url,current:f.current,state:f.status.state,why:f.status.why||null})),
+    findingCounts:findingCounts(findings),findingsIncomplete:Boolean(item.progress?.findings?.incomplete),
+    activity:(item.progress?.events||[]).slice(-10).map(e=>({kind:e.kind,label:e.label,at:e.at,commit:e.commit||null})),
+    detailError:item.detailError||null,
+  };
+}
+function statusText(repository,s) {
+  const lines=[`${repository} #${s.number} ${s.title} (${s.state}${s.draft?', draft':''})`,s.url,'',`Merge: ${s.readiness.label}`];
+  for(const reason of s.readiness.reasons) lines.push(`  - ${reason}`);
+  lines.push(`CI: ${ciText(s.ci)}`,`Codex: ${s.codex.label}`);
+  if(s.findings.length) {
+    lines.push(`Codex findings: ${countsText(s.findingCounts)}${s.findingsIncomplete?' (list may be incomplete)':''}`);
+    for(const f of s.findings) lines.push(`  ${FINDING_STATES[f.state].icon} ${f.priority} ${f.title} (${f.path?`${f.path}${f.line?`:${f.line}`:''}`:'location unknown'}; ${f.current?'current code':'older commit'}; ${FINDING_STATES[f.state].label}${f.why?`: ${f.why}`:''}) ${f.url||''}`.trimEnd());
+  } else lines.push('Codex findings: none');
+  if(s.activity.length) {
+    lines.push('Recent activity:');
+    for(const e of s.activity) lines.push(`  ${e.at.slice(0,16).replace('T',' ')} ${e.label}${e.commit?` (${short(e.commit)})`:''}`);
+  }
+  if(s.detailError) lines.push('',`Some details could not be read: ${s.detailError}`);
+  lines.push('','Merging happens in the Repo Autopilot dashboard.');
+  return lines.join('\n');
+}
+
+export function connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData}) {
+  const access=(token,grantId)=>({store,session:{token},hash:`grant:${grantId}`,config,fetchImpl});
+  const repositoryOf=async(args,token,grantId)=>{
+    if(args.repository!==undefined&&typeof args.repository!=='string') throw Object.assign(new Error('repository must be a string like "owner/name".'),{expose:true});
+    return resolveRepository(args.repository,access(token,grantId));
+  };
+  return [{
+    name:'list_repositories',title:'List repositories',
+    description:'Lists the repositories Repo Autopilot can read: those where its GitHub App is installed, most recently pushed first.',
+    inputSchema:{type:'object',properties:{},additionalProperties:false},
+    annotations:READ_ONLY,
+    run:async(args,{token,grantId})=>{
+      const {list:repositories,truncated}=await readRepos(access(token,grantId));
+      // A list cut off at the limits says so, so a missing repository is not taken to be absent.
+      const note=truncated?'\n\nThis list may be incomplete: Repo Autopilot reads up to 5 GitHub App installations and 200 repositories each.':'';
+      const text=(repositories.length?repositories.map(r=>`${r.fullName}${r.private?' (private)':''}`).join('\n'):'No repositories yet: install the Repo Autopilot GitHub App on the ones you want to see.')+note;
+      return {content:[{type:'text',text}],structuredContent:{repositories,truncated}};
+    },
+  },{
+    name:'list_pull_requests',title:'List pull requests',
+    description:'Lists the most recently updated pull requests of a repository, as the Repo Autopilot dashboard shows them: merge readiness, CI, Codex review status and Codex findings. Use pull_request_status for the full details of one.',
+    inputSchema:{type:'object',properties:{repository:REPOSITORY},additionalProperties:false},
+    annotations:READ_ONLY,
+    run:async(args,{token,grantId})=>{
+      const repository=await repositoryOf(args,token,grantId);
+      const overview=await dashboardData({store,token,fetchImpl,repository});
+      let fresh=0;
+      const pulls=[];
+      for(const pr of overview.pulls) {
+        let item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,cachedOnly:true});
+        // Open pull requests matter most, so they are loaded from GitHub first, within the budget.
+        if(!item&&pr.state==='open'&&fresh<FRESH_DETAILS) {fresh++;item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt});}
+        pulls.push(item?pullSummary(item):{number:pr.number,title:pr.title,url:pr.url,state:pr.state,updatedAt:pr.updatedAt,detailsLoaded:false});
+      }
+      const lines=[`${repository}: ${pulls.length} most recently updated pull requests`];
+      for(const p of pulls) {
+        if(p.detailsLoaded===false) {lines.push(`#${p.number} ${p.title} (${p.state}): details not loaded; ask for pull_request_status`);continue;}
+        const parts=[p.state,p.readiness.label,`CI ${ciText(p.ci)}`,p.codex.label];
+        if(p.findings.length) parts.push(`findings ${countsText(p.findingCounts)}`);
+        lines.push(`#${p.number} ${p.title}: ${parts.join(' · ')}`);
+      }
+      if(!pulls.length) lines.push('No pull requests found.');
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,pulls}};
+    },
+  },{
+    name:'pull_request_status',title:'Pull request status',
+    description:'Shows one pull request as the Repo Autopilot dashboard does: whether it is ready to merge and why not, CI, Codex review status, every Codex finding with its state (open, waiting for Codex, fixed) and recent activity.',
+    inputSchema:{type:'object',properties:{repository:REPOSITORY,number:{type:'integer',minimum:1,description:'Pull request number.'}},required:['number'],additionalProperties:false},
+    annotations:READ_ONLY,
+    run:async(args,{token,grantId})=>{
+      if(!Number.isSafeInteger(args.number)||args.number<1) throw Object.assign(new Error('number must be a pull request number.'),{expose:true});
+      const repository=await repositoryOf(args,token,grantId);
+      // The overview gives the pull request's last update, which keys the dashboard's cache.
+      const overview=await dashboardData({store,token,fetchImpl,repository});
+      const listed=overview.pulls.find(p=>p.number===args.number);
+      let item;
+      try {item=await dashboardData({store,token,fetchImpl,repository,number:args.number,updated:listed?.updatedAt||''});}
+      catch(error) {if(error?.status===404) throw Object.assign(new Error(`${repository} has no pull request #${args.number}.`),{expose:true});throw error;}
+      const summary=pullSummary(item);
+      return {content:[{type:'text',text:statusText(repository,summary)}],structuredContent:{repository,...summary}};
+    },
+  }];
+}

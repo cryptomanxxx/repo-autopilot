@@ -932,3 +932,69 @@ test('a cancelled GitHub sign-in returns the error to the connecting app, and pe
   for(let i=0;i<25;i++) await start();
   assert.equal(store.rows('SELECT COUNT(*) AS n FROM oauth_pending')[0].n,20,'at most 20 connections wait for GitHub');
 });
+
+// Connects a chat app through the connector's OAuth flow and returns its access token.
+async function connectApp(env,fetchImpl) {
+  const call=(path,options={})=>handle(request(path,options),env,{fetchImpl});
+  const {client_id}=await (await call('/oauth/register',{method:'POST',body:{client_name:'Claude',redirect_uris:['https://claude.ai/api/mcp/auth_callback']}})).json();
+  const verifier='x'.repeat(50),challenge=createHash('sha256').update(verifier).digest('base64url');
+  const consent=await call(`/oauth/authorize?${new URLSearchParams({response_type:'code',client_id,redirect_uri:'https://claude.ai/api/mcp/auth_callback',code_challenge:challenge,code_challenge_method:'S256'})}`);
+  const html=await consent.text();
+  const allowed=await handle(new Request(ORIGIN+'/oauth/authorize',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Origin:ORIGIN,Cookie:consent.headers.get('Set-Cookie').split(';')[0]},body:new URLSearchParams({request:html.match(/name="request" value="([^"]+)"/)[1],consent:html.match(/name="consent" value="([0-9a-f]+)"/)[1],decision:'allow'})}),env,{fetchImpl});
+  const browser=allowed.headers.getSetCookie().find(c=>c.startsWith('autopilot_login=')).match(/=([0-9a-f]+)/)[1];
+  const back=await call(`/auth/callback?code=c&state=${encodeURIComponent(new URL(allowed.headers.get('Location')).searchParams.get('state'))}`,{cookie:`autopilot_login=${browser}`});
+  const code=new URL(back.headers.get('Location')).searchParams.get('code');
+  const tokens=await (await handle(new Request(ORIGIN+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',code,redirect_uri:'https://claude.ai/api/mcp/auth_callback',client_id,code_verifier:verifier})}),env,{fetchImpl})).json();
+  return tokens.access_token;
+}
+
+test('the connector lists pull requests and shows one as the dashboard does, from the same cache',async()=>{
+  const {env}=environment(),calls=[];
+  const bot={login:'chatgpt-codex-connector[bot]'},head='b'.repeat(40);
+  const pulls=[
+    {number:1,title:'Add the benchmark',html_url:'https://github.com/owner/repo/pull/1',state:'open',merged_at:null,updated_at:'2026-10-16T10:00:00Z',created_at:'2026-10-16T09:00:00Z',draft:false,head:{sha:head},base:{ref:'main'},mergeable:true},
+    {number:2,title:'Update sources',html_url:'https://github.com/owner/repo/pull/2',state:'closed',merged_at:'2026-10-15T10:00:00Z',updated_at:'2026-10-15T10:00:00Z',created_at:'2026-10-15T09:00:00Z',draft:false,head:{sha:'c'.repeat(40)},base:{ref:'main'},mergeable:null},
+  ];
+  const finding={id:11,user:bot,body:'**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub></sub>  Fix sampling parameters**',path:'research/bench.py',line:68,original_commit_id:'a'.repeat(40),created_at:'2026-10-16T09:30:00Z',html_url:'https://github.com/owner/repo/pull/1#discussion_r11'};
+  const fetchImpl=async(url,options={})=>{
+    calls.push({url,options});
+    const ok=value=>Response.json(value);
+    if(url==='https://github.com/login/oauth/access_token') return ok({access_token:'ghu_user',expires_in:28800,refresh_token:'ghr_1',refresh_token_expires_in:15811200,scope:''});
+    if(url==='https://api.github.com/user') return ok({login:'owner'});
+    if(url==='https://api.github.com/user/installations?per_page=100') return ok({installations:[{id:1}]});
+    if(url.startsWith('https://api.github.com/user/installations/1/repositories')) return ok({repositories:[{full_name:'owner/repo',private:false,pushed_at:'2026-10-01T00:00:00Z'}]});
+    if(url==='https://api.github.com/graphql') return ok({data:{repository:{pullRequest:{headRefOid:pulls[JSON.parse(options.body).variables.number-1].head.sha,mergeStateStatus:'BLOCKED',reviewDecision:null,reviewThreads:{pageInfo:{hasNextPage:false},nodes:[{isResolved:false,isOutdated:true,comments:{nodes:[{fullDatabaseId:'11'}]}}]}}}}});
+    const path=url.replace('https://api.github.com/repos/owner/repo','');
+    if(path==='') return ok({full_name:'owner/repo',html_url:'https://github.com/owner/repo'});
+    if(path.startsWith('/pulls?state=all')) return ok(pulls);
+    if(path.startsWith('/actions/runs')) return ok({workflow_runs:[]});
+    const single=/^\/pulls\/(\d+)$/.exec(path);
+    if(single) return pulls[Number(single[1])-1]?ok(pulls[Number(single[1])-1]):new Response('{}',{status:404});
+    if(path==='/pulls/1/comments?per_page=100') return ok([finding]);
+    if(/\/check-runs/.test(path)) return ok({total_count:1,check_runs:[{name:'test',status:'in_progress',conclusion:null}]});
+    if(/\/status\?/.test(path)) return ok({statuses:[]});
+    return ok([]);
+  };
+  const token=await connectApp(env,fetchImpl);
+  const tool=async(name,args)=>(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json()).result;
+  const {result:{tools}}=await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/list'},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json();
+  assert.deepEqual(tools.map(t=>t.name),['list_repositories','list_pull_requests','pull_request_status']);
+
+  const listed=await tool('list_pull_requests',{});
+  assert.equal(listed.structuredContent.repository,'owner/repo','the app\'s own repository is the default');
+  const [open,merged]=listed.structuredContent.pulls;
+  assert.deepEqual([open.number,open.ci,open.findingCounts.waiting],[1,'pending',1]);
+  assert.equal(merged.detailsLoaded,false,'closed pull requests are not loaded from GitHub by the list');
+  assert.match(listed.content[0].text,/#1 Add the benchmark: open · Not ready to merge · CI running/);
+  assert.match(listed.content[0].text,/#2 Update sources \(merged\): details not loaded/);
+
+  calls.length=0;
+  const status=await tool('pull_request_status',{number:1});
+  assert.equal(calls.filter(c=>c.url.startsWith('https://api.github.com/repos/')).length,0,'the status comes from the cache the list filled');
+  assert.match(status.content[0].text,/Merge: Not ready to merge/);
+  assert.match(status.content[0].text,/🔄 P2 Fix sampling parameters \(research\/bench\.py:68; older commit; code changed, waiting for Codex\)/);
+  assert.equal(status.structuredContent.findings[0].state,'changed');
+  assert.match((await tool('pull_request_status',{number:9})).content[0].text,/no pull request #9/);
+  const other=await tool('pull_request_status',{repository:'someone/else',number:1});
+  assert.equal(other.isError,true);assert.match(other.content[0].text,/cannot reach someone\/else/);
+});
