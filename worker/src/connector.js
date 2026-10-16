@@ -10,6 +10,9 @@ import {readLimited} from './github.js';
 const HOUR=3600000,DAY=24*HOUR;
 export const ACCESS_MS=HOUR,CODE_MS=60000,PENDING_MS=600000,NO_EXPIRY_MS=180*DAY;
 export const MCP_PROTOCOLS=['2025-11-25','2025-06-18','2025-03-26'];
+// offline_access is advertised because clients such as ChatGPT ask for it before relying on refresh
+// tokens; every connection gets one either way.
+const SCOPES=['read','offline_access'];
 const GRANT='github-grant',CONSENT='connector-consent',MAX_FORM=16384,MAX_MCP=65536;
 
 export const isConnectorPath=path=>path==='/mcp'||path.startsWith('/oauth/')||path.startsWith('/.well-known/oauth-');
@@ -44,10 +47,10 @@ async function readParams(request) {
 }
 
 export function resourceMetadata(origin) {
-  return {resource:`${origin}/mcp`,authorization_servers:[origin],bearer_methods_supported:['header'],scopes_supported:['read'],resource_name:'Repo Autopilot'};
+  return {resource:`${origin}/mcp`,authorization_servers:[origin],bearer_methods_supported:['header'],scopes_supported:SCOPES,resource_name:'Repo Autopilot'};
 }
 export function serverMetadata(origin) {
-  return {issuer:origin,authorization_endpoint:`${origin}/oauth/authorize`,token_endpoint:`${origin}/oauth/token`,registration_endpoint:`${origin}/oauth/register`,response_types_supported:['code'],response_modes_supported:['query'],grant_types_supported:['authorization_code','refresh_token'],code_challenge_methods_supported:['S256'],token_endpoint_auth_methods_supported:['none'],scopes_supported:['read'],authorization_response_iss_parameter_supported:true};
+  return {issuer:origin,authorization_endpoint:`${origin}/oauth/authorize`,token_endpoint:`${origin}/oauth/token`,registration_endpoint:`${origin}/oauth/register`,response_types_supported:['code'],response_modes_supported:['query'],grant_types_supported:['authorization_code','refresh_token'],code_challenge_methods_supported:['S256'],token_endpoint_auth_methods_supported:['none'],scopes_supported:SCOPES,authorization_response_iss_parameter_supported:true};
 }
 
 // The authorization request, checked in full before anything is shown. Problems with the client or its
@@ -164,7 +167,7 @@ async function issueTokens(grant,clientId,{store,now}) {
   await store.putToken({hash:await tokenHash(access),grantId:grant.id,kind:'access',expires:at+ACCESS_MS});
   // The app's refresh token lasts as long as the grant, so an app unused for months still reconnects.
   await store.putToken({hash:await tokenHash(refresh),grantId:grant.id,kind:'refresh',data:{clientId},expires:grant.expires});
-  return json(200,{access_token:access,token_type:'Bearer',expires_in:ACCESS_MS/1000,refresh_token:refresh,scope:'read'});
+  return json(200,{access_token:access,token_type:'Bearer',expires_in:ACCESS_MS/1000,refresh_token:refresh,scope:SCOPES.join(' ')});
 }
 async function token(request,{store,now}) {
   const params=await readParams(request);
@@ -262,7 +265,7 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
   await store.touchGrant(grant.id);
   if(method==='initialize') {
     const requested=params?.protocolVersion;
-    return rpcResult(id,{protocolVersion:MCP_PROTOCOLS.includes(requested)?requested:MCP_PROTOCOLS[0],capabilities:{tools:{listChanged:false}},serverInfo:{name:'repo-autopilot',title:'Repo Autopilot',version:'0.2.0'},instructions:'Read-only status from the owner\'s Repo Autopilot: repositories, pull requests, CI, Codex reviews and findings. Nothing can be changed through these tools; merging happens in the Repo Autopilot dashboard.'});
+    return rpcResult(id,{protocolVersion:MCP_PROTOCOLS.includes(requested)?requested:MCP_PROTOCOLS[0],capabilities:{tools:{listChanged:false}},serverInfo:{name:'repo-autopilot',title:'Repo Autopilot',version:'0.2.0'},instructions:'Read-only access to the owner\'s Repo Autopilot. For now it lists the repositories Repo Autopilot can read. Nothing can be changed through these tools; merging happens in the Repo Autopilot dashboard.'});
   }
   if(method==='ping') return rpcResult(id,{});
   if(method==='tools/list') return rpcResult(id,{tools:tools.map(({run,...tool})=>tool)});

@@ -835,7 +835,7 @@ test('a chat app connects through OAuth, reads through MCP, keeps working after 
   const resource=await (await call('/.well-known/oauth-protected-resource')).json();
   assert.deepEqual([resource.resource,resource.authorization_servers],[`${ORIGIN}/mcp`,[ORIGIN]]);
   const metadata=await (await call('/.well-known/oauth-authorization-server')).json();
-  assert.equal(metadata.registration_endpoint,`${ORIGIN}/oauth/register`);assert.deepEqual(metadata.code_challenge_methods_supported,['S256']);
+  assert.equal(metadata.registration_endpoint,`${ORIGIN}/oauth/register`);assert.ok(metadata.scopes_supported.includes('offline_access'),'ChatGPT looks for offline_access before relying on refresh tokens');assert.deepEqual(metadata.code_challenge_methods_supported,['S256']);
   const anonymous=await call('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'initialize'}});
   assert.equal(anonymous.status,401);assert.match(anonymous.headers.get('WWW-Authenticate'),/resource_metadata="https:\/\/chat\.example\.workers\.dev\/\.well-known\/oauth-protected-resource"/);
 
@@ -884,6 +884,7 @@ test('a chat app connects through OAuth, reads through MCP, keeps working after 
   assert.ok(tools.every(t=>t.annotations.readOnlyHint===true),'every tool only reads');
   const listed=await (await rpc('tools/call',{name:'list_repositories',arguments:{}})).json();
   assert.match(listed.result.content[0].text,/owner\/repo/);
+  assert.equal(listed.result.structuredContent.truncated,false);
   assert.equal(calls.filter(c=>c.url.includes('/user/installations')).at(-1).options.headers.Authorization,'Bearer ghu_first');
 
   // Hours later both tokens have expired: the app refreshes its own, and the Worker renews GitHub's.

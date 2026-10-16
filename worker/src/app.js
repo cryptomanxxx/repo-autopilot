@@ -226,18 +226,25 @@ function connectorTools({store,fetchImpl}) {
     inputSchema:{type:'object',properties:{},additionalProperties:false},
     annotations:{readOnlyHint:true,openWorldHint:false},
     run:async(args,{token,grantId})=>{
-      const repositories=await accessibleRepos({store,session:{token},hash:`grant:${grantId}`,fetchImpl});
-      const text=repositories.length?repositories.map(r=>`${r.fullName}${r.private?' (private)':''}`).join('\n'):'No repositories yet: install the Repo Autopilot GitHub App on the ones you want to see.';
-      return {content:[{type:'text',text}],structuredContent:{repositories}};
+      const {list:repositories,truncated}=await readRepos({store,session:{token},hash:`grant:${grantId}`,fetchImpl});
+      // A list cut off at the limits says so, so a missing repository is not taken to be absent.
+      const note=truncated?'\n\nThis list may be incomplete: Repo Autopilot reads up to 5 GitHub App installations and 200 repositories each.':'';
+      const text=(repositories.length?repositories.map(r=>`${r.fullName}${r.private?' (private)':''}`).join('\n'):'No repositories yet: install the Repo Autopilot GitHub App on the ones you want to see.')+note;
+      return {content:[{type:'text',text}],structuredContent:{repositories,truncated}};
     },
   }];
 }
 
 // Repositories the owner can open: those where the GitHub App is installed, which are the only ones a
 // GitHub App user token reaches. Cached per session for a few minutes; most recently pushed first.
-async function accessibleRepos({store,session,hash,fetchImpl,fresh=false}) {
+async function accessibleRepos(options) {return (await readRepos(options)).list;}
+// The same list, and whether it was cut off at the limits below.
+async function readRepos({store,session,hash,fetchImpl,fresh=false}) {
   const key=`repos:${hash}`;
-  if(!fresh) {const cached=await store.getCache(key);if(cached) return cached;}
+  if(!fresh) {
+    const cached=await store.getCache(key);
+    if(cached) return Array.isArray(cached)?{list:cached,truncated:false}:cached;
+  }
   const get=async path=>{
     const response=await fetchImpl(`https://api.github.com${path}`,{headers:{Authorization:`Bearer ${session.token}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'repo-autopilot-chat'},signal:AbortSignal.timeout(20000)});
     if(!response.ok) throw new GitHubError(response.status,path);
@@ -246,17 +253,20 @@ async function accessibleRepos({store,session,hash,fetchImpl,fresh=false}) {
   const found=new Map();
   const {installations=[]}=await get('/user/installations?per_page=100');
   // At most 11 GitHub calls, so a request that reads the list twice stays within the subrequest limit.
+  let truncated=installations.length>5;
   for(const installation of installations.slice(0,5)) {
     if(!Number.isSafeInteger(installation?.id)) continue;
     for(let page=1;page<=2;page++) {
       const {repositories=[]}=await get(`/user/installations/${installation.id}/repositories?per_page=100&page=${page}`);
       for(const repo of repositories) if(typeof repo?.full_name==='string') found.set(repo.full_name.toLowerCase(),{fullName:repo.full_name,private:Boolean(repo.private),pushedAt:repo.pushed_at||null});
       if(repositories.length<100) break;
+      if(page===2) truncated=true;
     }
   }
   const list=[...found.values()].sort((a,b)=>String(b.pushedAt).localeCompare(String(a.pushedAt))||a.fullName.localeCompare(b.fullName));
-  await store.setCache(key,list,REPOS_CACHE_MS);
-  return list;
+  const result={list,truncated};
+  await store.setCache(key,result,REPOS_CACHE_MS);
+  return result;
 }
 
 // The repository a request works on: the requested one if the owner can reach it, else the app's own.
