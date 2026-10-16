@@ -175,6 +175,11 @@ The tools, all read-only and reading the same data and cache as the dashboard:
 - `list_repositories`: the repositories Repo Autopilot reads.
 - `list_pull_requests`: a repository's most recently updated pull requests with merge readiness, CI, Codex status and finding counts. To stay within the Workers subrequest limit, at most two pull requests are loaded from GitHub per call; the others come from the cache or are marked as not loaded.
 - `pull_request_status`: one pull request in full: why it is or is not ready to merge, CI, Codex status, every Codex finding with its state (open, waiting for Codex, fixed) and recent activity.
+- Both pull request tools take `fresh: true` to read GitHub again instead of the cache, which the card's **Refresh** uses: CI results, for example, change without changing a pull request's update time.
+
+**The Repo Autopilot card.** In chat apps that support [MCP Apps](https://modelcontextprotocol.io/extensions/apps), the two pull request tools also show their result as a card next to the answer: the pull requests with merge readiness, CI and finding counts, filters (**All**, **Needs attention**, **Ready**), and each pull request's Codex findings and recent activity when you open it. Many fixed findings are folded away. **Refresh** loads the same tool again, **Full screen** is offered where the app supports it, and **Open dashboard** opens your Repo Autopilot, where merging happens. The card only shows what the tool returned: it loads nothing from other sites and cannot change anything. Claude shows it in chats on the web, the desktop app and the mobile apps; Claude Code shows the same result as text.
+
+New tools or cards reach a chat app when it reads the connector's tool list again. In Claude, that happens when you disconnect and connect Repo Autopilot again; code changes to existing tools take effect at once.
 
 Ask Claude or ChatGPT things like "Which pull requests are ready to merge?" or "Why is #80 not ready, and what do its Codex findings mean?". Every tool only reads: nothing can be changed, commented on or merged through the connector, and merging stays in the dashboard.
 
