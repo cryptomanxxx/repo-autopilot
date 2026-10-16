@@ -14,7 +14,7 @@ function cardView(protocol) {
   const ORDER={open:0,changed:1,unverified:2,fixed:3};
   const CI={success:'CI passed',failure:'CI failed',pending:'CI running',unknown:'No checks'};
   const pending=new Map();
-  let nextId=1,context={},args=null,result=null,tool=null,filter='all',busy=false,loadedAt=null;
+  let nextId=1,context={},caps={},args=null,data=null,failure=null,waiting=true,tool=null,filter='all',busy=false,loadedAt=null;
   const expanded=new Set(),showFixed=new Set();
   const $=id=>document.getElementById(id);
   const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls) node.className=cls;if(text!==undefined) node.textContent=text;return node;};
@@ -28,17 +28,17 @@ function cardView(protocol) {
     const message=event.data;
     if(!message||message.jsonrpc!=='2.0') return;
     if(message.method===undefined) {
-      const waiting=pending.get(message.id);
-      if(!waiting) return;
+      const entry=pending.get(message.id);
+      if(!entry) return;
       pending.delete(message.id);
-      if(message.error) waiting.reject(new Error(message.error.message||'The chat app refused the request.'));
-      else waiting.resolve(message.result);
+      if(message.error) entry.reject(new Error(message.error.message||'The chat app refused the request.'));
+      else entry.resolve(message.result);
       return;
     }
     const reply=value=>{if(message.id!==undefined) post({id:message.id,result:value});};
     if(message.method==='ui/notifications/tool-input') args=message.params?.arguments||{};
-    else if(message.method==='ui/notifications/tool-result') {result=message.params;loadedAt=new Date();render();}
-    else if(message.method==='ui/notifications/tool-cancelled') {result=null;$('body').replaceChildren(el('p','note','The request was cancelled.'));}
+    else if(message.method==='ui/notifications/tool-result') {take(message.params);render();}
+    else if(message.method==='ui/notifications/tool-cancelled') {waiting=false;failure='The request was cancelled.';render();}
     else if(message.method==='ui/notifications/host-context-changed') {applyContext(message.params||{});render();}
     else if(message.method==='ui/resource-teardown'||message.method==='ping') reply({});
     else if(message.id!==undefined) post({id:message.id,error:{code:-32601,message:`Method not found: ${message.method}`}});
@@ -73,7 +73,26 @@ function cardView(protocol) {
     });
   };
 
-  const openLink=url=>{if(/^https:\/\//.test(url||'')) request('ui/open-link',{url}).catch(()=>{});};
+  // A tool result replaces what is shown; a failed one keeps the last good data and says what went wrong.
+  function take(value) {
+    waiting=false;
+    if(value?.structuredContent&&!value.isError) {data=value.structuredContent;failure=null;loadedAt=new Date();return;}
+    failure=value?.content?.find(c=>c.type==='text')?.text||'Repo Autopilot could not answer.';
+  }
+  // Links open through the host when it offers that; otherwise they are ordinary links in a new tab.
+  const linkTo=(node,url)=>{
+    if(!/^https:\/\//.test(url||'')) return node;
+    node.href=url;node.target='_blank';node.rel='noopener noreferrer';
+    node.onclick=event=>{if(!caps.openLinks) return;event.preventDefault();request('ui/open-link',{url}).catch(()=>{});};
+    return node;
+  };
+  // The same tool again, with the arguments the host passed, or worked out from the data shown.
+  const refreshCall=()=>{
+    if(!caps.serverTools) return null;
+    const name=tool||(data?(data.pulls?'list_pull_requests':'pull_request_status'):null);
+    const call=args||(data?(data.pulls?{repository:data.repository}:{repository:data.repository,number:data.number}):null);
+    return name&&call?{name,arguments:call}:null;
+  };
   const time=at=>{
     const date=new Date(at);
     if(Number.isNaN(date.getTime())) return '';
@@ -106,8 +125,7 @@ function cardView(protocol) {
       const item=el('li',`finding ${f.state}`);
       item.append(el('span','icon',ICONS[f.state]||'•'),el('span','priority',f.priority||''));
       const text=el('span','f-text');
-      const title=f.url?el('a','f-title',f.title):el('span','f-title',f.title);
-      if(f.url) {title.href=f.url;title.onclick=event=>{event.preventDefault();openLink(f.url);};}
+      const title=f.url?linkTo(el('a','f-title',f.title),f.url):el('span','f-title',f.title);
       const where=f.path?`${f.path}${f.line?`:${f.line}`:''}`:'location unknown';
       const version=f.current?'current code':f.commit?`older commit ${short(f.commit)}`:'commit unknown';
       text.append(title,el('span','f-where',`${where} · ${version} · ${LABELS[f.state]||f.state}`));
@@ -125,8 +143,9 @@ function cardView(protocol) {
     return list;
   }
 
-  function details(pr) {
+  function details(pr,single) {
     const box=el('div','details');
+    if(!single&&pr.url) box.append(linkTo(el('a','gh',`Open #${pr.number} on GitHub`),pr.url));
     if(pr.readiness?.reasons?.length&&!isReady(pr)) {
       const reasons=el('ul','reasons');
       for(const reason of pr.readiness.reasons) reasons.append(el('li','',reason));
@@ -155,7 +174,7 @@ function cardView(protocol) {
     // One pull request is always shown in full; in a list, each row opens and closes.
     const head=el(single?'div':'button','pr-head');
     head.append(el('span','number',`#${pr.number}`));
-    if(single&&pr.url) {const link=el('a','title',pr.title);link.href=pr.url;link.onclick=event=>{event.preventDefault();openLink(pr.url);};head.append(link);}
+    if(single&&pr.url) head.append(linkTo(el('a','title',pr.title),pr.url));
     else head.append(el('span','title',pr.title));
     if(!single) {
       head.type='button';
@@ -167,16 +186,22 @@ function cardView(protocol) {
     status.append(el('span','badge',pr.readiness?.label||pr.state),el('span','',` · ${ciText(pr)} · ${countsText(pr)}`));
     if(single) item.append(head,status);
     else {head.append(status);item.append(head);}
-    if(open) item.append(details(pr));
+    if(open) item.append(details(pr,single));
     return item;
   }
 
   function render() {
-    const data=result?.structuredContent;
     const body=$('body');
+    const call=refreshCall();
+    $('refresh').hidden=!call;
+    $('refresh').disabled=busy;
+    $('refresh').textContent=busy?'Refreshing…':failure?'Try again':'Refresh';
+    const modes=context.availableDisplayModes||[];
+    $('expand').hidden=!modes.includes('fullscreen');
+    $('expand').textContent=context.displayMode==='fullscreen'?'Exit full screen':'Full screen';
+    const problem=failure&&el('p','note problem',failure);
     if(!data) {
-      const text=result?.content?.find(c=>c.type==='text')?.text;
-      body.replaceChildren(el('p','note',result?.isError?text||'Repo Autopilot could not answer.':'Loading from Repo Autopilot…'));
+      body.replaceChildren(problem||el('p','note',waiting?'Loading from Repo Autopilot…':'Nothing to show.'));
       measure();
       return;
     }
@@ -195,14 +220,9 @@ function cardView(protocol) {
     const shown=single?pulls:pulls.filter(pr=>filter==='all'||(filter==='ready'?isReady(pr):needsAttention(pr)));
     const list=el('ul','pulls');
     for(const pr of shown) list.append(row(pr,single||expanded.has(pr.number),single));
-    const nodes=[shown.length?list:el('p','note',filter==='ready'?'No pull request is ready to merge.':'Nothing needs attention.')];
+    const nodes=[...(problem?[problem]:[]),shown.length?list:el('p','note',filter==='ready'?'No pull request is ready to merge.':'Nothing needs attention.')];
     if(data.mayHaveMore) nodes.push(el('p','note',`Only the ${data.limit} most recently updated pull requests are shown.`));
     body.replaceChildren(...nodes);
-    const modes=context.availableDisplayModes||[];
-    $('expand').hidden=!modes.includes('fullscreen');
-    $('expand').textContent=context.displayMode==='fullscreen'?'Exit full screen':'Full screen';
-    $('refresh').disabled=busy;
-    $('refresh').textContent=busy?'Refreshing…':'Refresh';
     measure();
   }
 
@@ -214,17 +234,13 @@ function cardView(protocol) {
   };
   // Loading the same tool again through the host gives fresh data; the server still checks the sign-in.
   $('refresh').onclick=async()=>{
-    const data=result?.structuredContent;
-    if(busy||!data) return;
-    // Hosts that do not name the tool or pass its arguments get them from the data shown.
-    const name=tool||(data.pulls?'list_pull_requests':'pull_request_status');
-    const call=args||(data.pulls?{repository:data.repository}:{repository:data.repository,number:data.number});
+    const call=refreshCall();
+    if(busy||!call) return;
     busy=true;render();
-    try {result=await request('tools/call',{name,arguments:call});loadedAt=new Date();}
-    catch(error) {result={isError:true,content:[{type:'text',text:error.message}]};}
+    try {take(await request('tools/call',call));}
+    catch(error) {take({isError:true,content:[{type:'text',text:error.message}]});}
     busy=false;render();
   };
-  $('dashboard').onclick=event=>{event.preventDefault();openLink($('dashboard').href);};
 
   new ResizeObserver(measure).observe(document.body);
   (async()=>{
@@ -232,7 +248,9 @@ function cardView(protocol) {
       const init=await request('ui/initialize',{protocolVersion:protocol,appInfo:{name:'Repo Autopilot',version:'1.0.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']}});
       applyContext(init?.hostContext||{});
       tool=init?.hostContext?.toolInfo?.tool?.name||null;
+      caps=init?.hostCapabilities||{};
     } catch {}
+    linkTo($('dashboard'),$('dashboard').getAttribute('href'));
     notify('ui/notifications/initialized',{});
     connected=true;
     render();
@@ -288,6 +306,8 @@ a.f-title:hover{text-decoration:underline}
 .actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .actions button,.actions a{min-height:44px;padding:8px 14px;border-radius:var(--border-radius-md,8px);border:var(--border-width-regular,1px) solid var(--line);background:var(--bg2);text-decoration:none;color:var(--fg);display:inline-flex;align-items:center}
 .actions button[hidden]{display:none}
+.gh{align-self:flex-start;color:var(--info);font-size:var(--font-text-xs-size,12px)}
+.problem{color:var(--bad)}
 .actions button:disabled{opacity:.5;cursor:default}
 `;
 
