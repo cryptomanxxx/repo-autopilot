@@ -9,7 +9,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {ChatStoreLogic} from '../worker/src/store.js';
 import {readTar} from '../worker/src/github.js';
 import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy} from '../worker/src/agent.js';
-import {createHmac} from 'node:crypto';
+import {createHmac,createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {handle,validateImage,webhookTargets,deployedVersion} from '../worker/src/app.js';
@@ -814,4 +814,94 @@ test('the session reports the deployed commit only when the deploy workflow reco
   const deployed=environment();
   assert.equal((await session({...deployed.env,DEPLOYED_COMMIT:sha},fetchImpl)).info.deployed.commit,sha.toLowerCase());
   assert.equal((await (await handle(request('/api/session'),{...deployed.env,DEPLOYED_COMMIT:sha},{fetchImpl})).json()).deployed,undefined,'signed-out visitors see no version');
+});
+
+test('a chat app connects through OAuth, reads through MCP, keeps working after the GitHub token expires, and can be revoked',async()=>{
+  let time=1_000_000;
+  const {env,store}=environment({time:()=>time});
+  const calls=[],base=github({calls});
+  let renewals=0;
+  const fetchImpl=async(url,options={})=>{
+    if(url==='https://github.com/login/oauth/access_token') {
+      const body=JSON.parse(options.body);calls.push({url,method:'POST',options});
+      if(body.grant_type==='refresh_token') {renewals++;return Response.json(body.refresh_token===`ghr_${renewals}`?{access_token:`ghu_renewed${renewals}`,expires_in:28800,refresh_token:`ghr_${renewals+1}`,refresh_token_expires_in:15811200}:{error:'bad_refresh_token'});}
+      return Response.json({access_token:'ghu_first',expires_in:28800,refresh_token:'ghr_1',refresh_token_expires_in:15811200,scope:''});
+    }
+    return base(url,options);
+  };
+  const call=(path,options={})=>handle(request(path,options),env,{fetchImpl,now:()=>time});
+  const form=(path,fields,headers={})=>handle(new Request(ORIGIN+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',...headers},body:new URLSearchParams(fields)}),env,{fetchImpl,now:()=>time});
+
+  const resource=await (await call('/.well-known/oauth-protected-resource')).json();
+  assert.deepEqual([resource.resource,resource.authorization_servers],[`${ORIGIN}/mcp`,[ORIGIN]]);
+  const metadata=await (await call('/.well-known/oauth-authorization-server')).json();
+  assert.equal(metadata.registration_endpoint,`${ORIGIN}/oauth/register`);assert.deepEqual(metadata.code_challenge_methods_supported,['S256']);
+  const anonymous=await call('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'initialize'}});
+  assert.equal(anonymous.status,401);assert.match(anonymous.headers.get('WWW-Authenticate'),/resource_metadata="https:\/\/chat\.example\.workers\.dev\/\.well-known\/oauth-protected-resource"/);
+
+  assert.equal((await call('/oauth/register',{method:'POST',body:{redirect_uris:['http://evil.example/cb']}})).status,400,'redirects must be https or local');
+  const registered=await call('/oauth/register',{method:'POST',body:{client_name:'Claude',redirect_uris:['https://claude.ai/api/mcp/auth_callback'],token_endpoint_auth_method:'none'}});
+  assert.equal(registered.status,201);
+  const {client_id}=await registered.json();
+  const verifier='v'.repeat(50),challenge=createHash('sha256').update(verifier).digest('base64url');
+  const authorize=(extra={})=>call(`/oauth/authorize?${new URLSearchParams({response_type:'code',client_id,redirect_uri:'https://claude.ai/api/mcp/auth_callback',code_challenge:challenge,code_challenge_method:'S256',state:'xyz',resource:`${ORIGIN}/mcp`,...extra})}`);
+  assert.equal((await authorize({redirect_uri:'https://evil.example/cb'})).status,400,'an unregistered redirect is never followed');
+  const consent=await authorize();
+  assert.equal(consent.status,200);
+  const html=await consent.text();
+  assert.match(html,/Claude/);assert.match(html,/claude\.ai/);assert.match(html,/cannot change, comment on or merge anything/);
+  assert.match(consent.headers.get('Content-Security-Policy'),/form-action 'self' https:\/\/github\.com https:\/\/claude\.ai/);
+  const sealed=html.match(/name="request" value="([^"]+)"/)[1],nonce=html.match(/name="consent" value="([0-9a-f]+)"/)[1];
+  const consentCookie=consent.headers.get('Set-Cookie').split(';')[0];
+  const fields={request:sealed,consent:nonce,decision:'allow'};
+  assert.equal((await form('/oauth/authorize',fields,{Origin:'https://evil.example',Cookie:consentCookie})).status,400,'another site cannot submit the consent');
+  assert.equal((await form('/oauth/authorize',fields,{Origin:ORIGIN})).status,400,'the consent cookie must come with it');
+  const denied=await form('/oauth/authorize',{...fields,decision:'deny'},{Origin:ORIGIN,Cookie:consentCookie});
+  assert.match(denied.headers.get('Location'),/^https:\/\/claude\.ai\/api\/mcp\/auth_callback\?error=access_denied/);
+  const allowed=await form('/oauth/authorize',fields,{Origin:ORIGIN,Cookie:consentCookie});
+  assert.equal(allowed.status,303);
+  const toGithub=new URL(allowed.headers.get('Location'));
+  assert.equal(toGithub.origin+toGithub.pathname,'https://github.com/login/oauth/authorize');
+  const browser=allowed.headers.getSetCookie().find(c=>c.startsWith('autopilot_login=')).match(/autopilot_login=([0-9a-f]+)/)[1];
+  const back=await call(`/auth/callback?code=c&state=${encodeURIComponent(toGithub.searchParams.get('state'))}`,{cookie:`autopilot_login=${browser}`});
+  assert.equal(back.status,303);
+  const returned=new URL(back.headers.get('Location'));
+  assert.equal(returned.origin+returned.pathname,'https://claude.ai/api/mcp/auth_callback');
+  assert.deepEqual([returned.searchParams.get('state'),returned.searchParams.get('iss')],['xyz',ORIGIN]);
+  assert.equal(store.rows('SELECT COUNT(*) AS n FROM sessions')[0].n,0,'connecting opens no dashboard session');
+  assert.equal(store.rows('SELECT github FROM oauth_grants')[0].github.includes('ghr_'),false,'GitHub tokens are stored sealed');
+
+  const code=returned.searchParams.get('code');
+  const exchange=fields=>form('/oauth/token',{grant_type:'authorization_code',code,redirect_uri:'https://claude.ai/api/mcp/auth_callback',client_id,...fields});
+  assert.equal((await (await exchange({code_verifier:'w'.repeat(50)})).json()).error,'invalid_grant','the PKCE verifier must match');
+  const tokens=await (await exchange({code_verifier:verifier})).json();
+  assert.equal((await (await exchange({code_verifier:verifier})).json()).error,'invalid_grant','a code is used once');
+  assert.equal(tokens.token_type,'Bearer');
+  const rpc=(method,params,token=tokens.access_token)=>call('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method,params},headers:{Authorization:`Bearer ${token}`}});
+  const init=await (await rpc('initialize',{protocolVersion:'2025-06-18'})).json();
+  assert.equal(init.result.protocolVersion,'2025-06-18');assert.equal(init.result.serverInfo.name,'repo-autopilot');
+  const {result:{tools}}=await (await rpc('tools/list')).json();
+  assert.ok(tools.every(t=>t.annotations.readOnlyHint===true),'every tool only reads');
+  const listed=await (await rpc('tools/call',{name:'list_repositories',arguments:{}})).json();
+  assert.match(listed.result.content[0].text,/owner\/repo/);
+  assert.equal(calls.filter(c=>c.url.includes('/user/installations')).at(-1).options.headers.Authorization,'Bearer ghu_first');
+
+  // Hours later both tokens have expired: the app refreshes its own, and the Worker renews GitHub's.
+  time+=9*3600000;
+  assert.equal((await rpc('tools/list')).status,401,'access tokens last an hour');
+  const refreshed=await (await form('/oauth/token',{grant_type:'refresh_token',refresh_token:tokens.refresh_token,client_id})).json();
+  assert.equal((await (await form('/oauth/token',{grant_type:'refresh_token',refresh_token:tokens.refresh_token,client_id})).json()).error,'invalid_grant','refresh tokens rotate');
+  store.rows("DELETE FROM cache WHERE key LIKE 'repos:%'");
+  const later=await (await rpc('tools/call',{name:'list_repositories',arguments:{}},refreshed.access_token)).json();
+  assert.match(later.result.content[0].text,/owner\/repo/);
+  assert.equal(renewals,1);
+  assert.equal(calls.filter(c=>c.url.includes('/user/installations')).at(-1).options.headers.Authorization,'Bearer ghu_renewed1');
+
+  // The owner sees the app in the dashboard and revokes it.
+  const auth=await session(env,fetchImpl);
+  const {connections,endpoint}=await (await call('/api/connections',{cookie:auth.cookie})).json();
+  assert.equal(endpoint,`${ORIGIN}/mcp`);assert.deepEqual(connections.map(c=>[c.name,c.redirectHost]),[['Claude','claude.ai']]);
+  assert.equal((await handle(post('/api/connections/revoke',auth,{id:connections[0].id}),env,{fetchImpl,now:()=>time})).status,200);
+  assert.equal((await rpc('tools/list',{},refreshed.access_token)).status,401,'a revoked app is signed out');
+  assert.equal((await (await call('/api/connections',{cookie:auth.cookie})).json()).connections.length,0);
 });

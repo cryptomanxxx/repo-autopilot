@@ -70,6 +70,7 @@ export async function loadDashboard({fresh=false}={}) {
     // A merge outcome stays until a load started after the merge shows its result.
     status(notice);if(load>=noticeFrom) notice='';
     updateAge();openPending();
+    loadConnections();
   } catch(error) {
     if(target===repository()) status(data?`Refresh failed; showing earlier data. ${error.message}`:error.message);
   } finally {
@@ -118,6 +119,28 @@ async function askCodex(action,pr,button) {
   }
 }
 
+// Apps connected through the Claude/ChatGPT connector, with a button to revoke each. Reading them needs
+// no GitHub request.
+async function loadConnections() {
+  let data;
+  try {data=await api('/api/connections');} catch {return;}
+  $('mcp-url').textContent=data.endpoint;
+  const list=$('connections');list.replaceChildren();
+  if(!data.connections.length) {list.append(el('p','No apps connected yet.','muted connection-empty'));return;}
+  for(const c of data.connections) {
+    const row=el('div','','connection-row');
+    const revoke=el('button','Revoke','secondary');revoke.type='button';
+    revoke.onclick=async()=>{
+      if(!confirm(`Revoke ${c.name}? It loses access to Repo Autopilot at once.`)) return;
+      revoke.disabled=true;
+      try {await api('/api/connections/revoke',{id:c.id});status(`${c.name} was revoked.`);} catch(error) {status(error.message);revoke.disabled=false;return;}
+      loadConnections();
+    };
+    row.append(el('strong',c.name),el('span',c.redirectHost?`returns to ${c.redirectHost}`:'','muted small'),el('span',`connected ${new Date(c.created).toLocaleDateString()} · last used ${new Date(c.used).toLocaleString()}`,'muted small'),revoke);
+    list.append(row);
+  }
+}
+
 // Webhook events move the repository's version on; checking it costs no GitHub request.
 async function checkVersion() {
   if(loading||!data||$('dashboard-view').hidden||document.hidden) return;
@@ -142,6 +165,7 @@ export function startDashboard(request,{isVisible,selected}) {
   setInterval(()=>{if(isVisible()) checkVersion();},VERSION_MS);
   for(const id of ['pr-filter','workflow-filter']) $(id).addEventListener('change',filters);
   $('refresh').onclick=()=>loadDashboard({fresh:true});
+  $('copy-mcp').onclick=async()=>{try {await navigator.clipboard.writeText($('mcp-url').textContent);status('Connector address copied.');} catch {status('Select the address and copy it.');}};
   // A load already running finishes first; the larger list is loaded right after it.
   const more=(id,raise)=>{$(id).onclick=()=>{raise();$(id).hidden=true;if(loading) reloadAfter=true;else loadDashboard();};};
   more('more-pulls',()=>{pullLimit=Math.min(PULLS.max,pullLimit+PULLS.step);});

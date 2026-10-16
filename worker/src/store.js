@@ -22,6 +22,12 @@ export class ChatStoreLogic {
     // Asking Codex to fix its findings is no longer offered; its table goes.
     sql.exec('DROP TABLE IF EXISTS codex_fixes');
     sql.exec(`CREATE TABLE IF NOT EXISTS codex_reviews (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (repository, number, sha))`);
+    // The Claude/ChatGPT connector: registered OAuth clients, sign-ins in progress, connected apps
+    // (grants, each holding its GitHub tokens sealed with the client secret) and their tokens.
+    sql.exec(`CREATE TABLE IF NOT EXISTS oauth_clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL, created INTEGER NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS oauth_pending (id TEXT PRIMARY KEY, data TEXT NOT NULL, expires INTEGER NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS oauth_grants (id TEXT PRIMARY KEY, client_id TEXT NOT NULL, login TEXT NOT NULL, github TEXT NOT NULL, created INTEGER NOT NULL, used INTEGER NOT NULL, expires INTEGER NOT NULL)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS oauth_tokens (hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL, kind TEXT NOT NULL, data TEXT, expires INTEGER NOT NULL)`);
     // Conversations from before repository selection have no repository; they belong to the app's own one.
     try {sql.exec('SELECT repository FROM conversations LIMIT 0');}
     catch {sql.exec('ALTER TABLE conversations ADD COLUMN repository TEXT');}
@@ -42,6 +48,65 @@ export class ChatStoreLogic {
     return session || null;
   }
   deleteSession(hash) {this.sql.exec('DELETE FROM sessions WHERE hash = ?',hash);}
+
+  // Anyone may register an OAuth client, so their number is capped: the oldest ones without a connected
+  // app make room. A client is only a name and its redirect addresses; connecting still needs the owner.
+  registerClient({id,name,redirectUris}) {
+    this.sql.exec('INSERT INTO oauth_clients (id, name, redirect_uris, created) VALUES (?, ?, ?, ?)',id,name,JSON.stringify(redirectUris),this.now());
+    this.sql.exec('DELETE FROM oauth_clients WHERE id IN (SELECT id FROM oauth_clients WHERE id NOT IN (SELECT client_id FROM oauth_grants) ORDER BY created DESC LIMIT -1 OFFSET 100)');
+  }
+  getClient(id) {
+    const [row]=this.rows('SELECT id, name, redirect_uris FROM oauth_clients WHERE id = ?',id);
+    return row?{id:row.id,name:row.name,redirectUris:JSON.parse(row.redirect_uris)}:null;
+  }
+  putPending(id,data,ms) {
+    this.sql.exec('DELETE FROM oauth_pending WHERE expires <= ?',this.now());
+    this.sql.exec('INSERT INTO oauth_pending (id, data, expires) VALUES (?, ?, ?)',id,JSON.stringify(data),this.now()+ms);
+  }
+  // A pending connection can be completed once.
+  takePending(id) {
+    const [row]=this.rows('DELETE FROM oauth_pending WHERE id = ? RETURNING data, expires',id);
+    return row&&row.expires>this.now()?JSON.parse(row.data):null;
+  }
+  // At most 10 connected apps; a new one replaces the least recently used.
+  createGrant({id,clientId,login,github,expires}) {
+    const now=this.now();
+    this.sql.exec('DELETE FROM oauth_grants WHERE expires <= ?',now);
+    for(const {id:old} of this.rows('SELECT id FROM oauth_grants ORDER BY used DESC LIMIT -1 OFFSET 9')) this.deleteGrant(old);
+    this.sql.exec('INSERT INTO oauth_grants (id, client_id, login, github, created, used, expires) VALUES (?, ?, ?, ?, ?, ?, ?)',id,clientId,login,github,now,now,expires);
+    this.sql.exec('DELETE FROM oauth_tokens WHERE grant_id NOT IN (SELECT id FROM oauth_grants)');
+  }
+  getGrant(id) {
+    const [row]=this.rows('SELECT id, client_id, login, github, expires FROM oauth_grants WHERE id = ? AND expires > ?',id,this.now());
+    return row?{id:row.id,clientId:row.client_id,login:row.login,github:row.github,expires:row.expires}:null;
+  }
+  // Replaces the sealed GitHub tokens only if they are still the ones the caller read, so two requests
+  // refreshing at once cannot overwrite each other's newer tokens. Returns whether it replaced them.
+  replaceGrantGithub(id,previous,github,expires) {
+    return this.rows('UPDATE oauth_grants SET github = ?, expires = ? WHERE id = ? AND github = ? RETURNING id',github,expires,id,previous).length>0;
+  }
+  touchGrant(id) {this.sql.exec('UPDATE oauth_grants SET used = ? WHERE id = ?',this.now(),id);}
+  deleteGrant(id) {
+    this.sql.exec('DELETE FROM oauth_tokens WHERE grant_id = ?',id);
+    this.sql.exec('DELETE FROM oauth_grants WHERE id = ?',id);
+  }
+  listGrants() {
+    return this.rows('SELECT g.id, g.created, g.used, g.expires, c.name, c.redirect_uris FROM oauth_grants g LEFT JOIN oauth_clients c ON c.id = g.client_id WHERE g.expires > ? ORDER BY g.used DESC',this.now())
+      .map(r=>({id:r.id,name:r.name||'Unknown app',redirectHost:(()=>{try {return new URL(JSON.parse(r.redirect_uris||'[]')[0]).host;} catch {return null;}})(),created:r.created,used:r.used,expires:r.expires}));
+  }
+  putToken({hash,grantId,kind,data=null,expires}) {
+    this.sql.exec('DELETE FROM oauth_tokens WHERE expires <= ?',this.now());
+    this.sql.exec('INSERT INTO oauth_tokens (hash, grant_id, kind, data, expires) VALUES (?, ?, ?, ?, ?)',hash,grantId,kind,data===null?null:JSON.stringify(data),expires);
+  }
+  getToken(hash,kind) {
+    const [row]=this.rows('SELECT grant_id, data FROM oauth_tokens WHERE hash = ? AND kind = ? AND expires > ?',hash,kind,this.now());
+    return row?{grantId:row.grant_id,data:row.data?JSON.parse(row.data):null}:null;
+  }
+  // Codes and refresh tokens are used once: reading one removes it.
+  takeToken(hash,kind) {
+    const [row]=this.rows('DELETE FROM oauth_tokens WHERE hash = ? AND kind = ? RETURNING grant_id, data, expires',hash,kind);
+    return row&&row.expires>this.now()?{grantId:row.grant_id,data:row.data?JSON.parse(row.data):null}:null;
+  }
 
   // Locks expire on their own so a crashed request can never block the chat permanently. Only the
   // holder can release a lock, so a request that outlived its lock cannot free a newer holder's lock.

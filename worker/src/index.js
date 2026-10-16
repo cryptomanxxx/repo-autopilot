@@ -26,6 +26,19 @@ export class ChatStore extends DurableObject {
   setCache(key,value,ms) {return this.logic.setCache(key,value,ms);}
   startDashboardLoad(repository) {return this.logic.startDashboardLoad(repository);}
   setDashboardCache(key,value,ms,options) {return this.logic.setDashboardCache(key,value,ms,options);}
+  registerClient(client) {return this.logic.registerClient(client);}
+  getClient(id) {return this.logic.getClient(id);}
+  putPending(id,data,ms) {return this.logic.putPending(id,data,ms);}
+  takePending(id) {return this.logic.takePending(id);}
+  createGrant(grant) {return this.logic.createGrant(grant);}
+  getGrant(id) {return this.logic.getGrant(id);}
+  replaceGrantGithub(id,previous,github,expires) {return this.logic.replaceGrantGithub(id,previous,github,expires);}
+  touchGrant(id) {return this.logic.touchGrant(id);}
+  deleteGrant(id) {return this.logic.deleteGrant(id);}
+  listGrants() {return this.logic.listGrants();}
+  putToken(token) {return this.logic.putToken(token);}
+  getToken(hash,kind) {return this.logic.getToken(hash,kind);}
+  takeToken(hash,kind) {return this.logic.takeToken(hash,kind);}
 }
 
 export default {fetch:(request,env)=>handle(request,env)};
