@@ -1,6 +1,8 @@
 import {githubClient,GitHubError,readLimited} from './github.js';
 import {repositoryName,createGitHub} from '../../src/github.js';
 import {PublicError,UserError} from './errors.js';
+import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
+import {connector,isConnectorPath,finishConnect,failConnect} from './connector.js';
 export {UserError};
 import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
 
@@ -10,40 +12,11 @@ const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
 // calls and each pull request is loaded by its own request with at most ten.
 // "Show more" raises the overview's limits in steps, up to a maximum.
 export const DASHBOARD_PULLS=6,DASHBOARD_MAX_PULLS=30,DASHBOARD_RUNS=15,DASHBOARD_MAX_RUNS=60,HEAD_CACHE_MS=60000,OPEN_CACHE_MS=60000,CLOSED_CACHE_MS=HOUR,ERROR_CACHE_MS=30000,REPOS_CACHE_MS=300000,WEBHOOK_MAX_BYTES=5000000;
-const hex=bytes=>Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
-const randomHex=(bytes=32)=>hex(crypto.getRandomValues(new Uint8Array(bytes)));
-const base64url=bytes=>{let s='';for(const b of bytes) s+=String.fromCharCode(b);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
-const fromBase64url=value=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
-const sha256=async text=>new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(text)));
-
-
 // The commit and time the deploy workflow recorded; null when the Worker was deployed some other way.
 export function deployedVersion(env) {
   const commit=/^[0-9a-f]{40}$/i.test(env.DEPLOYED_COMMIT||'')?env.DEPLOYED_COMMIT.toLowerCase():null;
   const at=Date.parse(env.DEPLOYED_AT||'');
   return commit?{commit,at:Number.isNaN(at)?null:new Date(at).toISOString()}:null;
-}
-
-let keyCache=null;
-async function stateKey(secret) {
-  if(keyCache?.secret===secret) return keyCache.key;
-  const base=await crypto.subtle.importKey('raw',encoder.encode(secret),'HKDF',false,['deriveKey']);
-  const key=await crypto.subtle.deriveKey({name:'HKDF',hash:'SHA-256',salt:encoder.encode('repo-autopilot-chat'),info:encoder.encode('oauth-state')},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
-  keyCache={secret,key};return key;
-}
-async function sealState(secret,value) {
-  const iv=crypto.getRandomValues(new Uint8Array(12));
-  const sealed=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},await stateKey(secret),encoder.encode(JSON.stringify(value))));
-  const out=new Uint8Array(12+sealed.length);out.set(iv);out.set(sealed,12);
-  return base64url(out);
-}
-async function openState(secret,value,now) {
-  try {
-    if(typeof value!=='string'||value.length>1024) return null;
-    const bytes=fromBase64url(value);
-    const data=JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:bytes.subarray(0,12)},await stateKey(secret),bytes.subarray(12))));
-    return data.expires>now?data:null;
-  } catch {return null;}
 }
 
 export function validateImage(image) {
@@ -72,7 +45,8 @@ const SECURITY_HEADERS={
 };
 function withHeaders(response,secure,extra={}) {
   const result=new Response(response.body,response);
-  for(const [k,v] of Object.entries({...SECURITY_HEADERS,...extra})) result.headers.set(k,v);
+  // A page that sets its own policy (the connector's consent page) keeps it.
+  for(const [k,v] of Object.entries({...SECURITY_HEADERS,...extra})) if(!(k==='Content-Security-Policy'&&response.headers.has(k))) result.headers.set(k,v);
   if(secure) result.headers.set('Strict-Transport-Security','max-age=31536000');
   return result;
 }
@@ -101,6 +75,13 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
   const url=new URL(request.url);
   const secure=Boolean(config.secure);
   try {
+    // The Claude/ChatGPT connector: OAuth endpoints and the MCP endpoint.
+    if(isConnectorPath(url.pathname)) {
+      if(config.error) return withHeaders(json(503,{error:config.error}),secure);
+      if(!config.sameOrigin) return withHeaders(json(404,{error:'Not found.'}),secure);
+      const store=chatStore(env);
+      return withHeaders(await connector(request,url,{store,env,origin:config.origin,secure,fetchImpl,now,tools:connectorTools({store,fetchImpl})}),secure);
+    }
     if(!url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/auth/')) {
       if(!env.ASSETS) return withHeaders(new Response('Not found',{status:404}),secure);
       return withHeaders(await env.ASSETS.fetch(request),secure);
@@ -138,7 +119,12 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     const reason=githubError?(githubError==='access_denied'?'cancelled':'github'):'expired';
     const pending=await openState(env.GITHUB_CLIENT_SECRET,url.searchParams.get('state'),now());
     if(!pending||pending.browser!==cookies(request).autopilot_login) return redirect(`/?signin=${reason}`);
-    const failed=reason=>redirect(`/?signin=${reason}`,[cookie('autopilot_login','',{path:'/auth'})]);
+    const failed=async reason=>{
+      // A connection in progress reports the failure to the app that started it.
+      const back=pending.connect&&await failConnect({pending:pending.connect,reason,store,origin:config.origin});
+      if(back) {back.headers.append('Set-Cookie',cookie('autopilot_login','',{path:'/auth'}));return back;}
+      return redirect(`/?signin=${reason}`,[cookie('autopilot_login','',{path:'/auth'})]);
+    };
     if(githubError) return failed(reason);
     if(!code) return failed('failed');
     let token,user;
@@ -153,6 +139,13 @@ async function route(request,env,config,url,{fetchImpl,now}) {
       user=userResponse.ok?await userResponse.json().catch(()=>({})):{};
     } catch(error) {console.error('sign-in failed',error?.stack||error);return failed('failed');}
     if(typeof user.login!=='string'||user.login.toLowerCase()!==config.owner) return failed('owner');
+    // A sign-in started by connecting Claude or ChatGPT finishes the connection instead of opening the dashboard.
+    if(pending.connect) {
+      const connected=await finishConnect({pending:pending.connect,token,login:user.login,store,env,origin:config.origin,now});
+      if(!connected) return failed('expired');
+      connected.headers.append('Set-Cookie',cookie('autopilot_login','',{path:'/auth'}));
+      return connected;
+    }
     const id=randomHex(),lifetime=Number.isFinite(token.expires_in)&&token.expires_in>0?token.expires_in*1000:8*HOUR;
     await store.createSession({hash:hex(await sha256(id)),token:token.access_token,csrf:randomHex(),login:user.login,expires:now()+Math.min(lifetime,8*HOUR)});
     return redirect('/',[cookie(sessionCookie,id),cookie('autopilot_login','',{path:'/auth'})]);
@@ -204,6 +197,8 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     await store.setDashboardCache(key,head,HEAD_CACHE_MS,{repository,...load});
     return json(200,head);
   });
+  // Apps connected through the connector, which the owner can revoke.
+  if(request.method==='GET'&&url.pathname==='/api/connections') return json(200,{endpoint:`${config.origin}/mcp`,connections:await store.listGrants()});
   if(request.method!=='POST') throw new UserError(405,'Unsupported request.');
   if(request.headers.get('Origin')!==config.origin||request.headers.get('X-CSRF-Token')!==session.csrf) throw new UserError(403,'The request could not be verified. Reload the page.');
   if(url.pathname==='/api/logout') {
@@ -215,14 +210,41 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github,config,access}));
   if(url.pathname==='/api/merge') return run(()=>mergePullRequest(body,{store,github,access}));
   if(url.pathname==='/api/codex-review') return run(()=>askCodex('review',body,{store,github,access}));
+  if(url.pathname==='/api/connections/revoke') {
+    if(typeof body.id!=='string'||!/^[0-9a-f]{32}$/.test(body.id)) throw new UserError(400,'Invalid request.');
+    await store.deleteGrant(body.id);
+    return json(200,{revoked:true});
+  }
   throw new UserError(404,'Not found.');
+}
+
+// The connector's tools. They only read, with the GitHub sign-in of the connected app.
+function connectorTools({store,fetchImpl}) {
+  return [{
+    name:'list_repositories',title:'List repositories',
+    description:'Lists the repositories Repo Autopilot can read: those where its GitHub App is installed, most recently pushed first.',
+    inputSchema:{type:'object',properties:{},additionalProperties:false},
+    annotations:{readOnlyHint:true,openWorldHint:false},
+    run:async(args,{token,grantId})=>{
+      const {list:repositories,truncated}=await readRepos({store,session:{token},hash:`grant:${grantId}`,fetchImpl});
+      // A list cut off at the limits says so, so a missing repository is not taken to be absent.
+      const note=truncated?'\n\nThis list may be incomplete: Repo Autopilot reads up to 5 GitHub App installations and 200 repositories each.':'';
+      const text=(repositories.length?repositories.map(r=>`${r.fullName}${r.private?' (private)':''}`).join('\n'):'No repositories yet: install the Repo Autopilot GitHub App on the ones you want to see.')+note;
+      return {content:[{type:'text',text}],structuredContent:{repositories,truncated}};
+    },
+  }];
 }
 
 // Repositories the owner can open: those where the GitHub App is installed, which are the only ones a
 // GitHub App user token reaches. Cached per session for a few minutes; most recently pushed first.
-async function accessibleRepos({store,session,hash,fetchImpl,fresh=false}) {
+async function accessibleRepos(options) {return (await readRepos(options)).list;}
+// The same list, and whether it was cut off at the limits below.
+async function readRepos({store,session,hash,fetchImpl,fresh=false}) {
   const key=`repos:${hash}`;
-  if(!fresh) {const cached=await store.getCache(key);if(cached) return cached;}
+  if(!fresh) {
+    const cached=await store.getCache(key);
+    if(cached) return Array.isArray(cached)?{list:cached,truncated:false}:cached;
+  }
   const get=async path=>{
     const response=await fetchImpl(`https://api.github.com${path}`,{headers:{Authorization:`Bearer ${session.token}`,Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'repo-autopilot-chat'},signal:AbortSignal.timeout(20000)});
     if(!response.ok) throw new GitHubError(response.status,path);
@@ -231,17 +253,20 @@ async function accessibleRepos({store,session,hash,fetchImpl,fresh=false}) {
   const found=new Map();
   const {installations=[]}=await get('/user/installations?per_page=100');
   // At most 11 GitHub calls, so a request that reads the list twice stays within the subrequest limit.
+  let truncated=installations.length>5;
   for(const installation of installations.slice(0,5)) {
     if(!Number.isSafeInteger(installation?.id)) continue;
     for(let page=1;page<=2;page++) {
       const {repositories=[]}=await get(`/user/installations/${installation.id}/repositories?per_page=100&page=${page}`);
       for(const repo of repositories) if(typeof repo?.full_name==='string') found.set(repo.full_name.toLowerCase(),{fullName:repo.full_name,private:Boolean(repo.private),pushedAt:repo.pushed_at||null});
       if(repositories.length<100) break;
+      if(page===2) truncated=true;
     }
   }
   const list=[...found.values()].sort((a,b)=>String(b.pushedAt).localeCompare(String(a.pushedAt))||a.fullName.localeCompare(b.fullName));
-  await store.setCache(key,list,REPOS_CACHE_MS);
-  return list;
+  const result={list,truncated};
+  await store.setCache(key,result,REPOS_CACHE_MS);
+  return result;
 }
 
 // The repository a request works on: the requested one if the owner can reach it, else the app's own.

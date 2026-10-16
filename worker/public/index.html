@@ -10,6 +10,9 @@
 <h2>Pull requests</h2><label class="filter-label">Show <select id="pr-filter"><option value="all">All</option><option value="open">Open</option><option value="attention">Needs attention</option><option value="merged">Merged</option></select></label><div id="pulls" class="compact-list"></div><button type="button" id="more-pulls" class="secondary more" hidden>Show more pull requests</button>
 <h2>GitHub Actions</h2><label class="filter-label">Show <select id="workflow-filter"><option value="all">All</option><option value="ci">CI</option><option value="deployment">Deployment</option><option value="other">Other</option></select></label><div id="workflows" class="compact-list"></div><button type="button" id="more-runs" class="secondary more" hidden>Show more runs</button>
 <p id="scope" class="muted small"></p>
+<h2>Connected apps</h2>
+<p class="muted small">Claude and ChatGPT can read this dashboard's status, without changing anything, when you add this address as a custom connector: <code id="mcp-url"></code> <button type="button" id="copy-mcp" class="secondary small-button">Copy</button></p>
+<div id="connections" class="compact-list"></div>
 </section>
 <section id="chat" class="layout" role="tabpanel" aria-labelledby="tab-chat" hidden>
 <nav aria-label="Conversations"><button id="new-conversation" class="secondary">New conversation</button><ul id="conversations"></ul></nav>
