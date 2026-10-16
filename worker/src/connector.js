@@ -78,6 +78,9 @@ function redirectBack({redirectUri,state},params,origin) {
 function page(title,body,{csp,cookie}={}) {
   const headers=new Headers({'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});
   if(csp) headers.set('Content-Security-Policy',csp);
+  // With the app's usual no-referrer policy, browsers send "Origin: null" with the consent form; this page
+  // lets them name its own origin.
+  headers.set('Referrer-Policy','same-origin');
   if(cookie) headers.append('Set-Cookie',cookie);
   return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/chat.css"></head><body><main class="connect"><header><span class="eyebrow">REPO AUTOPILOT</span><h1>${escape(title)}</h1></header>${body}</main></body></html>`,{status:200,headers});
 }
@@ -102,7 +105,10 @@ async function showConsent(params,{store,env,origin,secure,now}) {
 }
 
 async function decideConsent(request,{store,env,origin,secure,now}) {
-  if(request.headers.get('Origin')!==origin) return errorPage('The request could not be verified. Start connecting again from the app.');
+  // The form must come from this site: by its Origin, or, where a browser withholds the origin, by its own
+  // same-site signal. The consent cookie below is checked either way.
+  const from=request.headers.get('Origin');
+  if(from!==origin&&!((!from||from==='null')&&request.headers.get('Sec-Fetch-Site')==='same-origin')) return errorPage('The request could not be verified. Start connecting again from the app.');
   const form=await readParams(request);
   const sealed=form&&await unseal(env.GITHUB_CLIENT_SECRET,CONSENT,form.request);
   if(!sealed||sealed.expires<=now()||!form.consent||form.consent!==sealed.consent||cookieValue(request,'autopilot_consent')!==sealed.consent) return errorPage('This page has expired. Start connecting again from the app.');
