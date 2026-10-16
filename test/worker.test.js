@@ -1006,12 +1006,14 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   const partial=(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'list_pull_requests',arguments:{}}},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl:flaky})).json()).result;
   assert.equal(partial.isError,undefined);
   assert.match(partial.content[0].text,/#1 Add the benchmark \(open\): details could not be read/);
-  // An internal failure is not shown as an unavailable row with its raw message; the handler reports it generically.
-  const internal=async(url,options)=>url.endsWith('/repos/owner/repo/pulls/1')?Promise.reject(new Error('storage detail xyz')):failing(url,options);
+  // GitHub not answering at all (a network failure or a timeout) is also one unavailable row, with a safe message.
+  const unreachable=async(url,options)=>url.endsWith('/repos/owner/repo/pulls/1')?Promise.reject(new TypeError('socket detail xyz')):failing(url,options);
   pulls[0].updated_at='2026-10-16T12:00:00Z';
   store.rows("DELETE FROM cache WHERE key LIKE 'overview:%'");
-  const hidden=(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'list_pull_requests',arguments:{}}},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl:internal})).json()).result;
-  assert.equal(hidden.isError,true);assert.doesNotMatch(hidden.content[0].text,/storage detail xyz/);
+  const offline=(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'list_pull_requests',arguments:{}}},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl:unreachable})).json()).result;
+  assert.equal(offline.isError,undefined);
+  assert.match(offline.content[0].text,/#1 Add the benchmark \(open\): details could not be read \(GitHub could not be reached/);
+  assert.doesNotMatch(offline.content[0].text,/socket detail xyz/);
   broken=false;
   const other=await tool('pull_request_status',{repository:'someone/else',number:1});
   assert.equal(other.isError,true);assert.match(other.content[0].text,/cannot reach someone\/else/);

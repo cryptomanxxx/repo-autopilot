@@ -62,3 +62,11 @@ test('the pull request list says when older pull requests may be missing',async(
   assert.equal(result.structuredContent.mayHaveMore,true);
   assert.match(result.content[0].text,/Older pull requests are not listed and may include open ones/);
 });
+
+test('an internal failure while listing pull requests reaches the generic handler',async()=>{
+  const {connectorTools}=await import('../worker/src/tools.js');
+  const pulls=[{number:1,title:'P1',url:'',state:'open',updatedAt:''}];
+  const dashboardData=async({number})=>{if(number) throw new Error('storage detail xyz');return {pulls};};
+  const tools=connectorTools({store:{},config:{},readRepos:null,resolveRepository:async()=>'o/r',dashboardData,pullLimit:6});
+  await assert.rejects(tools.find(t=>t.name==='list_pull_requests').run({},{token:'t',grantId:'g'}),/storage detail xyz/,'not turned into a row with the raw message');
+});
