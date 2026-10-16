@@ -170,7 +170,13 @@ Claude and ChatGPT can read the same status the dashboard shows, through a conne
 - **ChatGPT:** turn on **Developer mode** in the settings (a beta feature) and add an app with the same address.
 - Connecting shows a Repo Autopilot page naming the app and where it returns to. **Allow** signs you in with GitHub, then you are back in the chat app.
 
-What it can do now: list the repositories Repo Autopilot reads (`list_repositories`). Pull request, CI and Codex tools follow. Every tool only reads: nothing can be changed, commented on or merged through the connector, and merging stays in the dashboard.
+The tools, all read-only and reading the same data and cache as the dashboard:
+
+- `list_repositories`: the repositories Repo Autopilot reads.
+- `list_pull_requests`: a repository's most recently updated pull requests with merge readiness, CI, Codex status and finding counts. To stay within the Workers subrequest limit, at most two pull requests are loaded from GitHub per call; the others come from the cache or are marked as not loaded.
+- `pull_request_status`: one pull request in full: why it is or is not ready to merge, CI, Codex status, every Codex finding with its state (open, waiting for Codex, fixed) and recent activity.
+
+Ask Claude or ChatGPT things like "Which pull requests are ready to merge?" or "Why is #80 not ready, and what do its Codex findings mean?". Every tool only reads: nothing can be changed, commented on or merged through the connector, and merging stays in the dashboard.
 
 How it stays signed in: the connector uses OAuth 2.1 with PKCE and dynamic client registration. Its access tokens last an hour and its refresh tokens rotate on every use. The GitHub sign-in made while connecting, including GitHub's refresh token, is stored sealed (AES-GCM, with a key derived from the GitHub client secret) in your Durable Object, and the Worker renews it with GitHub when it expires. That GitHub token has the GitHub App's permissions, including write, even though the connector's tools only read. A connected app therefore stays connected for as long as GitHub lets its sign-in be renewed (about six months), until you click **Revoke** under **Connected apps**. Revoking GitHub's authorization of the app (GitHub → Settings → Applications) also ends it. At most 10 apps can be connected; a new one replaces the least recently used.
 

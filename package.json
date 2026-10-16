@@ -8,6 +8,6 @@
   },
   "scripts": {
     "test": "node --test",
-    "check": "node --check src/github.js && node --check src/codex.js && node --check src/progress.js && node --check src/agent.js && node --check worker/src/index.js && node --check worker/src/app.js && node --check worker/src/agent.js && node --check worker/src/github.js && node --check worker/src/store.js && node --check worker/src/crypto.js && node --check worker/src/connector.js && node --check worker/src/errors.js && node --check worker/public/chat.js && node --check worker/public/dashboard.js && node --check worker/public/dashboard-view.js"
+    "check": "node --check src/github.js && node --check src/codex.js && node --check src/progress.js && node --check src/agent.js && node --check worker/src/index.js && node --check worker/src/app.js && node --check worker/src/agent.js && node --check worker/src/github.js && node --check worker/src/store.js && node --check worker/src/crypto.js && node --check worker/src/connector.js && node --check worker/src/tools.js && node --check worker/src/errors.js && node --check worker/public/chat.js && node --check worker/public/dashboard.js && node --check worker/public/dashboard-view.js"
   }
 }

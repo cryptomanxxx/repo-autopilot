@@ -25,7 +25,11 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
   // Browsers send their own User-Agent; server runtimes such as Cloudflare Workers must set one for GitHub.
   const agent = userAgent ? {'User-Agent': userAgent} : {};
   async function get(path) {
-    const response = await fetchImpl(`https://api.github.com${path}`, {headers: {Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...agent, ...(token ? {Authorization: `Bearer ${token}`} : {})}, signal: AbortSignal.timeout(15000)});
+    let response;
+    // A request that never got an answer (a timeout or a network failure) is reported like a GitHub server
+    // error, with a status, so callers handle it as GitHub's failure rather than as an internal one.
+    try {response = await fetchImpl(`https://api.github.com${path}`, {headers: {Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...agent, ...(token ? {Authorization: `Bearer ${token}`} : {})}, signal: AbortSignal.timeout(15000)});}
+    catch (error) {throw Object.assign(new Error(error?.name === 'TimeoutError' ? 'GitHub did not answer in time. Try again.' : 'GitHub could not be reached. Try again.'), {status: 502});}
     if (!response.ok) throw Object.assign(new Error(response.status === 403 || response.status === 429 ? 'GitHub access denied or rate limit reached. Check token permissions or try later.' : `GitHub request failed (${response.status}).`), {status: response.status});
     return response.json();
   }

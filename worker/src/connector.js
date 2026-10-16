@@ -6,6 +6,7 @@
 // keeps working until the owner revokes it in the dashboard. The tools only read.
 import {hex,randomHex,base64url,sha256,seal,unseal,sealState} from './crypto.js';
 import {readLimited} from './github.js';
+import {PublicError} from './errors.js';
 
 const HOUR=3600000,DAY=24*HOUR;
 export const ACCESS_MS=HOUR,CODE_MS=60000,PENDING_MS=600000,NO_EXPIRY_MS=180*DAY;
@@ -271,7 +272,7 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
   await store.touchGrant(grant.id);
   if(method==='initialize') {
     const requested=params?.protocolVersion;
-    return rpcResult(id,{protocolVersion:MCP_PROTOCOLS.includes(requested)?requested:MCP_PROTOCOLS[0],capabilities:{tools:{listChanged:false}},serverInfo:{name:'repo-autopilot',title:'Repo Autopilot',version:'0.2.0'},instructions:'Read-only access to the owner\'s Repo Autopilot. For now it lists the repositories Repo Autopilot can read. Nothing can be changed through these tools; merging happens in the Repo Autopilot dashboard.'});
+    return rpcResult(id,{protocolVersion:MCP_PROTOCOLS.includes(requested)?requested:MCP_PROTOCOLS[0],capabilities:{tools:{listChanged:false}},serverInfo:{name:'repo-autopilot',title:'Repo Autopilot',version:'0.2.0'},instructions:'Read-only access to the owner\'s Repo Autopilot: the repositories it reads and, for each, the pull requests with merge readiness, CI, Codex review status and Codex findings, the same as its dashboard shows. Nothing can be changed through these tools; merging happens in the Repo Autopilot dashboard.'});
   }
   if(method==='ping') return rpcResult(id,{});
   if(method==='tools/list') return rpcResult(id,{tools:tools.map(({run,...tool})=>tool)});
@@ -284,7 +285,7 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
     try {return rpcResult(id,await tool.run(params.arguments||{},{token,grantId:grant.id}));}
     catch(error) {
       if(error?.status===401) {await store.deleteGrant(grant.id);return unauthorized(origin,true);}
-      return rpcResult(id,{isError:true,content:[{type:'text',text:error?.expose?error.message:'Reading from GitHub failed. Try again.'}]});
+      return rpcResult(id,{isError:true,content:[{type:'text',text:error?.expose||error instanceof PublicError?error.message:'Reading from GitHub failed. Try again.'}]});
     }
   }
   return rpcError(id,-32601,`Method not found: ${method}`);
