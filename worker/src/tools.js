@@ -1,6 +1,7 @@
 // The connector's tools. They only read: the same data the dashboard shows, through the same cache, with
 // the GitHub sign-in of the connected app.
 import {findingStatus,FINDING_STATES} from '../public/dashboard-view.js';
+import {PublicError} from './errors.js';
 
 // At most this many pull requests are loaded from GitHub in one list call; the rest come from the cache
 // or are marked as not loaded, so a call stays within the Workers subrequest limit.
@@ -96,8 +97,9 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
           // Open pull requests matter most, so they are loaded from GitHub first, within the budget.
           if(!item&&pr.state==='open'&&fresh<FRESH_DETAILS) {fresh++;item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt});}
         } catch(failure) {
-          if(failure?.status===401) throw failure;
-          error=failure?.message||'GitHub request failed.';
+          // Only owner-facing GitHub failures are isolated; a 401 or an internal error reaches the handler.
+          if(failure?.status===401||!(failure instanceof PublicError||failure?.expose)) throw failure;
+          error=failure.message;
         }
         pulls.push(item?pullSummary(item):{number:pr.number,title:pr.title,url:pr.url,state:pr.state,updatedAt:pr.updatedAt,detailsLoaded:false,error});
       }
