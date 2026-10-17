@@ -19,14 +19,17 @@ function cardView(protocol) {
   const $=id=>document.getElementById(id);
   const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls) node.className=cls;if(text!==undefined) node.textContent=text;return node;};
 
-  // JSON-RPC over postMessage with the host, which is always the parent window.
+  // JSON-RPC over postMessage with the host through the parent window. Mobile apps load the card in a web
+  // view, where messages from the app can arrive without a source and the card's own messages can come back.
   const post=message=>window.parent.postMessage({jsonrpc:'2.0',...message},'*');
+  const OUTGOING=new Set(['ui/initialize','ui/notifications/initialized','ui/notifications/size-changed','ui/open-link','ui/request-display-mode','ui/message','ui/update-model-context','tools/call']);
   const request=(method,params)=>new Promise((resolve,reject)=>{const id=nextId++;pending.set(id,{resolve,reject});post({id,method,params});});
   const notify=(method,params)=>post({method,params});
   window.addEventListener('message',event=>{
-    if(event.source!==window.parent) return;
+    if(event.source!==window.parent&&event.source!==null) return;
     const message=event.data;
     if(!message||message.jsonrpc!=='2.0') return;
+    if(OUTGOING.has(message.method)) return;
     if(message.method===undefined) {
       const entry=pending.get(message.id);
       if(!entry) return;
@@ -83,7 +86,8 @@ function cardView(protocol) {
   const linkTo=(node,url)=>{
     if(!/^https:\/\//.test(url||'')) return node;
     node.href=url;node.target='_blank';node.rel='noopener noreferrer';
-    node.onclick=event=>{if(!caps.openLinks) return;event.preventDefault();request('ui/open-link',{url}).catch(()=>{});};
+    // Until the host has answered, a click does nothing: navigating would replace the card itself.
+    node.onclick=event=>{if(connected&&!caps.openLinks) return;event.preventDefault();if(connected) request('ui/open-link',{url}).catch(()=>{});};
     return node;
   };
   // The same tool again, with the arguments the host passed, or worked out from the data shown.
@@ -245,18 +249,28 @@ function cardView(protocol) {
   };
 
   new ResizeObserver(measure).observe(document.body);
-  (async()=>{
-    try {
-      const init=await request('ui/initialize',{protocolVersion:protocol,appInfo:{name:'Repo Autopilot',version:'1.0.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']}});
-      applyContext(init?.hostContext||{});
-      tool=init?.hostContext?.toolInfo?.tool?.name||null;
-      caps=init?.hostCapabilities||{};
-    } catch {}
-    linkTo($('dashboard'),$('dashboard').getAttribute('href'));
+  // The handshake starts once the page has loaded and is repeated until the host answers: a host may start
+  // listening only after the card has loaded. The first answer counts; later ones are ignored.
+  linkTo($('dashboard'),$('dashboard').getAttribute('href'));
+  let tries=0,timer=null;
+  const finish=init=>{
+    if(connected) return;
+    clearInterval(timer);
+    applyContext(init?.hostContext||{});
+    tool=init?.hostContext?.toolInfo?.tool?.name||null;
+    caps=init?.hostCapabilities||{};
     notify('ui/notifications/initialized',{});
     connected=true;
     render();
-  })();
+  };
+  const hello=()=>{
+    if(connected) return;
+    if(tries++>=20) {clearInterval(timer);if(!data) {waiting=false;failure='The chat app did not connect to the card. Try again later.';}finish(null);return;}
+    request('ui/initialize',{protocolVersion:protocol,appInfo:{name:'Repo Autopilot',version:'1.0.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']}}).then(finish,()=>finish(null));
+  };
+  const start=()=>{hello();timer=setInterval(hello,1000);};
+  if(document.readyState==='complete') start();
+  else window.addEventListener('load',start,{once:true});
 }
 
 const STYLE=`
