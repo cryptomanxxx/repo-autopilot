@@ -250,19 +250,22 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       let pr;
       try {pr=await client.pull(repository,args.number);}
       catch(error) {if(error?.status===404) throw exposed(`${repository} has no pull request #${args.number}.`);throw error;}
-      // A push while the files are read would pair them with the older totals and head; the pull request is
+      // A push, or a new base, while the files are read would pair them with other totals; the pull request is
       // read again after them, and once more on a change, else the answer says it changed.
+      const sides=p=>`${p.head?.sha}|${p.base?.ref}|${p.base?.sha}`;
       let listed,moved=true;
       for(let attempt=0;attempt<2&&moved;attempt++) {
         listed=await client.pullFiles(repository,args.number,page);
         const after=await client.pull(repository,args.number);
-        moved=after.head?.sha!==pr.head?.sha;
+        moved=sides(after)!==sides(pr);
         pr=after;
       }
       const total=pr.changed_files??null;
       // The path is matched as given: a file name may itself begin or end with a space.
       const wanted=args.path;
-      const files=wanted?listed.filter(f=>f.path===wanted||f.previousPath===wanted):listed;
+      // The file now at that path; a renamed file by its old path only when no file has that path now.
+      const current=wanted?listed.filter(f=>f.path===wanted):[];
+      const files=!wanted?listed:current.length?current:listed.filter(f=>f.previousPath===wanted);
       // The diffs fill a fixed budget in file order; a cut diff says so, and so do the diffs left out.
       let budget=wanted?PATH_PATCH_MAX:FILE_PATCH_BUDGET,left=0;
       const shown=files.map(f=>{
