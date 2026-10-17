@@ -981,6 +981,19 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.deepEqual(tools.map(t=>t.name),['list_repositories','list_pull_requests','pull_request_status']);
   // The pull request tools are shown with the Repo Autopilot card (MCP Apps); the card is read with the same sign-in.
   const rpc=async(method,params)=>(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method,params},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json());
+  // Every message, notifications included, leaves one line in the Worker's logs, without tokens or arguments.
+  const logged=[],log=console.log;console.log=line=>logged.push(line);
+  try {
+    const sent=await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',method:'notifications/initialized'},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl});
+    assert.equal(sent.status,202);
+    await rpc('resources/read',{uri:'ui://repo-autopilot/pull-requests.html'});
+    await rpc('resources/read',{uri:'ui://x?secret=abc123'});
+    await rpc('secret/method-xyz');
+    await handle(new Request(ORIGIN+'/mcp',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:'{not json'}),env,{fetchImpl});
+  } finally {console.log=log;}
+  const lines=logged.map(line=>JSON.parse(line));
+  assert.deepEqual(lines.map(l=>[l.connector,l.notification??false,l.resource??null,l.app,l.claude]),[['notifications/initialized',true,null,'Claude',true],['resources/read',false,'ui://repo-autopilot/pull-requests.html','Claude',true],['resources/read',false,'unknown','Claude',true],['unknown',false,null,'Claude',true],['parse-error',false,null,'Claude',true]]);
+  assert.ok(!logged.some(line=>line.includes(token)||line.includes('abc123')||line.includes('xyz')),'nothing the app sent beyond known values reaches the logs');
   const card='ui://repo-autopilot/pull-requests.html';
   assert.deepEqual(tools.map(t=>t._meta?.ui?.resourceUri??null),[null,card,card]);
   assert.equal(tools[1]._meta['ui/resourceUri'],card,'older hosts read the flat key');
