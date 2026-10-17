@@ -174,6 +174,8 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       const runLimit=Math.ceil(limit/runStep)*runStep;
       const overview=await dashboardData({store,token,fetchImpl,repository,runLimit,fresh:reload});
       const read=overview.workflows.slice(0,limit);
+      // A failed read of the runs leaves the list empty with a warning; that is said, not reported as no runs.
+      const unavailable=(overview.warnings||[]).find(w=>/^GitHub Actions runs are unavailable/.test(w))||null;
       const failed=r=>['failure','timed_out','cancelled','startup_failure'].includes(r.conclusion);
       const runs=read.filter(r=>(!args.failed_only||failed(r))&&(args.branch===undefined||r.branch===args.branch.trim()))
         .map(r=>({id:r.id,runNumber:r.runNumber,workflow:r.name,title:r.title,status:r.status,conclusion:r.conclusion||null,branch:r.branch,commit:r.sha,url:r.url,updatedAt:r.updatedAt}));
@@ -182,8 +184,9 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       const lines=[`${repository}: ${narrowed?`${runs.length} ${narrowed} of `:''}the ${read.length} most recent workflow runs`];
       if(mayHaveMore) lines.push('Older runs are not included; ask with a larger limit to read more.');
       for(const r of runs) lines.push(`${r.runNumber?`#${r.runNumber} `:''}${r.workflow} · ${r.title||''}: ${r.status==='completed'?r.conclusion||'completed':r.status.replace(/_/g,' ')} · branch ${r.branch||'unknown'} · ${short(r.commit)} · ${String(r.updatedAt).slice(0,16).replace('T',' ')} · ${r.url}`);
-      if(!runs.length) lines.push(read.length?'No runs match.':'No workflow runs found.');
-      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,runs,limit,mayHaveMore}};
+      if(unavailable) lines.splice(0,lines.length,`${repository}: workflow runs could not be read. ${unavailable}`);
+      else if(!runs.length) lines.push(read.length?'No runs match.':'No workflow runs found.');
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,available:!unavailable,error:unavailable,runs,limit,mayHaveMore}};
     },
   }];
 }

@@ -949,7 +949,7 @@ async function connectApp(env,fetchImpl) {
 }
 
 test('the connector lists pull requests and shows one as the dashboard does, from the same cache',async()=>{
-  const {env,store}=environment(),calls=[];
+  const {env,store}=environment(),calls=[];let runsDenied=false;
   const bot={login:'chatgpt-codex-connector[bot]'},head='b'.repeat(40);
   const pulls=[
     {number:1,title:'Add the benchmark',html_url:'https://github.com/owner/repo/pull/1',state:'open',merged_at:null,updated_at:'2026-10-16T10:00:00Z',created_at:'2026-10-16T09:00:00Z',draft:false,head:{sha:head},base:{ref:'main'},mergeable:true},
@@ -967,6 +967,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
     const path=url.replace('https://api.github.com/repos/owner/repo','');
     if(path==='') return ok({full_name:'owner/repo',html_url:'https://github.com/owner/repo'});
     if(path.startsWith('/pulls?state=all')) return ok(pulls);
+    if(path.startsWith('/actions/runs')&&runsDenied) return new Response(JSON.stringify({message:'Resource not accessible by integration'}),{status:403,headers:{'Content-Type':'application/json'}});
     if(path.startsWith('/actions/runs')) {
       const run=(id,n,name,status,conclusion,branch)=>({id,run_number:n,name,display_title:`Run ${n}`,status,conclusion,head_branch:branch,head_sha:'d'.repeat(40),html_url:`https://github.com/owner/repo/actions/runs/${id}`,updated_at:`2026-10-16T1${n%10}:00:00Z`});
       return ok({workflow_runs:[run(3,13,'CI','in_progress',null,'feature'),run(2,12,'CI','completed','failure','feature'),run(1,11,'Deploy','completed','success','main')]});
@@ -1009,6 +1010,15 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.deepEqual((await tool('list_workflow_runs',{limit:2})).structuredContent,{...(await tool('list_workflow_runs',{limit:2})).structuredContent,mayHaveMore:true});
   assert.equal((await tool('list_workflow_runs',{limit:2})).structuredContent.runs.length,2);
   assert.match((await tool('list_workflow_runs',{limit:99})).content[0].text,/limit must be a number from 1 to 60/);
+  assert.equal(runs.structuredContent.available,true);
+  // Runs GitHub will not show are reported as unreadable, not as none.
+  runsDenied=true;
+  const denied=await tool('list_workflow_runs',{fresh:true});
+  assert.deepEqual([denied.structuredContent.available,denied.structuredContent.runs.length],[false,0]);
+  assert.match(denied.structuredContent.error,/GitHub Actions runs are unavailable/);
+  assert.match(denied.content[0].text,/workflow runs could not be read/);
+  assert.doesNotMatch(denied.content[0].text,/No workflow runs found/);
+  runsDenied=false;
 
   assert.equal(tools[1]._meta['ui/resourceUri'],card,'older hosts read the flat key');
   assert.deepEqual((await rpc('initialize',{protocolVersion:'2025-06-18'})).result.capabilities.resources,{listChanged:false});
@@ -1144,3 +1154,4 @@ test('a GitHub callback that throws while finishing a connection is logged as a 
   assert.equal(response.status,500);
   assert.deepEqual(logged.map(line=>JSON.parse(line)).filter(l=>l.connector==='oauth'),[{connector:'oauth',step:'github',status:500,error:'exception'}]);
 });
+
