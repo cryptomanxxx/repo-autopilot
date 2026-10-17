@@ -949,7 +949,7 @@ async function connectApp(env,fetchImpl) {
 }
 
 test('the connector lists pull requests and shows one as the dashboard does, from the same cache',async()=>{
-  const {env,store}=environment(),calls=[];
+  const {env,store}=environment(),calls=[];let runsDenied=false;
   const bot={login:'chatgpt-codex-connector[bot]'},head='b'.repeat(40);
   const pulls=[
     {number:1,title:'Add the benchmark',html_url:'https://github.com/owner/repo/pull/1',state:'open',merged_at:null,updated_at:'2026-10-16T10:00:00Z',created_at:'2026-10-16T09:00:00Z',draft:false,head:{sha:head},base:{ref:'main'},mergeable:true},
@@ -967,7 +967,11 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
     const path=url.replace('https://api.github.com/repos/owner/repo','');
     if(path==='') return ok({full_name:'owner/repo',html_url:'https://github.com/owner/repo'});
     if(path.startsWith('/pulls?state=all')) return ok(pulls);
-    if(path.startsWith('/actions/runs')) return ok({workflow_runs:[]});
+    if(path.startsWith('/actions/runs')&&runsDenied) return new Response(JSON.stringify({message:'Resource not accessible by integration'}),{status:403,headers:{'Content-Type':'application/json'}});
+    if(path.startsWith('/actions/runs')) {
+      const run=(id,n,name,status,conclusion,branch)=>({id,run_number:n,name,display_title:`Run ${n}`,status,conclusion,head_branch:branch,head_sha:'d'.repeat(40),html_url:`https://github.com/owner/repo/actions/runs/${id}`,updated_at:`2026-10-16T1${n%10}:00:00Z`});
+      return ok({workflow_runs:[run(3,13,'CI','in_progress',null,'feature'),run(2,12,'CI','completed','failure','feature'),run(1,11,'Deploy','completed','success','main')]});
+    }
     const single=/^\/pulls\/(\d+)$/.exec(path);
     if(single) return pulls[Number(single[1])-1]?ok(pulls[Number(single[1])-1]):new Response('{}',{status:404});
     if(path==='/pulls/1/comments?per_page=100') return ok([finding]);
@@ -978,7 +982,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   const token=await connectApp(env,fetchImpl);
   const tool=async(name,args)=>(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json()).result;
   const {result:{tools}}=await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/list'},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json();
-  assert.deepEqual(tools.map(t=>t.name),['list_repositories','list_pull_requests','pull_request_status']);
+  assert.deepEqual(tools.map(t=>t.name),['list_repositories','list_pull_requests','pull_request_status','list_workflow_runs']);
   // The pull request tools are shown with the Repo Autopilot card (MCP Apps); the card is read with the same sign-in.
   const rpc=async(method,params)=>(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method,params},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json());
   // Every message, notifications included, leaves one line in the Worker's logs, without tokens or arguments.
@@ -995,7 +999,27 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.deepEqual(lines.map(l=>[l.connector,l.notification??false,l.resource??null,l.app,l.claude]),[['notifications/initialized',true,null,'Claude',true],['resources/read',false,'ui://repo-autopilot/pull-requests.html','Claude',true],['resources/read',false,'unknown','Claude',true],['unknown',false,null,'Claude',true],['parse-error',false,null,'Claude',true]]);
   assert.ok(!logged.some(line=>line.includes(token)||line.includes('abc123')||line.includes('xyz')),'nothing the app sent beyond known values reaches the logs');
   const card='ui://repo-autopilot/pull-requests.html';
-  assert.deepEqual(tools.map(t=>t._meta?.ui?.resourceUri??null),[null,card,card]);
+  assert.deepEqual(tools.map(t=>t._meta?.ui?.resourceUri??null),[null,card,card,null]);
+  // Workflow runs, as the dashboard lists them, narrowed to failed ones or a branch when asked.
+  const runs=await tool('list_workflow_runs',{});
+  assert.deepEqual(runs.structuredContent.runs.map(r=>[r.runNumber,r.workflow,r.status,r.conclusion,r.branch]),[[13,'CI','in_progress',null,'feature'],[12,'CI','completed','failure','feature'],[11,'Deploy','completed','success','main']]);
+  assert.match(runs.content[0].text,/#12 CI · Run 12: failure · branch feature · ddddddd · .* · https:\/\/github.com\/owner\/repo\/actions\/runs\/2/);
+  assert.match(runs.content[0].text,/#13 CI · Run 13: in progress/);
+  assert.deepEqual((await tool('list_workflow_runs',{failed_only:true})).structuredContent.runs.map(r=>r.runNumber),[12]);
+  assert.deepEqual((await tool('list_workflow_runs',{branch:'main'})).structuredContent.runs.map(r=>r.runNumber),[11]);
+  assert.deepEqual((await tool('list_workflow_runs',{limit:2})).structuredContent,{...(await tool('list_workflow_runs',{limit:2})).structuredContent,mayHaveMore:true});
+  assert.equal((await tool('list_workflow_runs',{limit:2})).structuredContent.runs.length,2);
+  assert.match((await tool('list_workflow_runs',{limit:99})).content[0].text,/limit must be a number from 1 to 60/);
+  assert.equal(runs.structuredContent.available,true);
+  // Runs GitHub will not show are reported as unreadable, not as none.
+  runsDenied=true;
+  const denied=await tool('list_workflow_runs',{fresh:true});
+  assert.deepEqual([denied.structuredContent.available,denied.structuredContent.runs.length],[false,0]);
+  assert.match(denied.structuredContent.error,/GitHub Actions runs are unavailable/);
+  assert.match(denied.content[0].text,/workflow runs could not be read/);
+  assert.doesNotMatch(denied.content[0].text,/No workflow runs found/);
+  runsDenied=false;
+
   assert.equal(tools[1]._meta['ui/resourceUri'],card,'older hosts read the flat key');
   assert.deepEqual((await rpc('initialize',{protocolVersion:'2025-06-18'})).result.capabilities.resources,{listChanged:false});
   // MCP Apps is answered in kind: only a chat app that declares the extension hears it back.
@@ -1130,3 +1154,4 @@ test('a GitHub callback that throws while finishing a connection is logged as a 
   assert.equal(response.status,500);
   assert.deepEqual(logged.map(line=>JSON.parse(line)).filter(l=>l.connector==='oauth'),[{connector:'oauth',step:'github',status:500,error:'exception'}]);
 });
+

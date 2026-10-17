@@ -14,7 +14,7 @@ function cardView() {
   const LABELS={fixed:'fixed',changed:'waiting for Codex',open:'open',unverified:'unverified'};
   const ORDER={open:0,changed:1,unverified:2,fixed:3};
   const CI={success:'CI passed',failure:'CI failed',pending:'CI running',unknown:'No checks'};
-  let context={},caps={},args=null,data=null,failure=null,waiting=true,tool=null,filter='all',busy=false,loadedAt=null,connected=false,app=null;
+  let context={},caps={},args=null,data=null,repositories=[],failure=null,waiting=true,tool=null,filter='all',busy=false,loadedAt=null,connected=false,app=null;
   const expanded=new Set(),showFixed=new Set();
   const $=id=>document.getElementById(id);
   const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls) node.className=cls;if(text!==undefined) node.textContent=text;return node;};
@@ -44,7 +44,7 @@ function cardView() {
     return transport;
   };
   const makeApp=()=>{
-    const client=new McpApps.App({name:'Repo Autopilot',version:'1.0.0'},{availableDisplayModes:['inline','fullscreen']},{autoResize:true});
+    const client=new McpApps.App({name:'Repo Autopilot',version:'1.0.0'},{availableDisplayModes:['inline','fullscreen','pip']},{autoResize:true});
     client.ontoolinput=params=>{args=params?.arguments||{};};
     client.ontoolresult=result=>{take(result);render();};
     client.ontoolcancelled=()=>{waiting=false;failure='The request was cancelled.';render();};
@@ -194,6 +194,18 @@ function cardView() {
     const modes=context.availableDisplayModes||[];
     $('expand').hidden=!modes.includes('fullscreen');
     $('expand').textContent=context.displayMode==='fullscreen'?'Exit full screen':'Full screen';
+    // Pinning keeps the card in view while the conversation scrolls, where the host offers that mode.
+    $('pin').hidden=!modes.includes('pip');
+    $('pin').textContent=context.displayMode==='pip'?'Unpin':'Pin';
+    $('pin').setAttribute('aria-pressed',String(context.displayMode==='pip'));
+    const picker=$('repo-picker');
+    picker.hidden=repositories.length<2||!data;
+    picker.disabled=busy;
+    $('repo').hidden=!picker.hidden;
+    if(!picker.hidden&&data?.repository) {
+      if(![...picker.options].some(o=>o.value===data.repository)) picker.append(new Option(data.repository,data.repository));
+      picker.value=data.repository;
+    }
     const problem=failure&&el('p','note problem',failure);
     // Open dashboard goes to the repository, or the pull request, the result is about, on this server.
     const home=$('dashboard').dataset.home;
@@ -223,9 +235,31 @@ function cardView() {
   }
 
   for(const button of $('filters').querySelectorAll('button')) button.onclick=()=>{filter=button.dataset.filter;render();};
-  $('expand').onclick=async()=>{
-    const mode=context.displayMode==='fullscreen'?'inline':'fullscreen';
+  const displayMode=async mode=>{
     try {const applied=await app.requestDisplayMode({mode});applyContext({displayMode:applied?.mode||context.displayMode});} catch {}
+    render();
+  };
+  $('expand').onclick=()=>displayMode(context.displayMode==='fullscreen'?'inline':'fullscreen');
+  $('pin').onclick=()=>displayMode(context.displayMode==='pip'?'inline':'pip');
+  // Another repository is loaded through the host with the list tool, which becomes what Refresh repeats.
+  $('repo-picker').onchange=async()=>{
+    const repository=$('repo-picker').value;
+    if(busy||!caps.serverTools||repository===data?.repository) return;
+    busy=true;render();
+    tool='list_pull_requests';args={repository};filter='all';expanded.clear();
+    try {take(await app.callServerTool({name:tool,arguments:args}));}
+    catch(error) {take({isError:true,content:[{type:'text',text:error.message}]});}
+    busy=false;render();
+  };
+  // The repositories for the picker, read once the host is connected; without them it stays hidden.
+  const loadRepositories=async()=>{
+    if(!caps.serverTools) return;
+    try {
+      const result=await app.callServerTool({name:'list_repositories',arguments:{}});
+      const names=(result?.structuredContent?.repositories||[]).map(r=>r?.fullName).filter(n=>typeof n==='string');
+      repositories=names;
+      $('repo-picker').replaceChildren(...names.map(n=>new Option(n,n)));
+    } catch {}
     render();
   };
   // Loading the same tool again through the host gives fresh data; the server still checks the sign-in.
@@ -260,6 +294,7 @@ function cardView() {
     applyContext(app.getHostContext()||{});
     tool=app.getHostContext()?.toolInfo?.tool?.name||null;
     connected=true;
+    loadRepositories();
     render();
   };
   if(document.readyState==='complete') connect(0);
@@ -311,7 +346,9 @@ a.f-title:hover{text-decoration:underline}
 .activity li{font-size:var(--font-text-xs-size,12px);color:var(--fg2)}
 .note{margin:0;color:var(--fg3);font-size:var(--font-text-xs-size,12px)}
 .head button{min-height:44px;padding:4px 12px;border:var(--border-width-regular,1px) solid var(--line);border-radius:var(--border-radius-md,8px);background:transparent;white-space:nowrap}
-.head button[hidden]{display:none}
+.head button[hidden],#repo-picker[hidden],.repo[hidden]{display:none}
+.head-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+#repo-picker{display:block;max-width:100%;min-height:44px;margin:2px 0;padding:4px 8px;font:inherit;font-weight:var(--font-weight-semibold,600);color:var(--fg);background:var(--bg2);border:var(--border-width-regular,1px) solid var(--line);border-radius:var(--border-radius-md,8px)}
 .actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .actions button,.actions a{min-height:44px;padding:8px 14px;border-radius:var(--border-radius-md,8px);border:var(--border-width-regular,1px) solid var(--line);background:var(--bg2);text-decoration:none;color:var(--fg);display:inline-flex;align-items:center}
 .actions button[hidden]{display:none}
@@ -324,8 +361,8 @@ a.f-title:hover{text-decoration:underline}
 const BODY=`
 <main class="card" aria-label="Repo Autopilot">
   <div class="head">
-    <div><span class="eyebrow">REPO AUTOPILOT</span><span class="repo" id="repo"></span><span class="updated" id="updated"></span></div>
-    <button type="button" id="expand" hidden>Full screen</button>
+    <div><span class="eyebrow">REPO AUTOPILOT</span><span class="repo" id="repo"></span><select id="repo-picker" aria-label="Repository" hidden></select><span class="updated" id="updated"></span></div>
+    <div class="head-actions"><button type="button" id="pin" aria-pressed="false" hidden>Pin</button><button type="button" id="expand" hidden>Full screen</button></div>
   </div>
   <div class="filters" id="filters" role="group" aria-label="Filter pull requests" hidden>
     <button type="button" data-filter="all" aria-pressed="true">All<span class="count"></span></button>

@@ -5,6 +5,8 @@
 - **Connector for Claude and ChatGPT.** Add Repo Autopilot as a custom connector and ask about your pull requests in the chat. Sign-in goes through GitHub with OAuth; each connected app is listed in the dashboard under **Connected apps** and can be revoked there.
 - **Read-only tools.** `list_repositories`, `list_pull_requests` and `pull_request_status` show the same data as the dashboard: merge readiness, CI, Codex status, every Codex finding with its state, and recent activity. They say when something could not be read instead of reporting it as absent. Merging stays in the dashboard.
 - **The Repo Autopilot card in the chat.** In chat apps that support MCP Apps, such as Claude on the web, desktop and mobile, the pull request tools show a card with merge readiness, CI, Codex findings and recent activity, with filters, **Refresh**, **Full screen** and **Open dashboard**. It is read-only.
+- **Workflow runs in the chat.** `list_workflow_runs` lists a repository's recent GitHub Actions runs, optionally only failed ones or one branch.
+- **Choose the repository in the card.** The card has a repository picker, and **Pin** where the chat app can keep the card in view.
 - **Links to the dashboard.** The pull request tools link each pull request to your Repo Autopilot dashboard as well as to GitHub; the link opens its repository and the pull request, where it can be merged.
 - **A clearer connect page.** **Allow and sign in with GitHub** shows at once that it was clicked, and a second click no longer ends on an expired page.
 - **Logs for troubleshooting the connector.** Each MCP message and each step of connecting an app leaves one line in the Worker's log, without codes, tokens or tool arguments.
