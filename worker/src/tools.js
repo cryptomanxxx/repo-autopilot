@@ -58,7 +58,7 @@ export function pullSummary(item) {
   };
 }
 function statusText(repository,s) {
-  const lines=[`${repository} #${s.number} ${s.title} (${s.state}${s.draft?', draft':''})`,s.url,'',`Merge: ${s.readiness.label}`];
+  const lines=[`${repository} #${s.number} ${s.title} (${s.state}${s.draft?', draft':''})`,`GitHub: ${s.url}`,`Dashboard: ${s.dashboardUrl}`,'',`Merge: ${s.readiness.label}`];
   for(const reason of s.readiness.reasons) lines.push(`  - ${reason}`);
   lines.push(`CI: ${ciLabel(s.ci,{available:s.ciAvailable,complete:s.ciComplete})}`,`Codex: ${s.codex.label}`);
   const version=f=>f.current?'current code':f.commit?`older commit ${short(f.commit)}`:'commit unknown';
@@ -73,12 +73,15 @@ function statusText(repository,s) {
   }
   for(const warning of s.warnings) lines.push('',`Note: ${warning}`);
   if(s.detailError) lines.push('',`Some details could not be read: ${s.detailError}`);
-  lines.push('','Merging happens in the Repo Autopilot dashboard.');
+  lines.push('',`Merging happens in the Repo Autopilot dashboard: ${s.dashboardUrl}`);
   return lines.join('\n');
 }
 
 export function connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData,pullLimit}) {
   const access=(token,grantId)=>({store,session:{token},hash:`grant:${grantId}`,config,fetchImpl});
+  // The pull request in this Worker's dashboard, where it can be merged: the dashboard opens the repository
+  // and the pull request named in the link.
+  const dashboardUrl=(repository,number)=>`${config.origin}/?repo=${encodeURIComponent(repository)}#pr-${number}`;
   const repositoryOf=async(args,token,grantId)=>{
     if(args.repository!==undefined&&typeof args.repository!=='string') throw Object.assign(new Error('repository must be a string like "owner/name".'),{expose:true});
     return resolveRepository(args.repository,access(token,grantId));
@@ -120,22 +123,22 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
           if(failure?.status===401||!(failure instanceof PublicError||failure?.expose)) throw failure;
           error=failure.message;
         }
-        pulls.push(item?pullSummary(item):{number:pr.number,title:pr.title,url:pr.url,state:pr.state,updatedAt:pr.updatedAt,detailsLoaded:false,error});
+        pulls.push({...(item?pullSummary(item):{number:pr.number,title:pr.title,url:pr.url,state:pr.state,updatedAt:pr.updatedAt,detailsLoaded:false,error}),dashboardUrl:dashboardUrl(repository,pr.number)});
       }
       // The overview reads a fixed number of the most recently updated pull requests; older ones are not in it.
       const mayHaveMore=overview.pulls.length>=pullLimit;
-      const lines=[`${repository}: the ${pulls.length} most recently updated pull requests`];
+      const lines=[`${repository}: the ${pulls.length} most recently updated pull requests`,`Dashboard, where pull requests are merged: ${config.origin}/?repo=${encodeURIComponent(repository)}#dashboard`];
       if(mayHaveMore) lines.push('Older pull requests are not listed and may include open ones; use pull_request_status with a number to see one.');
       for(const p of pulls) {
-        if(p.detailsLoaded===false) {lines.push(`#${p.number} ${p.title} (${p.state}): ${p.error?`details could not be read (${p.error})`:'details not loaded'}; ask for pull_request_status`);continue;}
+        if(p.detailsLoaded===false) {lines.push(`#${p.number} ${p.title} (${p.state}): ${p.error?`details could not be read (${p.error})`:'details not loaded'}; ask for pull_request_status · dashboard ${p.dashboardUrl}`);continue;}
         const parts=[p.state,p.readiness.label,`CI ${ciLabel(p.ci,{available:p.ciAvailable,complete:p.ciComplete})}`,p.codex.label];
         if(!p.findingsAvailable) parts.push('findings unknown');
         else if(p.findings.length) parts.push(`findings ${countsText(p.findingCounts)}${p.findingsIncomplete?' (may be incomplete)':''}`);
         else if(p.findingsIncomplete) parts.push('no findings seen (list may be incomplete)');
-        lines.push(`#${p.number} ${p.title}: ${parts.join(' · ')}`);
+        lines.push(`#${p.number} ${p.title}: ${parts.join(' · ')} · dashboard ${p.dashboardUrl}`);
       }
       if(!pulls.length) lines.push('No pull requests found.');
-      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,pulls,limit:pullLimit,mayHaveMore}};
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,dashboardUrl:`${config.origin}/?repo=${encodeURIComponent(repository)}#dashboard`,pulls,limit:pullLimit,mayHaveMore}};
     },
   },{
     name:'pull_request_status',title:'Pull request status',
@@ -152,7 +155,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       let item;
       try {item=await dashboardData({store,token,fetchImpl,repository,number:args.number,updated:listed?.updatedAt||'',fresh:reload});}
       catch(error) {if(error?.status===404) throw Object.assign(new Error(`${repository} has no pull request #${args.number}.`),{expose:true});throw error;}
-      const summary=pullSummary(item);
+      const summary={...pullSummary(item),dashboardUrl:dashboardUrl(repository,args.number)};
       return {content:[{type:'text',text:statusText(repository,summary)}],structuredContent:{repository,...summary}};
     },
   }];
