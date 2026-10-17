@@ -270,7 +270,9 @@ function cardView(protocol) {
   };
   const hello=()=>{
     if(connected) return;
-    if(tries++>=20) {clearInterval(timer);if(!data) {waiting=false;failure='The chat app did not connect to the card. Try again later.';}finish(null);return;}
+    // Giving up only says so: the card stays unconnected, so links still cannot replace it, and a late
+    // answer to one of the earlier requests still connects it.
+    if(tries++>=20) {clearInterval(timer);if(!data) {waiting=false;failure='The chat app did not connect to the card. Try again later.';}render();return;}
     // A refusal may come from a host that is not ready yet, so the card keeps asking until it gives up.
     request('ui/initialize',{protocolVersion:protocol,appInfo:{name:'Repo Autopilot',version:'1.0.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']}}).then(finish,()=>{});
   };
