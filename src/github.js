@@ -99,9 +99,17 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     const response = await fetchImpl(`https://api.github.com/repos/${repo}/actions/jobs/${id}/logs`, {redirect: 'manual', headers: {Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...agent, ...(token ? {Authorization: `Bearer ${token}`} : {})}, signal: AbortSignal.timeout(15000)});
     const location = response.headers.get('Location');
     if (!location || !/^https:\/\//.test(location)) return null;
-    const log = await fetchImpl(location, {headers: {Range: 'bytes=-16384', ...agent}, signal: AbortSignal.timeout(15000)});
-    // A store that ignores the range sends the whole log; a very large one is not read.
-    if (!log.ok || log.status === 200 && Number(log.headers.get('Content-Length') || 0) > 5000000) return null;
+    // Blob storage takes only start-end ranges: the first byte gives the length, then the last 16 KiB are
+    // read. A store that ignores ranges sends the whole log, which is read only when it is not too large.
+    const part = range => fetchImpl(location, {headers: {Range: range, ...agent}, signal: AbortSignal.timeout(15000)});
+    let log = await part('bytes=0-0');
+    if (log.status === 206) {
+      const total = Number(/\/(\d+)$/.exec(log.headers.get('Content-Range') || '')?.[1]);
+      await log.body?.cancel();
+      if (!Number.isFinite(total)) return null;
+      log = total > 1 ? await part(`bytes=${Math.max(0, total - 16384)}-${total - 1}`) : log;
+    }
+    if (!log.ok || log.status === 200 && Number(log.headers.get('Content-Length') || Infinity) > 5000000) return null;
     const text = (await log.text()).slice(-16384);
     const lines = text.split(/\r?\n/).map(line => line.replace(/\u001b\[[0-9;]*m/g, '').replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, '')).filter(line => line.trim());
     return lines.slice(-40).join('\n').slice(-4000);
@@ -112,7 +120,7 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     const repo = repositoryName(value), root = `/repos/${repo}`;
     const cut = (text, max) => typeof text === 'string' && text ? text.slice(0, max) : null;
     const [runs, combined] = await Promise.all([get(`${root}/commits/${ref}/check-runs?per_page=100`), get(`${root}/commits/${ref}/status?per_page=100`)]);
-    const list = (runs.check_runs || []).filter(c => c.name !== 'repo-autopilot-review-refresh-signal').map(c => ({id:c.id, name:c.name, app:c.app?.slug || null, status:c.status, conclusion:c.conclusion || null, url:c.html_url || c.details_url || null, title:cut(c.output?.title, 200), summary:cut(c.output?.summary, 1500)}));
+    const list = (runs.check_runs || []).filter(c => c.name !== 'repo-autopilot-review-refresh-signal').map(c => ({id:c.id, name:c.name, app:c.app?.slug || null, status:c.status, conclusion:c.conclusion || null, url:c.html_url || c.details_url || null, title:cut(c.output?.title, 200), summary:cut(c.output?.summary, 1500), annotationCount:Number.isInteger(c.output?.annotations_count) ? c.output.annotations_count : null}));
     const failed = list.filter(c => c.status === 'completed' && FAILED_CHECKS.includes(c.conclusion)).slice(0, 4);
     await Promise.all(failed.map(async c => {
       c.annotations = (await get(`${root}/check-runs/${c.id}/annotations?per_page=20`).catch(() => [])).map(a => ({path:a.path || null, line:a.start_line ?? null, level:a.annotation_level || null, message:cut(a.message, 500)}));
@@ -121,8 +129,14 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     const statuses = (combined.statuses || []).map(s => ({context:s.context, state:s.state, description:cut(s.description, 300), url:s.target_url || null}));
     return {checks:list, statuses, complete:(runs.check_runs || []).length < 100 && (runs.total_count ?? 0) <= (runs.check_runs || []).length && statuses.length < 100, opened:failed.length};
   }
+  // The open pull requests of a repository, most recently updated first; more may exist beyond the limit.
+  async function openPulls(value, limit = 30) {
+    const repo = repositoryName(value);
+    const pulls = await get(`/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${limit}`);
+    return {pulls:pulls.map(p => ({number:p.number, title:p.title, url:p.html_url, draft:Boolean(p.draft), updatedAt:p.updated_at})), mayHaveMore:pulls.length >= limit};
+  }
   return {
-    overview, pullDetails, checks,
+    overview, pullDetails, checks, openPulls,
     pull:(value,number)=>get(`/repos/${repositoryName(value)}/pulls/${number}`),
     async snapshot(value) {
       const {repo, pulls, ...rest} = await overview(value);

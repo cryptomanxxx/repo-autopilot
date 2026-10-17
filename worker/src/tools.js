@@ -221,6 +221,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
         if(c.title) lines.push(indent(c.title));
         if(c.summary) lines.push(indent(c.summary.slice(0,600)));
         for(const a of c.annotations||[]) lines.push(`    ${a.path||''}${a.line?`:${a.line}`:''} ${a.level||''}: ${a.message||''}`.trimEnd());
+        if(c.annotationCount>(c.annotations||[]).length) lines.push(`    ${c.annotationCount-(c.annotations||[]).length} more annotations are not shown; see the check on GitHub.`);
         if(c.log) lines.push('    Last lines of the log:',indent(c.log,'      '));
         else if(c.annotations) lines.push(c.app==='github-actions'?'    The job log could not be read.':'    No log: this check does not come from GitHub Actions.');
       }
@@ -250,13 +251,15 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       if(!item.progress?.findings) return {content:[{type:'text',text:`${repository} #${args.number}: the Codex findings could not be read from GitHub.`}],structuredContent:{repository,number:args.number,findingsAvailable:false,findings:[]}};
       const state={waiting:'changed'}[wanted]||wanted;
       const all=findingLines(item);
+      // This tool names the state waiting for Codex "waiting", as its state argument does.
       const findings=all.filter(f=>wanted==='all'||f.status.state===state).map(f=>({priority:f.priority,title:f.title,text:typeof f.text==='string'?f.text:null,path:f.path,line:f.line,url:f.url,commit:f.commit||null,current:f.current,state:f.status.state,why:f.status.why||null}));
+      const named=s=>s==='changed'?'waiting':s;
       const lines=[`${repository} #${item.number} ${item.title}: ${findings.length} Codex finding${findings.length===1?'':'s'}${wanted==='all'?'':` (${wanted})`} of ${all.length}${item.progress.findings.incomplete?' (the list may be incomplete)':''}`];
       for(const f of findings) {
         lines.push('',`${FINDING_STATES[f.state].icon} ${f.priority} ${f.title} (${f.path?`${f.path}${f.line?`:${f.line}`:''}`:'location unknown'}; ${f.current?'current code':f.commit?`older commit ${short(f.commit)}`:'commit unknown'}; ${FINDING_STATES[f.state].label}${f.why?`: ${f.why}`:''})`,`    ${f.url||''}`.trimEnd());
         lines.push(f.text?indent(f.text):'    The full text is not in the cached data; ask again with fresh: true.');
       }
-      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,number:item.number,findingsAvailable:true,findingsIncomplete:Boolean(item.progress.findings.incomplete),findings,dashboardUrl:dashboardUrl(repository,item.number)}};
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,number:item.number,findingsAvailable:true,findingsIncomplete:Boolean(item.progress.findings.incomplete),findings:findings.map(f=>({...f,state:named(f.state)})),dashboardUrl:dashboardUrl(repository,item.number)}};
     },
   },{
     name:'waiting_on_me',title:'What needs me',
@@ -267,21 +270,27 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       const reload=freshOf(args);
       const {list}=await readRepos(access(token,grantId));
       const checked=list.slice(0,ATTENTION_REPOS).map(r=>r.fullName);
-      const pulls=[],problems=[];
+      const pulls=[],problems=[],truncated=[];
+      const client=createGitHub({token,fetchImpl,userAgent:'repo-autopilot-chat'});
+      const isolated=error=>{if(error?.status===401||!(error instanceof PublicError||error?.expose||error?.status)) throw error;};
       let budget=FRESH_DETAILS;
       for(const repository of checked) {
-        let overview;
-        try {overview=await dashboardData({store,token,fetchImpl,repository,fresh:reload});}
-        catch(error) {if(error?.status===401||!(error instanceof PublicError||error?.expose)) throw error;problems.push(`${repository}: ${error.message}`);continue;}
-        for(const pr of overview.pulls.filter(p=>p.state==='open')) {
+        // The open pull requests themselves, not the dashboard's overview, which mixes in closed ones.
+        let open;
+        try {open=await client.openPulls(repository);}
+        catch(error) {isolated(error);problems.push(`${repository}: ${error.message}`);continue;}
+        if(open.mayHaveMore) truncated.push(repository);
+        for(const pr of open.pulls) {
           let item=null;
           try {
-            item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,cachedOnly:true});
-            if(!item&&budget>0) {budget--;item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,fresh:reload});}
-          } catch(error) {if(error?.status===401||!(error instanceof PublicError||error?.expose)) throw error;}
+            // Fresh reads GitHub again, within the budget; the rest come from the cache.
+            const again=reload&&budget>0;
+            if(!again) item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,cachedOnly:true});
+            if(!item&&budget>0) {budget--;item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,fresh:again});}
+          } catch(error) {isolated(error);}
           const summary=item?pullSummary(item):null;
           pulls.push({repository,number:pr.number,title:pr.title,url:pr.url,dashboardUrl:dashboardUrl(repository,pr.number),
-            next:summary?nextStep(summary):'check',reasons:summary?summary.readiness.reasons:[],ci:summary?.ci??null,codex:summary?.codex?.label??null,openFindings:summary?.findingCounts?.open??null});
+            next:pr.draft?'draft':summary?nextStep(summary):'check',reasons:summary?summary.readiness.reasons:[],ci:summary?.ci??null,codex:summary?.codex?.label??null,openFindings:summary?.findingCounts?.open??null});
         }
       }
       const order={fix:0,merge:1,wait:2,check:3,draft:4};
@@ -290,9 +299,11 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       const lines=[`Open pull requests in ${checked.length} repositor${checked.length===1?'y':'ies'}: ${checked.join(', ')||'none'}`];
       if(list.length>checked.length) lines.push(`${list.length-checked.length} less recently pushed repositories were not read.`);
       for(const p of pulls) lines.push(`${label[p.next]}: ${p.repository} #${p.number} ${p.title}${p.reasons.length?` (${p.reasons.join('; ')})`:''} · ${p.dashboardUrl}`);
-      if(!pulls.length) lines.push('No open pull requests.');
+      for(const repository of truncated) lines.push(`${repository} has more open pull requests than the 30 read here.`);
+      // With a repository unread, no open pull requests is not known.
+      if(!pulls.length) lines.push(problems.length?'No open pull requests were found in the repositories that could be read.':'No open pull requests.');
       for(const problem of problems) lines.push(`Could not read ${problem}`);
-      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repositories:checked,notRead:Math.max(0,list.length-checked.length),pulls,problems}};
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repositories:checked,notRead:Math.max(0,list.length-checked.length),pulls,truncated,problems,complete:!problems.length&&!truncated.length&&list.length<=checked.length}};
     },
   }];
 }

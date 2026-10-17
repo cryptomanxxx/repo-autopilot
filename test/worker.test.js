@@ -949,7 +949,7 @@ async function connectApp(env,fetchImpl) {
 }
 
 test('the connector lists pull requests and shows one as the dashboard does, from the same cache',async()=>{
-  const {env,store}=environment(),calls=[];let runsDenied=false,failedChecks=false,logAuth;
+  const {env,store}=environment(),calls=[];let runsDenied=false,failedChecks=false,logAuth,logRanges=[],openDenied=false;
   const bot={login:'chatgpt-codex-connector[bot]'},head='b'.repeat(40);
   const pulls=[
     {number:1,title:'Add the benchmark',html_url:'https://github.com/owner/repo/pull/1',state:'open',merged_at:null,updated_at:'2026-10-16T10:00:00Z',created_at:'2026-10-16T09:00:00Z',draft:false,head:{sha:head},base:{ref:'main'},mergeable:true},
@@ -967,6 +967,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
     const path=url.replace('https://api.github.com/repos/owner/repo','');
     if(path==='') return ok({full_name:'owner/repo',html_url:'https://github.com/owner/repo'});
     if(path.startsWith('/pulls?state=all')) return ok(pulls);
+    if(path.startsWith('/pulls?state=open')) return openDenied?new Response('{}',{status:503}):ok(pulls.filter(p=>p.state==='open'));
     if(path.startsWith('/actions/runs')&&runsDenied) return new Response(JSON.stringify({message:'Resource not accessible by integration'}),{status:403,headers:{'Content-Type':'application/json'}});
     if(path.startsWith('/actions/runs')) {
       const run=(id,n,name,status,conclusion,branch)=>({id,run_number:n,name,display_title:`Run ${n}`,status,conclusion,head_branch:branch,head_sha:'d'.repeat(40),html_url:`https://github.com/owner/repo/actions/runs/${id}`,updated_at:`2026-10-16T1${n%10}:00:00Z`});
@@ -975,10 +976,18 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
     const single=/^\/pulls\/(\d+)$/.exec(path);
     if(single) return pulls[Number(single[1])-1]?ok(pulls[Number(single[1])-1]):new Response('{}',{status:404});
     if(path==='/pulls/1/comments?per_page=100') return ok([finding]);
-    if(failedChecks&&path===`/commits/${head}/check-runs?per_page=100`) return ok({total_count:2,check_runs:[{id:77,name:'test',app:{slug:'github-actions'},status:'completed',conclusion:'failure',html_url:'https://github.com/owner/repo/runs/77',output:{title:'1 test failed',summary:'cart totals'}},{id:78,name:'lint',app:{slug:'github-actions'},status:'completed',conclusion:'success',html_url:'https://github.com/owner/repo/runs/78',output:{}}]});
+    if(failedChecks&&path===`/commits/${head}/check-runs?per_page=100`) return ok({total_count:2,check_runs:[{id:77,name:'test',app:{slug:'github-actions'},status:'completed',conclusion:'failure',html_url:'https://github.com/owner/repo/runs/77',output:{title:'1 test failed',summary:'cart totals',annotations_count:23}},{id:78,name:'lint',app:{slug:'github-actions'},status:'completed',conclusion:'success',html_url:'https://github.com/owner/repo/runs/78',output:{}}]});
     if(path==='/check-runs/77/annotations?per_page=20') return ok([{path:'src/cart.js',start_line:7,annotation_level:'failure',message:'expected 10.00, got 10.01'}]);
     if(path==='/actions/jobs/77/logs') return new Response(null,{status:302,headers:{Location:'https://logs.example/job77'}});
-    if(url==='https://logs.example/job77') {logAuth=options.headers?.Authorization;return new Response('2026-10-16T10:00:00.0000000Z npm test\n2026-10-16T10:00:01.0000000Z \u001b[31mnot ok 3 - cart totals\u001b[0m\n',{status:206});}
+    if(url==='https://logs.example/job77') {
+      // Like blob storage: only start-end ranges.
+      logAuth=options.headers?.Authorization;logRanges.push(options.headers?.Range);
+      const log='x'.repeat(20000)+'\n2026-10-16T10:00:00.0000000Z npm test\n2026-10-16T10:00:01.0000000Z \u001b[31mnot ok 3 - cart totals\u001b[0m\n';
+      const range=/^bytes=(\d+)-(\d+)$/.exec(options.headers?.Range||'');
+      if(!range) return new Response('',{status:416});
+      const [from,to]=[Number(range[1]),Math.min(Number(range[2]),log.length-1)];
+      return new Response(log.slice(from,to+1),{status:206,headers:{'Content-Range':`bytes ${from}-${to}/${log.length}`}});
+    }
     if(/\/check-runs/.test(path)) return ok({total_count:1,check_runs:[{name:'test',status:'in_progress',conclusion:null}]});
     if(/\/status\?/.test(path)) return ok({statuses:[]});
     return ok([]);
@@ -1013,8 +1022,10 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.match(checks.content[0].text,/1 failed · 0 running · 1 passed/);
   assert.match(checks.content[0].text,/✗ test: failure · https:\/\/github.com\/owner\/repo\/runs\/77/);
   assert.match(checks.content[0].text,/src\/cart.js:7 failure: expected 10.00, got 10.01/);
-  assert.match(checks.content[0].text,/Last lines of the log:\n      npm test\n      not ok 3 - cart totals/);
+  assert.match(checks.content[0].text,/Last lines of the log:\n      x+\n      npm test\n      not ok 3 - cart totals\n/);
   assert.equal(logAuth,undefined,'the log download is not sent the GitHub token');
+  assert.deepEqual(logRanges,['bytes=0-0',`bytes=${20000+1+'2026-10-16T10:00:00.0000000Z npm test\n2026-10-16T10:00:01.0000000Z \u001b[31mnot ok 3 - cart totals\u001b[0m\n'.length-16384}-${20000+1+'2026-10-16T10:00:00.0000000Z npm test\n2026-10-16T10:00:01.0000000Z \u001b[31mnot ok 3 - cart totals\u001b[0m\n'.length-1}`],'the log length is read first, then its end, in start-end ranges');
+  assert.match(checks.content[0].text,/22 more annotations are not shown/);
   assert.match((await tool('pull_request_checks',{number:9})).content[0].text,/has no pull request #9/);
   // Codex findings with their full text, without the badge, the feedback prompt or markers.
   const full=await tool('codex_findings',{number:1,fresh:true});
@@ -1022,11 +1033,22 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.match(full.content[0].text,/P2 Fix sampling parameters \(research\/bench.py:68/);
   assert.match(full.content[0].text,/    The sampler uses temperature 2.0/);
   assert.equal((await tool('codex_findings',{number:1,state:'fixed'})).structuredContent.findings.length,0);
+  assert.ok(full.structuredContent.findings.every(f=>['open','waiting','unverified','fixed'].includes(f.state)),'states use the tool\'s own names');
   // What needs the owner, across repositories: each open pull request with what it waits on.
   const attention=await tool('waiting_on_me',{});
   assert.deepEqual(attention.structuredContent.repositories,['owner/repo']);
   assert.deepEqual(attention.structuredContent.pulls.map(p=>[p.repository,p.number,p.next]),[['owner/repo',1,'fix']]);
   assert.match(attention.content[0].text,/^Fix: owner\/repo #1 Add the benchmark \(.*\) · https:\/\/chat.example.workers.dev\/\?repo=owner%2Frepo#pr-1$/m);
+  // Fresh reads the details from GitHub again instead of the cache.
+  const before=calls.filter(c=>c.url.includes('/pulls/1/reviews')).length;
+  await tool('waiting_on_me',{fresh:true});
+  assert.equal(calls.filter(c=>c.url.includes('/pulls/1/reviews')).length,before+1,'a fresh list reloads the details');
+  // A repository that cannot be read leaves the answer open, not an all-clear.
+  openDenied=true;
+  const unread=await tool('waiting_on_me',{});
+  openDenied=false;
+  assert.equal(unread.structuredContent.complete,false);
+  assert.match(unread.content[0].text,/No open pull requests were found in the repositories that could be read\.\nCould not read owner\/repo: GitHub request failed \(503\)\./);
   // Workflow runs, as the dashboard lists them, narrowed to failed ones or a branch when asked.
   const runs=await tool('list_workflow_runs',{});
   assert.deepEqual(runs.structuredContent.runs.map(r=>[r.runNumber,r.workflow,r.status,r.conclusion,r.branch]),[[13,'CI','in_progress',null,'feature'],[12,'CI','completed','failure','feature'],[11,'Deploy','completed','success','main']]);
