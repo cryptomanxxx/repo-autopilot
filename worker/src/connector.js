@@ -322,28 +322,33 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
   return rpcError(id,-32601,`Method not found: ${method}`);
 }
 
-// What the card reports about itself (see cardReport in card.js), one line each in the Worker's logs. The card
-// has no token, so anyone can post here; only known values are written, and the one free text, a script
-// error, is cut short.
-const CARD_EVENTS=['start','message','attempt','failed','gave-up','connected','tool-input','tool-result','cancelled','teardown','error'];
+// What the card reports about itself (see cardReport in card.js), one line each in the Worker's logs: posted
+// as a beacon, or as the r parameter of an image request, answered with a transparent pixel. The card has no
+// token, so anyone can send reports; only known values are written, and the one free text, a script error,
+// is cut short.
+const CARD_EVENTS=['html','start','message','attempt','failed','gave-up','connected','tool-input','tool-result','cancelled','teardown','error'];
 const CARD_MESSAGES=['ui/initialize','ui/notifications/initialized','ui/notifications/tool-input','ui/notifications/tool-input-partial','ui/notifications/tool-result','ui/notifications/tool-cancelled','ui/notifications/host-context-changed','ui/notifications/size-changed','ui/notifications/sandbox-proxy-ready','ui/notifications/sandbox-resource-ready','ui/resource-teardown','ui/open-link','ui/request-display-mode','ui/message','ui/update-model-context','tools/call','ping','notifications/message'];
 const MAX_CARD_LOG=2048;
-async function cardLog(request) {
-  if(request.method!=='POST') return json(405,{error:'Use POST.'},{Allow:'POST, OPTIONS'});
+const PIXEL=Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'),c=>c.charCodeAt(0));
+async function cardLog(request,url) {
+  const image=request.method==='GET';
+  if(!image&&request.method!=='POST') return json(405,{error:'Use GET or POST.'},{Allow:'GET, POST, OPTIONS'});
+  const query=url.searchParams.get('r')||'';
   let report;
-  try {report=JSON.parse(await readBody(request,MAX_CARD_LOG));} catch {}
+  try {report=JSON.parse(image?(query.length<=MAX_CARD_LOG?query:''):await readBody(request,MAX_CARD_LOG));} catch {}
   if(!report||typeof report!=='object'||!CARD_EVENTS.includes(report.event)||!/^[0-9a-f]{16}$/.test(report.load)) return json(400,{error:'Not a card report.'});
   const origin=value=>typeof value!=='string'||value===''?undefined:value==='null'||/^https?:\/\/[a-z0-9.-]+(:\d{1,5})?$/i.test(value)?value:'other';
   const count=(value,max)=>Number.isInteger(value)&&value>=0&&value<=max?value:undefined;
   const flag=value=>typeof value==='boolean'?value:undefined;
   const pick=(value,list)=>typeof value!=='string'?undefined:value===''||list.includes(value)?value:'unknown';
   const text=(value,max)=>typeof value==='string'?value.replace(/[\u0000-\u001f\u007f]+/g,' ').slice(0,max):undefined;
-  console.log(JSON.stringify({card:report.event,load:report.load,
+  console.log(JSON.stringify({card:report.event,load:report.load,via:pick(report.via,['beacon','image','html']),
     frame:pick(report.frame,['top','frame']),origin:origin(report.origin),parentOrigin:origin(report.parentOrigin),referrer:origin(report.referrer),ready:pick(report.ready,['loading','interactive','complete']),
     from:pick(report.from,['parent','none','other']),method:pick(report.method,CARD_MESSAGES),reply:flag(report.reply),
     attempt:count(report.attempt,99),host:text(report.host,80)?.replace(/[^\w .@/+-]/g,''),caps:Array.isArray(report.caps)?report.caps.filter(c=>typeof c==='string'&&/^[A-Za-z]{1,30}$/.test(c)).slice(0,12):undefined,
     isError:flag(report.isError),structured:flag(report.structured),height:count(report.height,100000),error:text(report.error,200),
     agent:(request.headers.get('User-Agent')||'').slice(0,120)}));
+  if(image) return new Response(PIXEL,{status:200,headers:{'Content-Type':'image/gif','Cache-Control':'no-store',...CORS}});
   return new Response(null,{status:204,headers:CORS});
 }
 
@@ -358,6 +363,6 @@ export async function connector(request,url,context) {
   if(url.pathname==='/oauth/authorize'&&request.method==='GET') return showConsent(Object.fromEntries(url.searchParams),context);
   if(url.pathname==='/oauth/authorize'&&request.method==='POST') return decideConsent(request,context);
   if(url.pathname==='/mcp') return mcp(request,context);
-  if(url.pathname===CARD_LOG_PATH) return cardLog(request);
+  if(url.pathname===CARD_LOG_PATH) return cardLog(request,url);
   return json(404,{error:'Not found.'});
 }

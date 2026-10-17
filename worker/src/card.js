@@ -10,15 +10,21 @@ export const CARD_MIME='text/html;profile=mcp-app';
 // Runs first in the card, before the SDK, and reports how far the card gets to the server's /card-log, which
 // writes each report to the Worker's log: the page starting and where it runs, the messages the host sends,
 // each handshake attempt and its outcome, the tool input and result, and script errors. Reports carry no
-// tool data, only what happened. It is serialized like cardView, with the report address as its argument.
-function cardReport(url) {
-  const load=[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,'0')).join('');
+// tool data, only what happened. Each goes out twice, as a beacon (connect-src) and as an image request
+// (img-src), so the log also shows which of the two a host's sandbox lets through; via says which one it was.
+// It is serialized like cardView, with the report address and the page's load id as its arguments.
+function cardReport(url,load) {
   let sent=0,seen=0;
+  const images=new Set();
   const report=(event,fields={})=>{
     if(++sent>40) return;
-    const body=JSON.stringify({event,load,...fields});
-    try {if(navigator.sendBeacon?.(url,body)) return;} catch {}
-    try {fetch(url,{method:'POST',body,keepalive:true,mode:'no-cors'}).catch(()=>{});} catch {}
+    const body=via=>JSON.stringify({event,load,via,...fields});
+    try {if(!navigator.sendBeacon?.(url,body('beacon'))) fetch(url,{method:'POST',body:body('beacon'),keepalive:true,mode:'no-cors'}).catch(()=>{});} catch {}
+    try {
+      const image=new Image();images.add(image);
+      image.onload=image.onerror=()=>images.delete(image);
+      image.src=`${url}?r=${encodeURIComponent(body('image'))}`;
+    } catch {}
   };
   globalThis.RepoAutopilotReport=report;
   const originOf=value=>{try {return new URL(value).origin;} catch {return '';}};
@@ -371,10 +377,15 @@ const BODY=`
 // The card's HTML. The dashboard link and the report address are the only server values in it; merging
 // happens in the dashboard.
 export const CARD_LOG_PATH='/card-log';
+// The page's load id is made with the HTML, so a host that keeps the HTML shows the same id each time.
 export function cardHtml(origin) {
-  const dashboard=`${origin}/`.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  const attribute=value=>value.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  const dashboard=attribute(`${origin}/`);
+  const load=[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,'0')).join('');
   const reportUrl=JSON.stringify(`${origin}${CARD_LOG_PATH}`).replace(/</g,'\\u003c');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Repo Autopilot</title><style>${STYLE}</style></head><body>${BODY.replace('__DASHBOARD__',dashboard)}<script>(${cardReport.toString()})(${reportUrl});</script><script>${EXT_APPS_SCRIPT}</script><script>(${cardView.toString()})();</script></body></html>`;
+  // Requested by the HTML itself, before any script: it arrives when the host shows the card at all.
+  const ping=attribute(`${origin}${CARD_LOG_PATH}?r=${encodeURIComponent(JSON.stringify({event:'html',load,via:'html'}))}`);
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Repo Autopilot</title><style>${STYLE}</style></head><body><img src="${ping}" alt="" width="1" height="1" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">${BODY.replace('__DASHBOARD__',dashboard)}<script>(${cardReport.toString()})(${reportUrl},"${load}");</script><script>${EXT_APPS_SCRIPT}</script><script>(${cardView.toString()})();</script></body></html>`;
 }
 
 // What resources/list and resources/read return for the card.
@@ -392,8 +403,8 @@ export const isClaude=client=>(client?.redirectUris||[]).some(uri=>{try {return 
 // domain is the sandbox origin the host expects, when it has a format for one (Claude does); other hosts
 // choose their own.
 export function cardContents(origin,{domain=null}={}) {
-  // The card loads nothing from elsewhere; everything comes from the host. It connects only to this server,
-  // to report how far it got.
-  return {contents:[{uri:CARD_URI,mimeType:CARD_MIME,text:cardHtml(origin),_meta:{ui:{csp:{connectDomains:[origin],resourceDomains:[]},prefersBorder:true,...(domain?{domain}:{})}}}]};
+  // The card loads nothing from elsewhere; everything comes from the host. It reaches only this server, to
+  // report how far it got, by beacon and by image request.
+  return {contents:[{uri:CARD_URI,mimeType:CARD_MIME,text:cardHtml(origin),_meta:{ui:{csp:{connectDomains:[origin],resourceDomains:[origin]},prefersBorder:true,...(domain?{domain}:{})}}}]};
 }
 export const CARD_TOOL_META={ui:{resourceUri:CARD_URI},'ui/resourceUri':CARD_URI};
