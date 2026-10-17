@@ -70,3 +70,15 @@ test('an internal failure while listing pull requests reaches the generic handle
   const tools=connectorTools({store:{},config:{},readRepos:null,resolveRepository:async()=>'o/r',dashboardData,pullLimit:6});
   await assert.rejects(tools.find(t=>t.name==='list_pull_requests').run({},{token:'t',grantId:'g'}),/storage detail xyz/,'not turned into a row with the raw message');
 });
+
+test('the card inlines the official MCP Apps client, and nothing from other sites',async()=>{
+  const {EXT_APPS_VERSION,EXT_APPS_SCRIPT}=await import('../worker/src/vendor/ext-apps.js');
+  const {cardHtml}=await import('../worker/src/card.js');
+  assert.equal(EXT_APPS_VERSION,'1.7.5');
+  const scope={};
+  new Function('globalThis',EXT_APPS_SCRIPT)(scope);
+  assert.equal(typeof scope.McpApps.App,'function','the bundle exposes App');
+  const html=cardHtml('https://autopilot.example');
+  assert.ok(html.includes(EXT_APPS_SCRIPT),'the client is inlined');
+  assert.doesNotMatch(html,/<script[^>]+src=/);
+});
