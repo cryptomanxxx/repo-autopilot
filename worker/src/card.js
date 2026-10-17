@@ -7,38 +7,6 @@ import {EXT_APPS_SCRIPT} from './vendor/ext-apps.js';
 export const CARD_URI='ui://repo-autopilot/pull-requests.html';
 export const CARD_MIME='text/html;profile=mcp-app';
 
-// Runs first in the card, before the SDK, and reports how far the card gets to the server's /card-log, which
-// writes each report to the Worker's log: the page starting and where it runs, the messages the host sends,
-// each handshake attempt and its outcome, the tool input and result, and script errors. Reports carry no
-// tool data, only what happened. Each goes out twice, as a beacon (connect-src) and as an image request
-// (img-src), so the log also shows which of the two a host's sandbox lets through; via says which one it was.
-// It is serialized like cardView, with the report address and the page's load id as its arguments.
-function cardReport(url,load) {
-  let sent=0,seen=0;
-  const images=new Set();
-  const report=(event,fields={})=>{
-    if(++sent>40) return;
-    const body=via=>JSON.stringify({event,load,via,...fields});
-    try {if(!navigator.sendBeacon?.(url,body('beacon'))) fetch(url,{method:'POST',body:body('beacon'),keepalive:true,mode:'no-cors'}).catch(()=>{});} catch {}
-    try {
-      const image=new Image();images.add(image);
-      image.onload=image.onerror=()=>images.delete(image);
-      image.src=`${url}?r=${encodeURIComponent(body('image'))}`;
-    } catch {}
-  };
-  globalThis.RepoAutopilotReport=report;
-  const originOf=value=>{try {return new URL(value).origin;} catch {return '';}};
-  report('start',{frame:window.parent===window?'top':'frame',origin:location.origin,parentOrigin:location.ancestorOrigins?.[0]||'',referrer:originOf(document.referrer),ready:document.readyState});
-  window.addEventListener('error',event=>report('error',{error:String(event.message||event.error||'error')}));
-  window.addEventListener('unhandledrejection',event=>report('error',{error:String(event.reason?.message||event.reason||'rejection')}));
-  // The first messages that reach the page, from whichever source, before the card's own filter.
-  window.addEventListener('message',event=>{
-    if(++seen>10) return;
-    const message=event.data&&typeof event.data==='object'?event.data:{};
-    report('message',{from:event.source===window.parent?'parent':event.source===null?'none':'other',method:typeof message.method==='string'?message.method:'',reply:'result' in message||'error' in message});
-  });
-}
-
 // Runs inside the card's sandboxed frame. It is serialized with Function.prototype.toString, so it must not
 // use anything from this module's scope.
 function cardView() {
@@ -48,8 +16,6 @@ function cardView() {
   const CI={success:'CI passed',failure:'CI failed',pending:'CI running',unknown:'No checks'};
   let context={},caps={},args=null,data=null,failure=null,waiting=true,tool=null,filter='all',busy=false,loadedAt=null,connected=false,app=null;
   const expanded=new Set(),showFixed=new Set();
-  const report=globalThis.RepoAutopilotReport||(()=>{});
-  const height=()=>document.documentElement.scrollHeight;
   const $=id=>document.getElementById(id);
   const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls) node.className=cls;if(text!==undefined) node.textContent=text;return node;};
 
@@ -79,11 +45,11 @@ function cardView() {
   };
   const makeApp=()=>{
     const client=new McpApps.App({name:'Repo Autopilot',version:'1.0.0'},{availableDisplayModes:['inline','fullscreen']},{autoResize:true});
-    client.ontoolinput=params=>{args=params?.arguments||{};report('tool-input');};
-    client.ontoolresult=result=>{take(result);render();report('tool-result',{isError:Boolean(result?.isError),structured:Boolean(result?.structuredContent),height:height()});};
-    client.ontoolcancelled=()=>{waiting=false;failure='The request was cancelled.';render();report('cancelled');};
+    client.ontoolinput=params=>{args=params?.arguments||{};};
+    client.ontoolresult=result=>{take(result);render();};
+    client.ontoolcancelled=()=>{waiting=false;failure='The request was cancelled.';render();};
     client.onhostcontextchanged=change=>{applyContext(change||{});render();};
-    client.onteardown=async()=>{report('teardown');return {};};
+    client.onteardown=async()=>({});
     return client;
   };
 
@@ -277,16 +243,13 @@ function cardView() {
   const connect=async attempt=>{
     app=makeApp();
     const started=Date.now();
-    report('attempt',{attempt});
     try {await app.connect(makeTransport(),{timeout:ATTEMPT_MS});}
-    catch(error) {
-      report('failed',{attempt,error:String(error?.message||error)});
+    catch {
       try {await app.close();} catch {}
       // A host that refuses at once may still be starting, so every attempt takes its full time.
       if(attempt+1<ATTEMPTS) {setTimeout(()=>connect(attempt+1),Math.max(0,ATTEMPT_MS-(Date.now()-started)));return;}
       if(!data) {waiting=false;failure='The chat app did not connect to the card. Try again later.';}
       render();
-      report('gave-up');
       return;
     }
     caps=app.getHostCapabilities()||{};
@@ -294,8 +257,6 @@ function cardView() {
     tool=app.getHostContext()?.toolInfo?.tool?.name||null;
     connected=true;
     render();
-    const host=app.getHostVersion?.();
-    report('connected',{attempt,host:host?`${host.name||''} ${host.version||''}`.trim():'',caps:Object.keys(caps),height:height()});
   };
   if(document.readyState==='complete') connect(0);
   else window.addEventListener('load',()=>connect(0),{once:true});
@@ -374,22 +335,14 @@ const BODY=`
   </div>
 </main>`;
 
-// The card's HTML. The dashboard link and the report address are the only server values in it; merging
-// happens in the dashboard.
-export const CARD_LOG_PATH='/card-log';
 // The card's scripts are this module's functions as source text. A bundler can add calls to its own helpers
 // inside them (wrangler's esbuild wraps functions in __name to keep their names), and those helpers do not
 // exist in the card, so each script defines the one it may call.
 export const cardScript=(fn,args='')=>`<script>var __name=function(f){return f};(${fn.toString()})(${args});</script>`;
-// The page's load id is made with the HTML, so a host that keeps the HTML shows the same id each time.
+// The card's HTML. The dashboard link is the only server value in it; merging happens there.
 export function cardHtml(origin) {
-  const attribute=value=>value.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
-  const dashboard=attribute(`${origin}/`);
-  const load=[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,'0')).join('');
-  const reportUrl=JSON.stringify(`${origin}${CARD_LOG_PATH}`).replace(/</g,'\\u003c');
-  // Requested by the HTML itself, before any script: it arrives when the host shows the card at all.
-  const ping=attribute(`${origin}${CARD_LOG_PATH}?r=${encodeURIComponent(JSON.stringify({event:'html',load,via:'html'}))}`);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Repo Autopilot</title><style>${STYLE}</style></head><body><img src="${ping}" alt="" width="1" height="1" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">${BODY.replace('__DASHBOARD__',dashboard)}${cardScript(cardReport,`${reportUrl},"${load}"`)}<script>${EXT_APPS_SCRIPT}</script>${cardScript(cardView)}</body></html>`;
+  const dashboard=`${origin}/`.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Repo Autopilot</title><style>${STYLE}</style></head><body>${BODY.replace('__DASHBOARD__',dashboard)}<script>${EXT_APPS_SCRIPT}</script>${cardScript(cardView)}</body></html>`;
 }
 
 // What resources/list and resources/read return for the card.
@@ -407,8 +360,7 @@ export const isClaude=client=>(client?.redirectUris||[]).some(uri=>{try {return 
 // domain is the sandbox origin the host expects, when it has a format for one (Claude does); other hosts
 // choose their own.
 export function cardContents(origin,{domain=null}={}) {
-  // The card loads nothing from elsewhere; everything comes from the host. It reaches only this server, to
-  // report how far it got, by beacon and by image request.
-  return {contents:[{uri:CARD_URI,mimeType:CARD_MIME,text:cardHtml(origin),_meta:{ui:{csp:{connectDomains:[origin],resourceDomains:[origin]},prefersBorder:true,...(domain?{domain}:{})}}}]};
+  // No external origins: the card loads nothing and connects nowhere; everything comes from the host.
+  return {contents:[{uri:CARD_URI,mimeType:CARD_MIME,text:cardHtml(origin),_meta:{ui:{csp:{connectDomains:[],resourceDomains:[]},prefersBorder:true,...(domain?{domain}:{})}}}]};
 }
 export const CARD_TOOL_META={ui:{resourceUri:CARD_URI},'ui/resourceUri':CARD_URI};

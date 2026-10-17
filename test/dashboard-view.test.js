@@ -102,7 +102,7 @@ test('the card scripts still run when a bundler wraps their functions in __name'
   const source=/^<script>([\s\S]*)<\/script>$/.exec(cardScript(bundled,'out'))[1];
   vm.runInNewContext(source,{out});
   assert.deepEqual(out,['ran']);
-  // Every script made from this module's functions carries the helper.
+  // The card's own script carries the helper.
   const scripts=[...cardHtml('https://x.example').matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
-  assert.equal(scripts.filter(s=>s.startsWith('var __name=')).length,2);
+  assert.equal(scripts.filter(s=>s.startsWith('var __name=')).length,1);
 });

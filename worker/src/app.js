@@ -2,7 +2,7 @@ import {githubClient,GitHubError,readLimited} from './github.js';
 import {repositoryName,createGitHub} from '../../src/github.js';
 import {PublicError,UserError} from './errors.js';
 import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
-import {connector,isConnectorPath,finishConnect,failConnect} from './connector.js';
+import {connector,isConnectorPath,finishConnect,failConnect,logOauth} from './connector.js';
 import {connectorTools} from './tools.js';
 export {UserError};
 import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
@@ -119,11 +119,16 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     const githubError=url.searchParams.get('error'),code=url.searchParams.get('code');
     const reason=githubError?(githubError==='access_denied'?'cancelled':'github'):'expired';
     const pending=await openState(env.GITHUB_CLIENT_SECRET,url.searchParams.get('state'),now());
-    if(!pending||pending.browser!==cookies(request).autopilot_login) return redirect(`/?signin=${reason}`);
+    if(!pending||pending.browser!==cookies(request).autopilot_login) {
+      // A connection whose sign-in came back to another browser than the one that started it.
+      if(pending?.connect) await logOauth('github',new Response(null,{status:400}),{reason:'browser'});
+      return redirect(`/?signin=${reason}`);
+    }
     const failed=async reason=>{
       // A connection in progress reports the failure to the app that started it.
       const back=pending.connect&&await failConnect({pending:pending.connect,reason,store,origin:config.origin});
-      if(back) {back.headers.append('Set-Cookie',cookie('autopilot_login','',{path:'/auth'}));return back;}
+      if(back) {back.headers.append('Set-Cookie',cookie('autopilot_login','',{path:'/auth'}));return logOauth('github',back,{reason});}
+      if(pending.connect) await logOauth('github',new Response(null,{status:400}),{reason});
       return redirect(`/?signin=${reason}`,[cookie('autopilot_login','',{path:'/auth'})]);
     };
     if(githubError) return failed(reason);
@@ -145,7 +150,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
       const connected=await finishConnect({pending:pending.connect,token,login:user.login,store,env,origin:config.origin,now});
       if(!connected) return failed('expired');
       connected.headers.append('Set-Cookie',cookie('autopilot_login','',{path:'/auth'}));
-      return connected;
+      return logOauth('github',connected);
     }
     const id=randomHex(),lifetime=Number.isFinite(token.expires_in)&&token.expires_in>0?token.expires_in*1000:8*HOUR;
     await store.createSession({hash:hex(await sha256(id)),token:token.access_token,csrf:randomHex(),login:user.login,expires:now()+Math.min(lifetime,8*HOUR)});

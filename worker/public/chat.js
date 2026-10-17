@@ -326,6 +326,8 @@ $('logout').onclick=async()=>{try {await api('/api/logout',{});} catch {} locati
 
 const SIGN_IN_PROBLEMS={cancelled:'Sign-in was cancelled.',expired:'The sign-in expired or started in another browser. Try again.',failed:'GitHub sign-in failed. Try again.',app:'The chat must use the client ID and secret of a GitHub App, not an OAuth app.',owner:'Only the repository owner account can use this chat.',github:'GitHub rejected the sign-in. Check the GitHub App\'s callback URL and client ID.'};
 const signInProblem=SIGN_IN_PROBLEMS[new URLSearchParams(location.search).get('signin')];
+// A link from the connector names the repository of the pull request it opens (?repo=owner/name#pr-12).
+const linkedRepo=new URLSearchParams(location.search).get('repo');
 if(location.search) history.replaceState(null,'',location.pathname+location.hash);
 $('tab-dashboard').onclick=()=>showTab('dashboard');
 $('tab-chat').onclick=()=>showTab('chat');
@@ -347,7 +349,8 @@ try {
     let repositories=[{fullName:session.repository,private:false}],remembered=null;
     try {repositories=await loadRepos();} catch(error) {status(error.message);}
     try {remembered=localStorage.getItem('autopilot-repo');} catch {}
-    state.repository=repositories.find(r=>remembered&&sameRepo(r.fullName,remembered))?.fullName||session.repository;
+    const reachable=name=>name&&repositories.find(r=>sameRepo(r.fullName,name))?.fullName;
+    state.repository=reachable(linkedRepo)||reachable(remembered)||session.repository;
     fillRepos(repositories);
     $('logout').hidden=false;$('tabs').hidden=false;$('repo-bar').hidden=false;
     startDashboard(api,{isVisible:()=>state.tab==='dashboard',selected:()=>state.repository});

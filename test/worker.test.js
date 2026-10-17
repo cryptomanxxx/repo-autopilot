@@ -1006,13 +1006,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.deepEqual(resources.map(r=>[r.uri,r.mimeType]),[[card,'text/html;profile=mcp-app']]);
   const {result:{contents:[content]}}=await rpc('resources/read',{uri:card});
   assert.equal(content.mimeType,'text/html;profile=mcp-app');
-  assert.deepEqual(content._meta.ui.csp,{connectDomains:[ORIGIN],resourceDomains:[ORIGIN]},'the card loads nothing and reaches only this server');
-  assert.ok(content.text.includes(JSON.stringify(ORIGIN+'/card-log')),'the card reports to this server');
-  // The HTML itself requests the report pixel, before any script, with the same load id the script uses.
-  const ping=/<img src="([^"]+)"/.exec(content.text)[1].replace(/&amp;/g,'&');
-  const pinged=JSON.parse(new URL(ping).searchParams.get('r'));
-  assert.deepEqual([new URL(ping).origin+new URL(ping).pathname,pinged.event,pinged.via],[ORIGIN+'/card-log','html','html']);
-  assert.ok(content.text.includes(`,"${pinged.load}");</script>`),'the script reports with the same load id');
+  assert.deepEqual(content._meta.ui.csp,{connectDomains:[],resourceDomains:[]},'the card loads nothing and connects nowhere');
   // Claude loads the card from its sandbox origin, named after this connector's address.
   const expected=createHash('sha256').update(`${ORIGIN}/mcp`).digest('hex').slice(0,32)+'.claudemcpcontent.com';
   assert.equal(content._meta.ui.domain,expected,'a Claude connection gets Claude\'s sandbox origin');
@@ -1032,9 +1026,15 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.match(tools[1].description,/Lists the 6 most recently updated/);
   assert.match(listed.content[0].text,/#1 Add the benchmark: open · Not ready to merge · CI running/);
   assert.match(listed.content[0].text,/#2 Update sources \(merged\): details not loaded/);
+  // Every pull request links to this Worker's dashboard, which opens its repository and the pull request.
+  const link=n=>`${ORIGIN}/?repo=owner%2Frepo#pr-${n}`;
+  assert.deepEqual(listed.structuredContent.pulls.map(p=>p.dashboardUrl),[link(1),link(2)]);
+  assert.ok(listed.content[0].text.includes(`CI running`)&&listed.content[0].text.includes(`dashboard ${link(1)}`)&&listed.content[0].text.includes(`dashboard ${link(2)}`));
 
   calls.length=0;
   const status=await tool('pull_request_status',{number:1});
+  assert.equal(status.structuredContent.dashboardUrl,link(1));
+  assert.ok(status.content[0].text.includes(`Dashboard: ${link(1)}`)&&status.content[0].text.includes(`Merging happens in the Repo Autopilot dashboard: ${link(1)}`));
   assert.equal(calls.filter(c=>c.url.startsWith('https://api.github.com/repos/')).length,0,'the status comes from the cache the list filled');
   calls.length=0;
   await tool('pull_request_status',{number:1,fresh:true});
@@ -1072,40 +1072,29 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.equal(other.isError,true);assert.match(other.content[0].text,/cannot reach someone\/else/);
 });
 
-test('the card reports how far it got, and only known values reach the logs',async()=>{
-  const {env}=environment();
-  const post=body=>handle(new Request(ORIGIN+'/card-log',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8'},body}),env);
+test('each OAuth step leaves one line in the logs, without codes or tokens',async()=>{
+  const {env}=environment(),fetchImpl=github({calls:[]});
   const logged=[],log=console.log;console.log=line=>logged.push(line);
-  let responses;
+  let token;
   try {
-    responses=[
-      await post(JSON.stringify({event:'start',load:'0123456789abcdef',frame:'frame',origin:'https://abc.claudemcpcontent.com',parentOrigin:'https://claude.ai',referrer:'javascript:alert(1)',ready:'loading'})),
-      await post(JSON.stringify({event:'message',load:'0123456789abcdef',from:'parent',method:'ui/notifications/tool-result',reply:false})),
-      await post(JSON.stringify({event:'message',load:'0123456789abcdef',from:'parent',method:'secret-method-xyz'})),
-      await post(JSON.stringify({event:'connected',load:'0123456789abcdef',attempt:1,host:'Claude <b>1.0</b>',caps:['openLinks','serverTools','bad key'],height:240,token:'abc123'})),
-      await post(JSON.stringify({event:'error',load:'0123456789abcdef',error:'x\nboom'+'!'.repeat(500)})),
-      await post(JSON.stringify({event:'bogus',load:'0123456789abcdef'})),
-      await post('{not json'),
-      await post('x'.repeat(5000)),
-      await handle(new Request(ORIGIN+'/card-log',{method:'PUT'}),env),
-      await handle(new Request(ORIGIN+'/card-log?r='+encodeURIComponent(JSON.stringify({event:'html',load:'0123456789abcdef',via:'html'}))),env),
-      await handle(new Request(ORIGIN+'/card-log?r='+encodeURIComponent(JSON.stringify({event:'attempt',load:'0123456789abcdef',via:'image',attempt:2}))),env),
-      await handle(new Request(ORIGIN+'/card-log?r='+encodeURIComponent(JSON.stringify({event:'start',load:'0123456789abcdef',pad:'x'.repeat(3000)}))),env),
-      await handle(new Request(ORIGIN+'/card-log'),env),
-    ];
+    token=await connectApp(env,fetchImpl);
+    await handle(new Request(ORIGIN+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',code:'secret-code-xyz',code_verifier:'v'.repeat(43),client_id:'x',redirect_uri:'https://claude.ai/api/mcp/auth_callback'})}),env,{fetchImpl});
   } finally {console.log=log;}
-  assert.deepEqual(responses.map(r=>r.status),[204,204,204,204,204,400,400,400,405,200,200,400,400]);
-  assert.equal(responses[0].headers.get('Access-Control-Allow-Origin'),'*');
-  // Image requests are answered with a transparent pixel.
-  assert.equal(responses[9].headers.get('Content-Type'),'image/gif');
-  assert.equal(new TextDecoder().decode((await responses[9].arrayBuffer()).slice(0,6)),'GIF89a');
-  const lines=logged.map(line=>JSON.parse(line));
-  assert.deepEqual(lines.map(l=>l.card),['start','message','message','connected','error','html','attempt']);
-  assert.deepEqual([lines[5].via,lines[6].via,lines[6].attempt],['html','image',2]);
-  assert.deepEqual([lines[0].frame,lines[0].origin,lines[0].parentOrigin,lines[0].referrer,lines[0].ready],['frame','https://abc.claudemcpcontent.com','https://claude.ai','other','loading']);
-  assert.deepEqual([lines[1].method,lines[2].method],['ui/notifications/tool-result','unknown']);
-  assert.deepEqual([lines[3].host,lines[3].caps,lines[3].height,lines[3].attempt],['Claude b1.0/b',['openLinks','serverTools'],240,1]);
-  assert.equal(lines[4].error.length,200);
-  assert.ok(lines[4].error.startsWith('x boom'));
-  assert.ok(!logged.some(line=>line.includes('abc123')||line.includes('xyz')),'nothing beyond known values reaches the logs');
+  const lines=logged.map(line=>JSON.parse(line)).filter(l=>l.connector==='oauth');
+  assert.deepEqual(lines.map(l=>[l.step,l.status,l.error??null,l.to??null,l.grant??null]),[
+    ['register',201,null,null,null],['consent',200,null,null,null],['decision',303,null,'github.com',null],
+    ['github',303,null,'claude.ai',null],['token',200,null,null,'authorization_code'],['token',400,'invalid_grant',null,'authorization_code']]);
+  assert.ok(!logged.some(line=>line.includes(token)||line.includes('secret-code-xyz')||line.includes('code=')),'no codes or tokens in the logs');
+});
+
+test('the consent page allows only its own script, which shows the click and stops a second one',async()=>{
+  const {env}=environment(),fetchImpl=github({calls:[]});
+  const call=(path,options={})=>handle(request(path,options),env,{fetchImpl});
+  const {client_id}=await (await call('/oauth/register',{method:'POST',body:{client_name:'Claude',redirect_uris:['https://claude.ai/api/mcp/auth_callback']}})).json();
+  const consent=await call(`/oauth/authorize?${new URLSearchParams({response_type:'code',client_id,redirect_uri:'https://claude.ai/api/mcp/auth_callback',code_challenge:'c'.repeat(43),code_challenge_method:'S256'})}`);
+  const html=await consent.text(),scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
+  assert.equal(scripts.length,1);
+  assert.match(scripts[0],/Opening GitHub…/);
+  const hash=`'sha256-${createHash('sha256').update(scripts[0]).digest('base64')}'`;
+  assert.match(consent.headers.get('Content-Security-Policy'),new RegExp(`script-src ${hash.replace(/[+/]/g,c=>'\\'+c)};`));
 });

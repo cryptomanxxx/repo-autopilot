@@ -7,7 +7,7 @@
 import {hex,randomHex,base64url,sha256,seal,unseal,sealState} from './crypto.js';
 import {readLimited} from './github.js';
 import {PublicError} from './errors.js';
-import {cardResource,cardContents,claudeDomain,isClaude,CARD_URI,CARD_MIME,CARD_LOG_PATH} from './card.js';
+import {cardResource,cardContents,claudeDomain,isClaude,CARD_URI,CARD_MIME} from './card.js';
 
 const APPS_EXTENSION='io.modelcontextprotocol/ui';
 // Methods logged by name; anything else is logged as "unknown".
@@ -21,7 +21,7 @@ export const MCP_PROTOCOLS=['2025-11-25','2025-06-18','2025-03-26'];
 const SCOPES=['read','offline_access'];
 const GRANT='github-grant',CONSENT='connector-consent',MAX_FORM=16384,MAX_MCP=65536;
 
-export const isConnectorPath=path=>path==='/mcp'||path===CARD_LOG_PATH||path.startsWith('/oauth/')||path.startsWith('/.well-known/oauth-');
+export const isConnectorPath=path=>path==='/mcp'||path.startsWith('/oauth/')||path.startsWith('/.well-known/oauth-');
 
 const CORS={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'Authorization, Content-Type, Mcp-Protocol-Version, Mcp-Session-Id','Access-Control-Allow-Methods':'GET, POST, OPTIONS','Access-Control-Expose-Headers':'WWW-Authenticate, Mcp-Session-Id'};
 const json=(status,value,headers={})=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store',...CORS,...headers}});
@@ -94,6 +94,12 @@ const errorPage=message=>{const response=page('Cannot connect',`<p>${escape(mess
 
 // The consent page. Its form carries the sealed request and a value that must match a cookie set with
 // it, so another site cannot submit it on the owner's behalf: the cookie is not sent on cross-site posts.
+// The consent form's only script: a click shows at once that it was taken, and a second click cannot send the
+// form again (which would find the page used up and say it expired). The buttons are disabled after the
+// browser has read the form, so the chosen decision is still sent.
+const CONSENT_SCRIPT="(()=>{let sent=false;const form=document.querySelector('form');form.addEventListener('submit',event=>{if(sent){event.preventDefault();return;}sent=true;const chosen=event.submitter;if(chosen) chosen.textContent=chosen.value==='allow'?'Opening GitHub…':'Cancelling…';setTimeout(()=>{for(const button of form.querySelectorAll('button')) button.disabled=true;},0);});})();";
+let consentScriptHash;
+const scriptHash=async()=>consentScriptHash??=`'sha256-${btoa(String.fromCharCode(...await sha256(CONSENT_SCRIPT)))}'`;
 async function showConsent(params,{store,env,origin,secure,now}) {
   const checked=await authorizationRequest(params,{store,origin});
   if(checked.page) return errorPage(checked.page);
@@ -104,9 +110,9 @@ async function showConsent(params,{store,env,origin,secure,now}) {
   const body=`<p>The app <strong>${escape(checked.client.name)}</strong> wants to read your Repo Autopilot status. Afterwards you return to <strong>${escape(host)}</strong>.</p>
 <p>It will be able to read pull requests, CI, Codex reviews and findings in the repositories where the Repo Autopilot GitHub App is installed. It cannot change, comment on or merge anything.</p>
 <p class="muted">Next you sign in with GitHub. The app stays connected until you revoke it under <strong>Connected apps</strong> in the dashboard.</p>
-<form method="post" action="/oauth/authorize" class="actions"><input type="hidden" name="request" value="${escape(sealed)}"><input type="hidden" name="consent" value="${consent}"><button name="decision" value="allow">Allow and sign in with GitHub</button><button name="decision" value="deny" class="secondary">Deny</button></form>`;
+<form method="post" action="/oauth/authorize" class="actions"><input type="hidden" name="request" value="${escape(sealed)}"><input type="hidden" name="consent" value="${consent}"><button name="decision" value="allow">Allow and sign in with GitHub</button><button name="decision" value="deny" class="secondary">Deny</button></form><script>${CONSENT_SCRIPT}</script>`;
   const redirectOrigin=new URL(checked.request.redirectUri).origin;
-  const csp=`default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com ${redirectOrigin}`;
+  const csp=`default-src 'self'; script-src ${await scriptHash()}; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com ${redirectOrigin}`;
   return page(`Connect ${checked.client.name}?`,body,{csp,cookie:`autopilot_consent=${consent}; Path=/oauth; HttpOnly; SameSite=Lax; Max-Age=600${secure?'; Secure':''}`});
 }
 
@@ -322,34 +328,19 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
   return rpcError(id,-32601,`Method not found: ${method}`);
 }
 
-// What the card reports about itself (see cardReport in card.js), one line each in the Worker's logs: posted
-// as a beacon, or as the r parameter of an image request, answered with a transparent pixel. The card has no
-// token, so anyone can send reports; only known values are written, and the one free text, a script error,
-// is cut short.
-const CARD_EVENTS=['html','start','message','attempt','failed','gave-up','connected','tool-input','tool-result','cancelled','teardown','error'];
-const CARD_MESSAGES=['ui/initialize','ui/notifications/initialized','ui/notifications/tool-input','ui/notifications/tool-input-partial','ui/notifications/tool-result','ui/notifications/tool-cancelled','ui/notifications/host-context-changed','ui/notifications/size-changed','ui/notifications/sandbox-proxy-ready','ui/notifications/sandbox-resource-ready','ui/resource-teardown','ui/open-link','ui/request-display-mode','ui/message','ui/update-model-context','tools/call','ping','notifications/message'];
-const MAX_CARD_LOG=2048;
-const PIXEL=Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'),c=>c.charCodeAt(0));
-async function cardLog(request,url) {
-  const image=request.method==='GET';
-  if(!image&&request.method!=='POST') return json(405,{error:'Use GET or POST.'},{Allow:'GET, POST, OPTIONS'});
-  const query=url.searchParams.get('r')||'';
-  let report;
-  try {report=JSON.parse(image?(query.length<=MAX_CARD_LOG?query:''):await readBody(request,MAX_CARD_LOG));} catch {}
-  if(!report||typeof report!=='object'||!CARD_EVENTS.includes(report.event)||!/^[0-9a-f]{16}$/.test(report.load)) return json(400,{error:'Not a card report.'});
-  const origin=value=>typeof value!=='string'||value===''?undefined:value==='null'||/^https?:\/\/[a-z0-9.-]+(:\d{1,5})?$/i.test(value)?value:'other';
-  const count=(value,max)=>Number.isInteger(value)&&value>=0&&value<=max?value:undefined;
-  const flag=value=>typeof value==='boolean'?value:undefined;
-  const pick=(value,list)=>typeof value!=='string'?undefined:value===''||list.includes(value)?value:'unknown';
-  const text=(value,max)=>typeof value==='string'?value.replace(/[\u0000-\u001f\u007f]+/g,' ').slice(0,max):undefined;
-  console.log(JSON.stringify({card:report.event,load:report.load,via:pick(report.via,['beacon','image','html']),
-    frame:pick(report.frame,['top','frame']),origin:origin(report.origin),parentOrigin:origin(report.parentOrigin),referrer:origin(report.referrer),ready:pick(report.ready,['loading','interactive','complete']),
-    from:pick(report.from,['parent','none','other']),method:pick(report.method,CARD_MESSAGES),reply:flag(report.reply),
-    attempt:count(report.attempt,99),host:text(report.host,80)?.replace(/[^\w .@/+-]/g,''),caps:Array.isArray(report.caps)?report.caps.filter(c=>typeof c==='string'&&/^[A-Za-z]{1,30}$/.test(c)).slice(0,12):undefined,
-    isError:flag(report.isError),structured:flag(report.structured),height:count(report.height,100000),error:text(report.error,200),
-    agent:(request.headers.get('User-Agent')||'').slice(0,120)}));
-  if(image) return new Response(PIXEL,{status:200,headers:{'Content-Type':'image/gif','Cache-Control':'no-store',...CORS}});
-  return new Response(null,{status:204,headers:CORS});
+// One line per OAuth step in the Worker's logs, next to the MCP lines: the step, its HTTP status, the OAuth
+// error it returned or redirected with, and where it sent the browser (a chat app or GitHub; any other
+// address is "other"). Never codes, tokens or app data.
+const REDIRECT_HOSTS=['github.com','claude.ai','claude.com','chatgpt.com'];
+const OAUTH_ERRORS=['invalid_request','invalid_client','invalid_client_metadata','invalid_redirect_uri','invalid_grant','unsupported_grant_type','unsupported_response_type','invalid_scope','access_denied','server_error'];
+export async function logOauth(step,response,extra={}) {
+  let error,to;
+  if(response.status>=400&&(response.headers.get('Content-Type')||'').includes('json')) error=(await response.clone().json().catch(()=>null))?.error;
+  const location=response.headers.get('Location');
+  if(location) {try {const target=new URL(location);to=REDIRECT_HOSTS.includes(target.host)?target.host:'other';error??=target.searchParams.get('error')||undefined;} catch {}}
+  const title=response.status===400&&(response.headers.get('Content-Type')||'').includes('html')?'error page':undefined;
+  console.log(JSON.stringify({connector:'oauth',step,status:response.status,error:error===undefined?title:OAUTH_ERRORS.includes(error)?error:'unknown',to,...extra}));
+  return response;
 }
 
 // Routes the connector's paths. Returns null for paths it does not own.
@@ -358,11 +349,13 @@ export async function connector(request,url,context) {
   if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{...CORS,'Access-Control-Max-Age':'86400'}});
   if(url.pathname==='/.well-known/oauth-protected-resource'||url.pathname==='/.well-known/oauth-protected-resource/mcp') return json(200,resourceMetadata(origin));
   if(url.pathname==='/.well-known/oauth-authorization-server') return json(200,serverMetadata(origin));
-  if(url.pathname==='/oauth/register'&&request.method==='POST') return register(request,context);
-  if(url.pathname==='/oauth/token'&&request.method==='POST') return token(request,context);
-  if(url.pathname==='/oauth/authorize'&&request.method==='GET') return showConsent(Object.fromEntries(url.searchParams),context);
-  if(url.pathname==='/oauth/authorize'&&request.method==='POST') return decideConsent(request,context);
+  if(url.pathname==='/oauth/register'&&request.method==='POST') return logOauth('register',await register(request,context));
+  if(url.pathname==='/oauth/token'&&request.method==='POST') {
+    const grantType=((await readBody(request.clone(),MAX_FORM))||'').match(/(?:^|&)grant_type=([a-z_]+)/)?.[1];
+    return logOauth('token',await token(request,context),{grant:['authorization_code','refresh_token'].includes(grantType)?grantType:'unknown'});
+  }
+  if(url.pathname==='/oauth/authorize'&&request.method==='GET') return logOauth('consent',await showConsent(Object.fromEntries(url.searchParams),context));
+  if(url.pathname==='/oauth/authorize'&&request.method==='POST') return logOauth('decision',await decideConsent(request,context));
   if(url.pathname==='/mcp') return mcp(request,context);
-  if(url.pathname===CARD_LOG_PATH) return cardLog(request,url);
   return json(404,{error:'Not found.'});
 }
