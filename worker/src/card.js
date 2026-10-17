@@ -377,6 +377,10 @@ const BODY=`
 // The card's HTML. The dashboard link and the report address are the only server values in it; merging
 // happens in the dashboard.
 export const CARD_LOG_PATH='/card-log';
+// The card's scripts are this module's functions as source text. A bundler can add calls to its own helpers
+// inside them (wrangler's esbuild wraps functions in __name to keep their names), and those helpers do not
+// exist in the card, so each script defines the one it may call.
+export const cardScript=(fn,args='')=>`<script>var __name=function(f){return f};(${fn.toString()})(${args});</script>`;
 // The page's load id is made with the HTML, so a host that keeps the HTML shows the same id each time.
 export function cardHtml(origin) {
   const attribute=value=>value.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
@@ -385,7 +389,7 @@ export function cardHtml(origin) {
   const reportUrl=JSON.stringify(`${origin}${CARD_LOG_PATH}`).replace(/</g,'\\u003c');
   // Requested by the HTML itself, before any script: it arrives when the host shows the card at all.
   const ping=attribute(`${origin}${CARD_LOG_PATH}?r=${encodeURIComponent(JSON.stringify({event:'html',load,via:'html'}))}`);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Repo Autopilot</title><style>${STYLE}</style></head><body><img src="${ping}" alt="" width="1" height="1" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">${BODY.replace('__DASHBOARD__',dashboard)}<script>(${cardReport.toString()})(${reportUrl},"${load}");</script><script>${EXT_APPS_SCRIPT}</script><script>(${cardView.toString()})();</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Repo Autopilot</title><style>${STYLE}</style></head><body><img src="${ping}" alt="" width="1" height="1" style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none">${BODY.replace('__DASHBOARD__',dashboard)}${cardScript(cardReport,`${reportUrl},"${load}"`)}<script>${EXT_APPS_SCRIPT}</script>${cardScript(cardView)}</body></html>`;
 }
 
 // What resources/list and resources/read return for the card.

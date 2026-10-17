@@ -92,3 +92,17 @@ test('only Claude connections get Claude\'s sandbox origin for the card',async()
   assert.equal(isClaude({redirectUris:['https://notclaude.ai/cb','not a url']}),false);
   assert.equal(cardContents('https://x.dev').contents[0]._meta.ui.domain,undefined,'other hosts choose their own');
 });
+
+test('the card scripts still run when a bundler wraps their functions in __name',async()=>{
+  const {cardScript,cardHtml}=await import('../worker/src/card.js');
+  const vm=await import('node:vm');
+  // What wrangler's esbuild (keepNames) makes of a nested function: a call to its own helper, which the card lacks.
+  const bundled=new Function('out',"const report=__name(()=>out.push('ran'),'report');report();");
+  const out=[];
+  const source=/^<script>([\s\S]*)<\/script>$/.exec(cardScript(bundled,'out'))[1];
+  vm.runInNewContext(source,{out});
+  assert.deepEqual(out,['ran']);
+  // Every script made from this module's functions carries the helper.
+  const scripts=[...cardHtml('https://x.example').matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
+  assert.equal(scripts.filter(s=>s.startsWith('var __name=')).length,2);
+});
