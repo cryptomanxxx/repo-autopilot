@@ -220,7 +220,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       for(const c of failedChecks) {
         lines.push('',`✗ ${c.name}: ${c.conclusion}${c.url?` · ${c.url}`:''}`);
         if(c.title) lines.push(indent(c.title));
-        if(c.summary) lines.push(indent(c.summary.slice(0,600)));
+        if(c.summary) lines.push(indent(c.summary.length>600?`${c.summary.slice(0,600)} […] (the whole summary is on the check)`:c.summary));
         for(const a of c.annotations||[]) lines.push(`    ${a.path||''}${a.line?`:${a.line}`:''} ${a.level||''}: ${a.message||''}`.trimEnd());
         if(c.annotationCount>(c.annotations||[]).length) lines.push(`    ${c.annotationCount-(c.annotations||[]).length} more annotations are not shown; see the check on GitHub.`);
         if(c.log) lines.push('    Last lines of the log:',indent(c.log,'      '));
@@ -269,7 +269,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
     annotations:READ_ONLY,
     run:async(args,{token,grantId})=>{
       const reload=freshOf(args);
-      const {list,truncated:reposCut}=await readRepos(access(token,grantId));
+      const {list,truncated:reposCut}=await readRepos({...access(token,grantId),fresh:reload});
       const checked=list.slice(0,ATTENTION_REPOS).map(r=>r.fullName);
       const pulls=[],problems=[],truncated=[];
       const client=createGitHub({token,fetchImpl,userAgent:'repo-autopilot-chat'});
@@ -291,7 +291,8 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
           } catch(error) {isolated(error);}
           const summary=item?pullSummary(item):null;
           pulls.push({repository,number:pr.number,title:pr.title,url:pr.url,dashboardUrl:dashboardUrl(repository,pr.number),
-            next:pr.draft?'draft':summary?nextStep(summary):'check',reasons:summary?summary.readiness.reasons:[],ci:summary?.ci??null,codex:summary?.codex?.label??null,openFindings:summary?.findingCounts?.open??null});
+            // Details that could only partly be read are not a reason to wait: they are checked by hand.
+            next:pr.draft?'draft':summary&&!summary.detailError?nextStep(summary):'check',reasons:summary?.detailError?[`details could not be read: ${summary.detailError}`]:summary?summary.readiness.reasons:[],ci:summary?.ci??null,codex:summary?.codex?.label??null,openFindings:summary?.findingCounts?.open??null});
         }
       }
       const order={fix:0,merge:1,wait:2,check:3,draft:4};

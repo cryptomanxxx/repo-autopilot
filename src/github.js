@@ -118,7 +118,8 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
   // their annotations and, for GitHub Actions jobs, the end of the log. At most four failures are opened.
   async function checks(value, ref) {
     const repo = repositoryName(value), root = `/repos/${repo}`;
-    const cut = (text, max) => typeof text === 'string' && text ? text.slice(0, max) : null;
+    // A cut text says so, so a shortened summary is not taken for the whole.
+    const cut = (text, max) => typeof text === 'string' && text ? (text.length > max ? `${text.slice(0, max)} […]` : text) : null;
     const [runs, combined] = await Promise.all([get(`${root}/commits/${ref}/check-runs?per_page=100`), get(`${root}/commits/${ref}/status?per_page=100`)]);
     const list = (runs.check_runs || []).filter(c => c.name !== 'repo-autopilot-review-refresh-signal').map(c => ({id:c.id, name:c.name, app:c.app?.slug || null, status:c.status, conclusion:c.conclusion || null, url:c.html_url || c.details_url || null, title:cut(c.output?.title, 200), summary:cut(c.output?.summary, 1500), annotationCount:Number.isInteger(c.output?.annotations_count) ? c.output.annotations_count : null}));
     const failed = list.filter(c => c.status === 'completed' && FAILED_CHECKS.includes(c.conclusion)).slice(0, 4);
