@@ -153,7 +153,7 @@ async function decideConsent(request,{store,env,origin,secure,now,ownerSession})
   const github=owner?.canConnect?await owner.take():null;
   const tokens=github&&await unseal(env.GITHUB_CLIENT_SECRET,GRANT,github);
   const at=now();
-  if(tokens&&(tokens.refresh?!tokens.refreshExpires||tokens.refreshExpires>at:tokens.accessExpires>at+CODE_MS)) {
+  if(tokens&&(tokens.refresh?!tokens.refreshExpires||tokens.refreshExpires>at:!tokens.accessExpires||tokens.accessExpires>at+CODE_MS)) {
     const response=await connectGrant({request:sealed,github,expires:grantExpires(tokens,at),login:owner.login,store,origin,now});
     response.headers.append('Set-Cookie',clear);return response;
   }

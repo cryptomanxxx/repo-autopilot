@@ -169,8 +169,9 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     }
     const id=randomHex(),lifetime=Number.isFinite(token.expires_in)&&token.expires_in>0?token.expires_in*1000:8*HOUR;
     // The session keeps the sign-in's GitHub tokens too, sealed, so an app connected from this browser
-    // needs no second GitHub sign-in.
-    await store.createSession({hash:hex(await sha256(id)),token:token.access_token,csrf:randomHex(),login:user.login,expires:now()+Math.min(lifetime,8*HOUR),github:(await sealGithub(env,token,now())).sealed});
+    // needs no second GitHub sign-in. It ends two minutes before its token does: an app connected with the
+    // same tokens renews them a minute before, which ends the session's token.
+    await store.createSession({hash:hex(await sha256(id)),token:token.access_token,csrf:randomHex(),login:user.login,expires:now()+Math.min(lifetime-2*60000,8*HOUR),github:(await sealGithub(env,token,now())).sealed});
     return redirect('/',[cookie(sessionCookie,id),cookie('autopilot_login','',{path:'/auth'})]);
   }
 

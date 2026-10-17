@@ -1243,10 +1243,9 @@ test('the consent page allows only its own script, which shows the click and sto
   assert.match(consent.headers.get('Content-Security-Policy'),new RegExp(`script-src ${hash.replace(/[+/]/g,c=>'\\'+c)};`));
 });
 
-test('an owner signed in to the dashboard connects an app without going to GitHub, once per sign-in',async()=>{
-  const {env,store}=environment(),calls=[],base=github({calls});
-  // The dashboard sign-in hands out a refresh token, as GitHub App sign-ins do.
-  const fetchImpl=async(url,options={})=>url==='https://github.com/login/oauth/access_token'?(calls.push({url}),Response.json({access_token:'ghu_dash',expires_in:28800,refresh_token:'ghr_dash',refresh_token_expires_in:15811200,scope:''})):base(url,options);
+async function connectSignedIn(signIn) {
+  const {env,store}=environment({time:Date.now}),calls=[],base=github({calls});
+  const fetchImpl=async(url,options={})=>url==='https://github.com/login/oauth/access_token'?(calls.push({url}),Response.json(signIn)):base(url,options);
   const call=(path,options={})=>handle(request(path,options),env,{fetchImpl});
   const form=(path,fields,headers={})=>handle(new Request(ORIGIN+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',...headers},body:new URLSearchParams(fields)}),env,{fetchImpl});
   const auth=await session(env,fetchImpl);
@@ -1268,6 +1267,13 @@ test('an owner signed in to the dashboard connects an app without going to GitHu
   assert.equal(returned.origin+returned.pathname,'https://claude.ai/api/mcp/auth_callback');
   assert.equal(returned.searchParams.get('state'),'xyz');
   assert.equal(calls.slice(before).some(c=>c.url.startsWith('https://github.com/')),false,'no trip to GitHub');
+  return {env,store,calls,auth,fetchImpl,connect,form,call,client_id,verifier,returned};
+}
+test('an owner signed in to the dashboard connects an app without going to GitHub, once per sign-in',async()=>{
+  // The dashboard sign-in hands out a refresh token, as GitHub App sign-ins do.
+  const started=Date.now();
+  const {env,store,calls,auth,fetchImpl,connect,form,call,client_id,verifier,returned}=await connectSignedIn({access_token:'ghu_dash',expires_in:28800,refresh_token:'ghr_dash',refresh_token_expires_in:15811200,scope:''});
+  assert.ok(store.rows('SELECT expires FROM sessions')[0].expires<=Date.now()+28800000-120000&&store.rows('SELECT expires FROM sessions')[0].expires>=started+28800000-130000,'the session ends before an app renews the shared token');
   const tokens=await (await form('/oauth/token',{grant_type:'authorization_code',code:returned.searchParams.get('code'),redirect_uri:'https://claude.ai/api/mcp/auth_callback',client_id,code_verifier:verifier})).json();
   assert.equal(tokens.token_type,'Bearer');
   const listed=await (await call('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'list_repositories',arguments:{}}},headers:{Authorization:`Bearer ${tokens.access_token}`}})).json();
@@ -1278,6 +1284,10 @@ test('an owner signed in to the dashboard connects an app without going to GitHu
   assert.match(second.html,/Allow and sign in with GitHub/);
   assert.equal(new URL(handoff(second.allowed)).origin,'https://github.com');
   assert.equal((await (await handle(request('/api/session',{cookie:auth.cookie}),env,{fetchImpl})).json()).login,'owner','the dashboard session stays signed in');
+});
+test('a sign-in whose GitHub token does not expire also connects an app at once',async()=>{
+  const {returned}=await connectSignedIn({access_token:'ghu_forever',scope:''});
+  assert.ok(returned.searchParams.get('code'));
 });
 
 test('an OAuth step that throws is logged as a 500',async()=>{
