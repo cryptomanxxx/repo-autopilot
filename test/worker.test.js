@@ -40,6 +40,15 @@ test('store keeps sessions, locks, exchanges and pull request links consistent',
   store.createSession({hash:'h',token:'ghu_x',csrf:'c',login:'owner',expires:time+10*3600000});
   assert.equal(store.getSession('h').login,'owner');
   time+=8*3600000;assert.equal(store.getSession('h'),null,'sessions never outlive eight hours');
+  store.createSession({hash:'g',token:'ghu_y',csrf:'c',login:'owner',expires:time+3600000,github:'sealed'});
+  store.createSession({hash:'n',token:'ghu_z',csrf:'c',login:'owner',expires:time+1800000});
+  assert.equal(store.nextSessionExpiry(),time+3600000,'the next wake is for the next session holding GitHub tokens');
+  assert.equal(store.getSession('g').canConnect,true);assert.equal(store.getSession('n').canConnect,false);
+  assert.equal(store.takeSessionGithub('g'),'sealed');assert.equal(store.takeSessionGithub('g'),null,'the tokens connect one app');
+  assert.equal(store.nextSessionExpiry(),null);
+  store.createSession({hash:'e',token:'ghu_e',csrf:'c',login:'owner',expires:time+1000,github:'sealed'});
+  time+=1000;store.purgeSessions();
+  assert.equal(store.rows("SELECT COUNT(*) AS n FROM sessions WHERE hash = 'e'")[0].n,0,'an expired session goes with its GitHub tokens');
   assert.equal(store.acquireLock('model','a',100),true);assert.equal(store.acquireLock('model','b',100),false);
   time+=101;assert.equal(store.acquireLock('model','b',100),true,'expired locks are taken over');
   store.releaseLock('model','a');assert.equal(store.acquireLock('model','c',100),false,'a former holder cannot release the new lock');

@@ -47,7 +47,15 @@ export class ChatStoreLogic {
     this.sql.exec('DELETE FROM sessions WHERE hash IN (SELECT hash FROM sessions ORDER BY expires DESC LIMIT -1 OFFSET 19)');
     this.sql.exec('INSERT INTO sessions (hash, token, csrf, login, expires, github) VALUES (?, ?, ?, ?, ?, ?)',hash,token,csrf,login,Math.min(expires,this.now()+8*HOUR),github);
   }
+  // Expired sessions are removed with the GitHub tokens they hold; the Durable Object also wakes for it at
+  // the next expiry (nextSessionExpiry), so tokens do not outlive their session while nobody visits.
+  purgeSessions() {this.sql.exec('DELETE FROM sessions WHERE expires <= ?',this.now());}
+  nextSessionExpiry() {
+    const [row]=this.rows('SELECT MIN(expires) AS at FROM sessions WHERE github IS NOT NULL');
+    return row?.at??null;
+  }
   getSession(hash) {
+    this.purgeSessions();
     const [session]=this.rows('SELECT token, csrf, login, expires, github IS NOT NULL AS can_connect FROM sessions WHERE hash = ? AND expires > ?',hash,this.now());
     if(!session) return null;
     const {can_connect,...rest}=session;
@@ -56,6 +64,7 @@ export class ChatStoreLogic {
   // A session's GitHub tokens connect one app: GitHub renews a refresh token only once, so two apps
   // cannot share it. They are handed out once and then gone from the session.
   takeSessionGithub(hash) {
+    this.purgeSessions();
     const [row]=this.rows('SELECT github FROM sessions WHERE hash = ? AND expires > ? AND github IS NOT NULL',hash,this.now());
     if(!row) return null;
     this.sql.exec('UPDATE sessions SET github = NULL WHERE hash = ?',hash);
