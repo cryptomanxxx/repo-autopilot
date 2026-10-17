@@ -1023,7 +1023,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.match(checks.content[0].text,/1 failed · 0 running · 1 passed/);
   assert.match(checks.content[0].text,/✗ test: failure · https:\/\/github.com\/owner\/repo\/runs\/77/);
   assert.match(checks.content[0].text,/src\/cart.js:7 failure: expected 10.00, got 10.01/);
-  assert.match(checks.content[0].text,/Last lines of the log:\n      x+\n      npm test\n      not ok 3 - cart totals\n/);
+  assert.match(checks.content[0].text,/Last lines of the log:\n      \[… earlier output cut\]\n      x+\n      npm test\n      not ok 3 - cart totals\n/,'a log tail longer than 4000 characters says its start is cut');
   assert.equal(logAuth,undefined,'the log download is not sent the GitHub token');
   assert.deepEqual(logRanges,['bytes=0-0',`bytes=${20000+1+'2026-10-16T10:00:00.0000000Z npm test\n2026-10-16T10:00:01.0000000Z \u001b[31mnot ok 3 - cart totals\u001b[0m\n'.length-16384}-${20000+1+'2026-10-16T10:00:00.0000000Z npm test\n2026-10-16T10:00:01.0000000Z \u001b[31mnot ok 3 - cart totals\u001b[0m\n'.length-1}`],'the log length is read first, then its end, in start-end ranges');
   assert.match(checks.content[0].text,/22 more annotations are not shown/);

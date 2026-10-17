@@ -13,7 +13,8 @@ export function findingTitle(body='') {
 // wrong and how to fix it. A longer one is cut at 2000 characters and ends with FINDING_TEXT_CUT.
 export const FINDING_TEXT_CUT='\n[… cut here; the whole finding is on GitHub]';
 export function findingText(body='') {
-  const text=body.replace(/<!--[\s\S]*?-->/g,'')
+  // Only Codex's own markers are removed: an HTML comment quoted in the finding is part of it.
+  const text=body.replace(/<!--\s*codex-[a-z-]+(?::v\d+)?\s*-->/gi,'')
     .replace(/^\s*\*\*(?:<sub><sub>)?!\[P[0-3] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?[^*]*\*\*\s*/i,'')
     .replace(/^\s*Useful\? React with .*$/gim,'')
     .replace(/\n{3,}/g,'\n\n').trim();

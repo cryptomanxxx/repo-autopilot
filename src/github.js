@@ -112,7 +112,9 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     if (!log.ok || log.status === 200 && Number(log.headers.get('Content-Length') || Infinity) > 5000000) return null;
     const text = (await log.text()).slice(-16384);
     const lines = text.split(/\r?\n/).map(line => line.replace(/\u001b\[[0-9;]*m/g, '').replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, '')).filter(line => line.trim());
-    return lines.slice(-40).join('\n').slice(-4000);
+    const tail = lines.slice(-40).join('\n');
+    // Long lines can make the 40 lines too long; their start is cut, and that is said.
+    return tail.length > 4000 ? `[… earlier output cut]\n${tail.slice(-4000)}` : tail;
   }
   // The checks and statuses on a commit, and for the checks that failed what they say: GitHub's summary,
   // their annotations and, for GitHub Actions jobs, the end of the log. At most four failures are opened.

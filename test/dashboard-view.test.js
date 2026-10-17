@@ -112,6 +112,7 @@ test('a long finding text is cut with a marker, and open pull requests report mo
   const long=findingText(`**![P2 Badge](x) Title**\n\n${'a'.repeat(2500)}`);
   assert.ok(long.endsWith(FINDING_TEXT_CUT)&&long.length===2000+FINDING_TEXT_CUT.length);
   assert.equal(findingText('**![P2 Badge](x) Title**\n\nShort.'),'Short.');
+  assert.equal(findingText('**![P2 Badge](x) Title**\n\nReplace `<!-- old -->` with a heading.\n\n<!-- codex-code-review-finding:v1 -->'),'Replace `<!-- old -->` with a heading.','quoted HTML comments stay; Codex markers go');
   const {createGitHub}=await import('../src/github.js');
   const pulls=n=>Array.from({length:n},(_,i)=>({number:i+1,title:`PR ${i+1}`,html_url:`https://github.com/o/r/pull/${i+1}`,draft:false,updated_at:'2026-10-17T00:00:00Z'}));
   const asked=[];
