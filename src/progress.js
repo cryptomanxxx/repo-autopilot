@@ -2,9 +2,11 @@ const bot = 'chatgpt-codex-connector[bot]';
 const shaOf = body => (body || '').match(/\*\*Reviewed commit:\*\*\s*`([a-f0-9]{7,40})`/i)?.[1];
 const stamp = value => typeof value === 'number' ? value : Date.parse(value) || 0;
 
-// The finding's headline: Codex writes it in bold after the priority badge.
+// The finding's headline: Codex writes it in bold after the priority badge, on its own line. It may
+// itself hold asterisks, such as a glob like `*.js`; the bold ends at the line's last `**`.
+const HEADLINE=/^\s*\*\*(?:<sub><sub>)?!\[P[0-3] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?[ \t]*(.+?)[ \t]*\*\*[ \t]*$/im;
 export function findingTitle(body='') {
-  const bold=body.match(/\*\*(?:<sub><sub>)?!\[P[0-3] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?\s*([^*]+?)\s*\*\*/i)?.[1];
+  const bold=body.match(HEADLINE)?.[1];
   const text=bold || body.replace(/!\[[^\]]*\]\([^)]*\)|<[^>]+>|[*_`#]/g,'').trim().split('\n')[0];
   return text.trim().slice(0,200) || 'Codex finding';
 }
@@ -15,7 +17,7 @@ export const FINDING_TEXT_CUT='\n[… cut here; the whole finding is on GitHub]'
 export function findingText(body='') {
   // Only Codex's own markers are removed: an HTML comment quoted in the finding is part of it.
   const text=body.replace(/<!--\s*codex-[a-z-]+(?::v\d+)?\s*-->/gi,'')
-    .replace(/^\s*\*\*(?:<sub><sub>)?!\[P[0-3] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?[^*]*\*\*\s*/i,'')
+    .replace(HEADLINE,'')
     .replace(/^\s*Useful\? React with .*$/gim,'')
     .replace(/\n{3,}/g,'\n\n').trim();
   return text.length>2000?text.slice(0,2000)+FINDING_TEXT_CUT:text;

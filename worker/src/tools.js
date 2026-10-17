@@ -31,9 +31,9 @@ const short=sha=>sha?String(sha).slice(0,7):'';
 const exposed=message=>Object.assign(new Error(message),{expose:true});
 const indent=(text,prefix='    ')=>String(text).split('\n').map(line=>prefix+line).join('\n');
 // What a pull request waits on, from its merge readiness: something to fix, a merge, or others (CI, Codex,
-// a reviewer). The dashboard's own reasons decide it.
-const FIX_REASONS=['Merge conflict','CI failed','Codex findings need attention','Unresolved review conversations','A reviewer requested changes'];
-const nextStep=pr=>pr.draft?'draft':pr.readiness?.state==='ready'?'merge':(pr.readiness?.reasons||[]).some(r=>FIX_REASONS.includes(r))?'fix':'wait';
+// a reviewer). The dashboard's own reasons decide it; a branch behind its base needs updating.
+const FIX_REASONS=['Merge conflict','CI failed','Codex findings need attention','Unresolved review conversations','A reviewer requested changes','GitHub merge requirements: behind','GitHub merge requirements: dirty'];
+export const nextStep=pr=>pr.draft?'draft':pr.readiness?.state==='ready'?'merge':(pr.readiness?.reasons||[]).some(r=>FIX_REASONS.includes(r))?'fix':'wait';
 // How many repositories the attention list reads in one call, so one call stays within the Workers
 // subrequest limit; they are the most recently pushed ones.
 export const ATTENTION_REPOS=6;
