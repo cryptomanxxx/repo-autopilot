@@ -994,6 +994,9 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   const {result:{contents:[content]}}=await rpc('resources/read',{uri:card});
   assert.equal(content.mimeType,'text/html;profile=mcp-app');
   assert.deepEqual(content._meta.ui.csp,{connectDomains:[],resourceDomains:[]},'the card loads nothing and connects nowhere');
+  // Claude loads the card from its sandbox origin, named after this connector's address.
+  const expected=createHash('sha256').update(`${ORIGIN}/mcp`).digest('hex').slice(0,32)+'.claudemcpcontent.com';
+  assert.equal(content._meta.ui.domain,expected,'a Claude connection gets Claude\'s sandbox origin');
   assert.match(content.text,/^<!doctype html>/);assert.match(content.text,/ui\/initialize/);
   assert.match(content.text,/<a id="dashboard" href="https:\/\/[^"]+\/">/,'the card links to this dashboard');
   assert.doesNotMatch(content.text,/<script[^>]+src=/,'no external scripts');

@@ -82,3 +82,13 @@ test('the card inlines the official MCP Apps client, and nothing from other site
   assert.ok(html.includes(EXT_APPS_SCRIPT),'the client is inlined');
   assert.doesNotMatch(html,/<script[^>]+src=/);
 });
+
+test('only Claude connections get Claude\'s sandbox origin for the card',async()=>{
+  const {isClaude,claudeDomain,cardContents}=await import('../worker/src/card.js');
+  assert.equal(await claudeDomain('https://example.com/mcp'),'c3d80a4ed901ee05b21755a88273b4a4.claudemcpcontent.com','the example from Claude\'s documentation');
+  assert.equal(isClaude({redirectUris:['https://claude.ai/api/mcp/auth_callback']}),true);
+  assert.equal(isClaude({redirectUris:['https://claude.com/api/mcp/auth_callback']}),true);
+  assert.equal(isClaude({redirectUris:['https://chatgpt.com/connector_platform_oauth_redirect']}),false);
+  assert.equal(isClaude({redirectUris:['https://notclaude.ai/cb','not a url']}),false);
+  assert.equal(cardContents('https://x.dev').contents[0]._meta.ui.domain,undefined,'other hosts choose their own');
+});
