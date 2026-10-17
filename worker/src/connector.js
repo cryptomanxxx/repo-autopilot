@@ -10,6 +10,8 @@ import {PublicError} from './errors.js';
 import {cardResource,cardContents,claudeDomain,isClaude,CARD_URI,CARD_MIME} from './card.js';
 
 const APPS_EXTENSION='io.modelcontextprotocol/ui';
+// Methods logged by name; anything else is logged as "unknown".
+const LOGGED_METHODS=['initialize','ping','tools/list','tools/call','resources/list','resources/templates/list','resources/read','notifications/initialized','notifications/cancelled'];
 
 const HOUR=3600000,DAY=24*HOUR;
 export const ACCESS_MS=HOUR,CODE_MS=60000,PENDING_MS=600000,NO_EXPIRY_MS=180*DAY;
@@ -265,16 +267,25 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
   if(!bearer) return unauthorized(origin,Boolean(request.headers.get('Authorization')));
   const access=await store.getToken(await tokenHash(bearer.toLowerCase()),'access');
   const grant=access&&await store.getGrant(access.grantId);
-  if(!grant) {console.log(JSON.stringify({connector:'unauthorized',agent:(request.headers.get('User-Agent')||'').slice(0,120)}));return unauthorized(origin,true);}
-  const text=await readBody(request,MAX_MCP);
-  let message;try {message=JSON.parse(text);} catch {return json(400,{jsonrpc:'2.0',id:null,error:{code:-32700,message:'Parse error.'}});}
-  if(!message||typeof message!=='object'||Array.isArray(message)||message.jsonrpc!=='2.0'||typeof message.method!=='string') return json(400,{jsonrpc:'2.0',id:null,error:{code:-32600,message:'Send one JSON-RPC 2.0 request.'}});
-  const {id,method,params={}}=message;
   // One line per message in the Worker's logs (Cloudflare → Workers → repo-autopilot-chat → Logs), to see
-  // what a chat app sends: never tokens or tool arguments, only the method, the tool or resource asked
-  // for, which app sent it, and its user agent. Notifications are logged too, before they are answered.
+  // what a chat app sends. Only known values are written: the method, tool and resource when they are ones
+  // this connector has, else "unknown"; never tokens, tool arguments or anything else the app sent, apart
+  // from its user agent.
+  const agent=(request.headers.get('User-Agent')||'').slice(0,120);
+  if(!grant) {console.log(JSON.stringify({connector:'unauthorized',agent}));return unauthorized(origin,true);}
   const client=await store.getClient(grant.clientId);
-  console.log(JSON.stringify({connector:method,notification:'id' in message?undefined:true,tool:method==='tools/call'?String(params?.name||'').slice(0,64):undefined,resource:method==='resources/read'?String(params?.uri||'').slice(0,128):undefined,app:client?.name||null,claude:isClaude(client),extensions:method==='initialize'?Object.keys(params?.capabilities?.extensions||{}):undefined,agent:(request.headers.get('User-Agent')||'').slice(0,120)}));
+  const log=fields=>console.log(JSON.stringify({...fields,app:client?.name||null,claude:isClaude(client),agent}));
+  const text=await readBody(request,MAX_MCP);
+  let message;try {message=JSON.parse(text);} catch {log({connector:'parse-error'});return json(400,{jsonrpc:'2.0',id:null,error:{code:-32700,message:'Parse error.'}});}
+  if(!message||typeof message!=='object'||Array.isArray(message)||message.jsonrpc!=='2.0'||typeof message.method!=='string') {log({connector:'invalid-request'});return json(400,{jsonrpc:'2.0',id:null,error:{code:-32600,message:'Send one JSON-RPC 2.0 request.'}});}
+  const {id,method,params={}}=message;
+  const known=(value,list)=>list.includes(value)?value:'unknown';
+  log({
+    connector:known(method,LOGGED_METHODS),notification:'id' in message?undefined:true,
+    tool:method==='tools/call'?known(params?.name,tools.map(t=>t.name)):undefined,
+    resource:method==='resources/read'?known(params?.uri,[CARD_URI]):undefined,
+    apps:method==='initialize'?Boolean(params?.capabilities?.extensions?.[APPS_EXTENSION]):undefined,
+  });
   // Notifications and responses need no answer.
   if(!('id' in message)) return new Response(null,{status:202,headers:CORS});
   await store.touchGrant(grant.id);
