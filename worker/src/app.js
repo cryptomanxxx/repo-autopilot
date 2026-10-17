@@ -2,7 +2,7 @@ import {githubClient,GitHubError,readLimited} from './github.js';
 import {repositoryName,createGitHub} from '../../src/github.js';
 import {PublicError,UserError} from './errors.js';
 import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
-import {connector,isConnectorPath,finishConnect,failConnect,logOauth} from './connector.js';
+import {connector,isConnectorPath,finishConnect,failConnect,logOauth,githubHandoff} from './connector.js';
 import {connectorTools} from './tools.js';
 export {UserError};
 import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
@@ -111,7 +111,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     const state=await sealState(env.GITHUB_CLIENT_SECRET,{browser,verifier,expires:now()+600000});
     const target=new URL('https://github.com/login/oauth/authorize');
     for(const [k,v] of Object.entries({client_id:env.GITHUB_CLIENT_ID,redirect_uri:callback,state,code_challenge:base64url(await sha256(verifier)),code_challenge_method:'S256'})) target.searchParams.set(k,v);
-    return redirect(target.href,[cookie('autopilot_login',browser,{path:'/auth',maxAge:600})]);
+    return githubHandoff(target.href,[cookie('autopilot_login',browser,{path:'/auth',maxAge:600})]);
   }
   if(request.method==='GET'&&url.pathname==='/auth/callback') {
     // Sign-in problems return to the chat page, which explains them, instead of showing raw JSON.
