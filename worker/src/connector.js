@@ -351,7 +351,7 @@ export async function connector(request,url,context) {
   if(url.pathname==='/.well-known/oauth-authorization-server') return json(200,serverMetadata(origin));
   if(url.pathname==='/oauth/register'&&request.method==='POST') return logOauth('register',await register(request,context));
   if(url.pathname==='/oauth/token'&&request.method==='POST') {
-    const grantType=((await readBody(request.clone(),MAX_FORM))||'').match(/(?:^|&)grant_type=([a-z_]+)/)?.[1];
+    const grantType=(await readParams(request.clone()))?.grant_type;
     return logOauth('token',await token(request,context),{grant:['authorization_code','refresh_token'].includes(grantType)?grantType:'unknown'});
   }
   if(url.pathname==='/oauth/authorize'&&request.method==='GET') return logOauth('consent',await showConsent(Object.fromEntries(url.searchParams),context));

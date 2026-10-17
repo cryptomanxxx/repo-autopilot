@@ -66,7 +66,8 @@ export async function loadDashboard({fresh=false}={}) {
     if(target!==repository()) return;
     version=seen>0?seen:version;
     data={...overview,pulls,warnings:[...overview.warnings,...pulls.flatMap(pr=>pr.warnings||[])]};
-    renderSummary($('summary'),data);
+    // The summary counts the recent pull requests only, not a linked older one shown below them.
+    renderSummary($('summary'),extra?{...data,pulls:pulls.slice(0,-1)}:data);
     renderPulls($('pulls'),data.pulls,{onMerge:mergePull,onCodex:askCodex,askedCodex:(kind,pr)=>pr.codexReviewAsked===true||askedCodex.has(`${kind}:${target}#${pr.number}@${pr.headSha}`)});
     renderWorkflows($('workflows'),data.workflows);
     // More can exist only when a list came back full.

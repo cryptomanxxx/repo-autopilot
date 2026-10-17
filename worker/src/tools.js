@@ -138,7 +138,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
         lines.push(`#${p.number} ${p.title}: ${parts.join(' · ')} · dashboard ${p.dashboardUrl}`);
       }
       if(!pulls.length) lines.push('No pull requests found.');
-      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,pulls,limit:pullLimit,mayHaveMore}};
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,dashboardUrl:`${config.origin}/?repo=${encodeURIComponent(repository)}#dashboard`,pulls,limit:pullLimit,mayHaveMore}};
     },
   },{
     name:'pull_request_status',title:'Pull request status',

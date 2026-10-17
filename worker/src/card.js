@@ -195,6 +195,9 @@ function cardView() {
     $('expand').hidden=!modes.includes('fullscreen');
     $('expand').textContent=context.displayMode==='fullscreen'?'Exit full screen':'Full screen';
     const problem=failure&&el('p','note problem',failure);
+    // Open dashboard goes to the repository, or the pull request, the result is about, on this server.
+    const home=$('dashboard').dataset.home;
+    if(data?.dashboardUrl?.startsWith(home)) linkTo($('dashboard'),data.dashboardUrl);
     if(!data) {
       body.replaceChildren(problem||el('p','note',waiting?'Loading from Repo Autopilot…':'Nothing to show.'));
       return;
@@ -238,7 +241,8 @@ function cardView() {
   // The handshake starts once the page has loaded, as it does when the SDK is loaded as a module. A host
   // that has not answered within a few seconds is asked again with a fresh client, for about a minute;
   // until the card is connected, links cannot navigate it away.
-  linkTo($('dashboard'),$('dashboard').getAttribute('href'));
+  $('dashboard').dataset.home=$('dashboard').getAttribute('href');
+  linkTo($('dashboard'),$('dashboard').dataset.home);
   const ATTEMPTS=12,ATTEMPT_MS=5000;
   const connect=async attempt=>{
     app=makeApp();

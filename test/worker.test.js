@@ -1030,6 +1030,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   const link=n=>`${ORIGIN}/?repo=owner%2Frepo#pr-${n}`;
   assert.deepEqual(listed.structuredContent.pulls.map(p=>p.dashboardUrl),[link(1),link(2)]);
   assert.ok(listed.content[0].text.includes(`${ORIGIN}/?repo=owner%2Frepo#dashboard`),'the repository link opens the dashboard tab');
+  assert.equal(listed.structuredContent.dashboardUrl,`${ORIGIN}/?repo=owner%2Frepo#dashboard`);
   assert.ok(listed.content[0].text.includes(`CI running`)&&listed.content[0].text.includes(`dashboard ${link(1)}`)&&listed.content[0].text.includes(`dashboard ${link(2)}`));
 
   calls.length=0;
@@ -1079,13 +1080,14 @@ test('each OAuth step leaves one line in the logs, without codes or tokens',asyn
   let token;
   try {
     token=await connectApp(env,fetchImpl);
+    await handle(new Request(ORIGIN+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({grant_type:'refresh_token',refresh_token:'secret-refresh-xyz'})}),env,{fetchImpl});
     await handle(new Request(ORIGIN+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',code:'secret-code-xyz',code_verifier:'v'.repeat(43),client_id:'x',redirect_uri:'https://claude.ai/api/mcp/auth_callback'})}),env,{fetchImpl});
   } finally {console.log=log;}
   const lines=logged.map(line=>JSON.parse(line)).filter(l=>l.connector==='oauth');
   assert.deepEqual(lines.map(l=>[l.step,l.status,l.error??null,l.to??null,l.grant??null]),[
     ['register',201,null,null,null],['consent',200,null,null,null],['decision',303,null,'github.com',null],
-    ['github',303,null,'claude.ai',null],['token',200,null,null,'authorization_code'],['token',400,'invalid_grant',null,'authorization_code']]);
-  assert.ok(!logged.some(line=>line.includes(token)||line.includes('secret-code-xyz')||line.includes('code=')),'no codes or tokens in the logs');
+    ['github',303,null,'claude.ai',null],['token',200,null,null,'authorization_code'],['token',400,'invalid_grant',null,'refresh_token'],['token',400,'invalid_grant',null,'authorization_code']]);
+  assert.ok(!logged.some(line=>line.includes(token)||line.includes('secret-code-xyz')||line.includes('secret-refresh-xyz')||line.includes('code=')),'no codes or tokens in the logs');
 });
 
 test('the consent page allows only its own script, which shows the click and stops a second one',async()=>{
