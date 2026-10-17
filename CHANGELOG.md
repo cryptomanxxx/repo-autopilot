@@ -7,6 +7,7 @@
 - **The Repo Autopilot card in the chat.** In chat apps that support MCP Apps, such as Claude on the web, desktop and mobile, the pull request tools show a card with merge readiness, CI, Codex findings and recent activity, with filters, **Refresh**, **Full screen** and **Open dashboard**. It is read-only.
 - **CI details, full Codex findings and a to-do list in the chat.** `pull_request_checks` shows why CI failed (annotations and the end of the job log), `codex_findings` the full text of each finding, and `waiting_on_me` what each open pull request across your repositories needs.
 - **What a pull request changes, in the chat.** `pull_request_files` lists the changed files with their added and removed lines and shows the diffs, in any repository Repo Autopilot reads.
+- **The Repo Autopilot robot as the icon.** The Worker serves the robot as its favicon and app icon, and names it in the MCP server information (`serverInfo.icons`), for chat apps that show a connector's icon.
 - **Workflow runs in the chat.** `list_workflow_runs` lists a repository's recent GitHub Actions runs, optionally only failed ones or one branch.
 - **Choose the repository in the card.** The card has a repository picker, and **Pin** where the chat app can keep the card in view.
 - **Links to the dashboard.** The pull request tools link each pull request to your Repo Autopilot dashboard as well as to GitHub; the link opens its repository and the pull request, where it can be merged.

@@ -81,6 +81,10 @@ function redirectBack({redirectUri,state},params,origin) {
   return new Response(null,{status:303,headers:{Location:target.href,'Cache-Control':'no-store'}});
 }
 
+// The Repo Autopilot robot, for chat apps that show a server's icon (MCP's serverInfo.icons) and for
+// browser tabs; the files are served from worker/public.
+const serverIcons=origin=>[{src:`${origin}/icon.png`,mimeType:'image/png',sizes:['512x512']},{src:`${origin}/favicon.ico`,mimeType:'image/x-icon',sizes:['16x16','32x32','48x48']}];
+const ICON_LINKS='<link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" type="image/png" href="/icon.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">';
 function page(title,body,{csp,cookie,head=''}={}) {
   const headers=new Headers({'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});
   if(csp) headers.set('Content-Security-Policy',csp);
@@ -88,7 +92,7 @@ function page(title,body,{csp,cookie,head=''}={}) {
   // lets them name its own origin.
   headers.set('Referrer-Policy','same-origin');
   if(cookie) headers.append('Set-Cookie',cookie);
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title>${head}<link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/chat.css"></head><body><main class="connect"><header><span class="eyebrow">REPO AUTOPILOT</span><h1>${escape(title)}</h1></header>${body}</main></body></html>`,{status:200,headers});
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title>${ICON_LINKS}${head}<link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/chat.css"></head><body><main class="connect"><header><span class="eyebrow">REPO AUTOPILOT</span><h1>${escape(title)}</h1></header>${body}</main></body></html>`,{status:200,headers});
 }
 // The way to GitHub's sign-in: a page that moves on by itself, not a redirect. On Android a redirect that
 // follows a click is handed to the GitHub app when it is installed, and the app returns it to the browser
@@ -333,7 +337,7 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
     // MCP Apps is answered in kind: a chat app that declares it hears that the card is offered.
     const apps=params?.capabilities?.extensions?.[APPS_EXTENSION];
     const extensions=apps&&Array.isArray(apps.mimeTypes)&&apps.mimeTypes.includes(CARD_MIME)?{extensions:{[APPS_EXTENSION]:{mimeTypes:[CARD_MIME]}}}:{};
-    return rpcResult(id,{protocolVersion:MCP_PROTOCOLS.includes(requested)?requested:MCP_PROTOCOLS[0],capabilities:{tools:{listChanged:false},resources:{listChanged:false},...extensions},serverInfo:{name:'repo-autopilot',title:'Repo Autopilot',version:'0.3.0'},instructions:'Read-only access to the owner\'s Repo Autopilot: the repositories it reads and, for each, the pull requests with merge readiness, CI, Codex review status and Codex findings, the same as its dashboard shows. Chat apps that support MCP Apps also show the pull request tools\' results as a Repo Autopilot card. Nothing can be changed through these tools; merging happens in the Repo Autopilot dashboard.'});
+    return rpcResult(id,{protocolVersion:MCP_PROTOCOLS.includes(requested)?requested:MCP_PROTOCOLS[0],capabilities:{tools:{listChanged:false},resources:{listChanged:false},...extensions},serverInfo:{name:'repo-autopilot',title:'Repo Autopilot',version:'0.3.0',websiteUrl:origin,icons:serverIcons(origin)},instructions:'Read-only access to the owner\'s Repo Autopilot: the repositories it reads and, for each, the pull requests with merge readiness, CI, Codex review status and Codex findings, the same as its dashboard shows. Chat apps that support MCP Apps also show the pull request tools\' results as a Repo Autopilot card. Nothing can be changed through these tools; merging happens in the Repo Autopilot dashboard.'});
   }
   if(method==='ping') return rpcResult(id,{});
   // The card the pull request tools are shown with (MCP Apps). It is read with the same sign-in as the tools.
