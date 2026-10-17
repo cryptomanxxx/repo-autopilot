@@ -106,3 +106,30 @@ test('the card scripts still run when a bundler wraps their functions in __name'
   const scripts=[...cardHtml('https://x.example').matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
   assert.equal(scripts.filter(s=>s.startsWith('var __name=')).length,1);
 });
+
+test('a long finding text is cut with a marker, and open pull requests report more only when there are',async()=>{
+  const {findingText,FINDING_TEXT_CUT}=await import('../src/progress.js');
+  const long=findingText(`**![P2 Badge](x) Title**\n\n${'a'.repeat(2500)}`);
+  assert.ok(long.endsWith(FINDING_TEXT_CUT)&&long.length===2000+FINDING_TEXT_CUT.length);
+  assert.equal(findingText('**![P2 Badge](x) Title**\n\nShort.'),'Short.');
+  const glob='**<sub><sub>![P2 Badge](x)</sub></sub>  Skip `*.js` files**\n\nThe glob misses them.';
+  assert.equal(findingText(glob),'The glob misses them.','a headline with asterisks is still removed');
+  const {findingTitle}=await import('../src/progress.js');
+  assert.equal(findingTitle(glob),'Skip `*.js` files');
+  assert.equal(findingText('**![P2 Badge](x) Title**\n\nReplace `<!-- old -->` with a heading.\n\n<!-- codex-code-review-finding:v1 -->'),'Replace `<!-- old -->` with a heading.','quoted HTML comments stay; Codex markers go');
+  const {createGitHub}=await import('../src/github.js');
+  const pulls=n=>Array.from({length:n},(_,i)=>({number:i+1,title:`PR ${i+1}`,html_url:`https://github.com/o/r/pull/${i+1}`,draft:false,updated_at:'2026-10-17T00:00:00Z'}));
+  const asked=[];
+  const client=count=>createGitHub({fetchImpl:async url=>{asked.push(url);return Response.json(pulls(count));}});
+  const exact=await client(30).openPulls('o/r');
+  assert.deepEqual([exact.pulls.length,exact.mayHaveMore],[30,false]);
+  const more=await client(31).openPulls('o/r');
+  assert.deepEqual([more.pulls.length,more.mayHaveMore],[30,true]);
+  assert.match(asked[0],/per_page=31/);
+});
+
+test('a pull request behind its base is something to fix, not to wait on', async () => {
+  const {nextStep}=await import('../worker/src/tools.js');
+  assert.equal(nextStep({readiness:{state:'not_ready',reasons:['GitHub merge requirements: behind']}}),'fix');
+  assert.equal(nextStep({readiness:{state:'not_ready',reasons:['Waiting for Codex']}}),'wait');
+});

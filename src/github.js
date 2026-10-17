@@ -13,6 +13,7 @@ export function repositoryName(value) {
   if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(name) || ['.', '..'].includes(name.split('/')[1])) throw new Error(message);
   return name;
 }
+const FAILED_CHECKS = ['failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure', 'stale'];
 export function ciState(checks, statuses) {
   const substantiveChecks=checks.filter(c=>c.name !== 'repo-autopilot-review-refresh-signal');
   const states = [...substantiveChecks.map(c => c.status === 'completed' ? c.conclusion : 'pending'), ...statuses.map(s => s.state)];
@@ -92,8 +93,57 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     const readiness=mergeReadiness(pr,{ci:details.ci,codex:details.codex,checksComplete:details.checksComplete,verification});
     return {warnings, changed, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, baseRef:pr.base?.ref, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details}};
   }
+  // The end of a GitHub Actions job's log. GitHub answers with a redirect to a signed download address,
+  // which is read without the token and, where the store allows it, only from its last bytes.
+  async function jobLog(repo, id) {
+    const response = await fetchImpl(`https://api.github.com/repos/${repo}/actions/jobs/${id}/logs`, {redirect: 'manual', headers: {Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...agent, ...(token ? {Authorization: `Bearer ${token}`} : {})}, signal: AbortSignal.timeout(15000)});
+    const location = response.headers.get('Location');
+    if (!location || !/^https:\/\//.test(location)) return null;
+    // Blob storage takes only start-end ranges: the first byte gives the length, then the last 16 KiB are
+    // read. A store that ignores ranges sends the whole log, which is read only when it is not too large.
+    const part = range => fetchImpl(location, {headers: {Range: range, ...agent}, signal: AbortSignal.timeout(15000)});
+    let log = await part('bytes=0-0');
+    if (log.status === 206) {
+      const total = Number(/\/(\d+)$/.exec(log.headers.get('Content-Range') || '')?.[1]);
+      await log.body?.cancel();
+      if (!Number.isFinite(total)) return null;
+      log = total > 1 ? await part(`bytes=${Math.max(0, total - 16384)}-${total - 1}`) : log;
+    }
+    if (!log.ok || log.status === 200 && Number(log.headers.get('Content-Length') || Infinity) > 5000000) return null;
+    const text = (await log.text()).slice(-16384);
+    const lines = text.split(/\r?\n/).map(line => line.replace(/\u001b\[[0-9;]*m/g, '').replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, '')).filter(line => line.trim());
+    const tail = lines.slice(-40).join('\n');
+    // Long lines can make the 40 lines too long; their start is cut, and that is said.
+    return tail.length > 4000 ? `[… earlier output cut]\n${tail.slice(-4000)}` : tail;
+  }
+  // The checks and statuses on a commit, and for the checks that failed what they say: GitHub's summary,
+  // their annotations and, for GitHub Actions jobs, the end of the log. At most four failures are opened.
+  // The workflow job behind an Actions check, which its log is read by: the job named in the check's
+  // links (`/actions/runs/<run>/job/<job>`), else the check's own ID, which Actions gives its jobs too.
+  const actionsJob = c => c.app?.slug !== 'github-actions' ? null : Number([c.details_url, c.html_url].map(u => String(u || '').match(/\/actions\/runs\/\d+\/jobs?\/(\d+)/)?.[1]).find(Boolean) || c.id);
+  async function checks(value, ref) {
+    const repo = repositoryName(value), root = `/repos/${repo}`;
+    // A cut text says so, so a shortened summary is not taken for the whole.
+    const cut = (text, max) => typeof text === 'string' && text ? (text.length > max ? `${text.slice(0, max)} […]` : text) : null;
+    const [runs, combined] = await Promise.all([get(`${root}/commits/${ref}/check-runs?per_page=100`), get(`${root}/commits/${ref}/status?per_page=100`)]);
+    const list = (runs.check_runs || []).filter(c => c.name !== 'repo-autopilot-review-refresh-signal').map(c => ({id:c.id, name:c.name, app:c.app?.slug || null, status:c.status, conclusion:c.conclusion || null, url:c.html_url || c.details_url || null, title:cut(c.output?.title, 200), summary:cut(c.output?.summary, 1500), annotationCount:Number.isInteger(c.output?.annotations_count) ? c.output.annotations_count : null, jobId:actionsJob(c)}));
+    const failed = list.filter(c => c.status === 'completed' && FAILED_CHECKS.includes(c.conclusion)).slice(0, 4);
+    await Promise.all(failed.map(async c => {
+      c.annotations = (await get(`${root}/check-runs/${c.id}/annotations?per_page=20`).catch(() => [])).map(a => ({path:a.path || null, line:a.start_line ?? null, level:a.annotation_level || null, message:cut(a.message, 500)}));
+      c.log = c.jobId ? await jobLog(repo, c.jobId).catch(() => null) : null;
+    }));
+    const statuses = (combined.statuses || []).map(s => ({context:s.context, state:s.state, description:cut(s.description, 300), url:s.target_url || null}));
+    return {checks:list, statuses, complete:(runs.check_runs || []).length < 100 && (runs.total_count ?? 0) <= (runs.check_runs || []).length && statuses.length < 100, opened:failed.length};
+  }
+  // The open pull requests of a repository, most recently updated first, up to the limit.
+  async function openPulls(value, limit = 30) {
+    const repo = repositoryName(value);
+    // One more than the limit is asked for, so a full page is told apart from a longer list.
+    const pulls = await get(`/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${limit + 1}`);
+    return {pulls:pulls.slice(0, limit).map(p => ({number:p.number, title:p.title, url:p.html_url, draft:Boolean(p.draft), updatedAt:p.updated_at})), mayHaveMore:pulls.length > limit};
+  }
   return {
-    overview, pullDetails,
+    overview, pullDetails, checks, openPulls,
     pull:(value,number)=>get(`/repos/${repositoryName(value)}/pulls/${number}`),
     async snapshot(value) {
       const {repo, pulls, ...rest} = await overview(value);

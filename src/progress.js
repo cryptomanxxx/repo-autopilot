@@ -2,11 +2,25 @@ const bot = 'chatgpt-codex-connector[bot]';
 const shaOf = body => (body || '').match(/\*\*Reviewed commit:\*\*\s*`([a-f0-9]{7,40})`/i)?.[1];
 const stamp = value => typeof value === 'number' ? value : Date.parse(value) || 0;
 
-// The finding's headline: Codex writes it in bold after the priority badge.
+// The finding's headline: Codex writes it in bold after the priority badge, on its own line. It may
+// itself hold asterisks, such as a glob like `*.js`; the bold ends at the line's last `**`.
+const HEADLINE=/^\s*\*\*(?:<sub><sub>)?!\[P[0-3] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?[ \t]*(.+?)[ \t]*\*\*[ \t]*$/im;
 export function findingTitle(body='') {
-  const bold=body.match(/\*\*(?:<sub><sub>)?!\[P[0-3] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?\s*([^*]+?)\s*\*\*/i)?.[1];
+  const bold=body.match(HEADLINE)?.[1];
   const text=bold || body.replace(/!\[[^\]]*\]\([^)]*\)|<[^>]+>|[*_`#]/g,'').trim().split('\n')[0];
   return text.trim().slice(0,200) || 'Codex finding';
+}
+
+// The finding's explanation, without its headline, badge, feedback prompt and markers: what Codex says is
+// wrong and how to fix it. A longer one is cut at 2000 characters and ends with FINDING_TEXT_CUT.
+export const FINDING_TEXT_CUT='\n[… cut here; the whole finding is on GitHub]';
+export function findingText(body='') {
+  // Only Codex's own markers are removed: an HTML comment quoted in the finding is part of it.
+  const text=body.replace(/<!--\s*codex-[a-z-]+(?::v\d+)?\s*-->/gi,'')
+    .replace(HEADLINE,'')
+    .replace(/^\s*Useful\? React with .*$/gim,'')
+    .replace(/\n{3,}/g,'\n\n').trim();
+  return text.length>2000?text.slice(0,2000)+FINDING_TEXT_CUT:text;
 }
 
 export function reviewProgress(head, {reviews = [], comments = [], inline = [], commits = [], reactions = [], openedAt, mergedAt, findingsTruncated = false, truncated = false} = {}) {
@@ -27,7 +41,7 @@ export function reviewProgress(head, {reviews = [], comments = [], inline = [], 
     // Comments outside a review thread name their place only in a permalink to the code.
     const permalink=(c.body || '').match(/\/blob\/([0-9a-f]{7,40})\/([^#)\s]+)#L(\d+)/i);
     const commit=c.original_commit_id || c.commit_id || permalink?.[1];
-    findings.items.push({id:c.id ?? null,priority:priority.toUpperCase(),title:findingTitle(c.body),path:c.path || permalink?.[2] || null,line:c.line ?? c.original_line ?? (permalink?Number(permalink[3]):null),url:c.html_url,at:c.created_at,commit:commit || null,current:Boolean(commit && head.startsWith(commit)),resolved:null});
+    findings.items.push({id:c.id ?? null,priority:priority.toUpperCase(),title:findingTitle(c.body),text:findingText(c.body),path:c.path || permalink?.[2] || null,line:c.line ?? c.original_line ?? (permalink?Number(permalink[3]):null),url:c.html_url,at:c.created_at,commit:commit || null,current:Boolean(commit && head.startsWith(commit)),resolved:null});
     // The counts and the activity flow keep tracking P1 and P2; every priority is listed.
     if(!['p1','p2'].includes(priority)) continue;
     findings[priority]++;

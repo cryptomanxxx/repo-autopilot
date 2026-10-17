@@ -3,6 +3,8 @@
 import {findingStatus,FINDING_STATES} from '../public/dashboard-view.js';
 import {PublicError} from './errors.js';
 import {CARD_TOOL_META} from './card.js';
+import {createGitHub} from '../../src/github.js';
+import {FINDING_TEXT_CUT} from '../../src/progress.js';
 
 // At most this many pull requests are loaded from GitHub in one list call; the rest come from the cache
 // or are marked as not loaded, so a call stays within the Workers subrequest limit.
@@ -26,6 +28,15 @@ const ciText=(ci,failed)=>ci==='unknown'&&failed?'unavailable (could not be read
 // A CI state read from a capped list of checks may miss a failing or pending one; it is not reported as final.
 const ciLabel=(ci,{available,complete})=>`${ciText(ci,!available)}${available&&!complete?' (not verified as complete)':''}`;
 const short=sha=>sha?String(sha).slice(0,7):'';
+const exposed=message=>Object.assign(new Error(message),{expose:true});
+const indent=(text,prefix='    ')=>String(text).split('\n').map(line=>prefix+line).join('\n');
+// What a pull request waits on, from its merge readiness: something to fix, a merge, or others (CI, Codex,
+// a reviewer). The dashboard's own reasons decide it; a branch behind its base needs updating.
+const FIX_REASONS=['Merge conflict','CI failed','Codex findings need attention','Unresolved review conversations','A reviewer requested changes','GitHub merge requirements: behind','GitHub merge requirements: dirty'];
+export const nextStep=pr=>pr.draft?'draft':pr.readiness?.state==='ready'?'merge':(pr.readiness?.reasons||[]).some(r=>FIX_REASONS.includes(r))?'fix':'wait';
+// How many repositories the attention list reads in one call, so one call stays within the Workers
+// subrequest limit; they are the most recently pushed ones.
+export const ATTENTION_REPOS=6;
 function findingLines(item) {
   const clearedAt=item.codex?.state==='clear'?item.codex.clearedAt:null;
   const findings=(item.progress?.findings?.items||[]).map(f=>({...f,status:findingStatus(f,{clearedAt})}));
@@ -187,6 +198,115 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       if(unavailable) lines.splice(0,lines.length,`${repository}: workflow runs could not be read. ${unavailable}`);
       else if(!runs.length) lines.push(read.length?'No runs match.':'No workflow runs found.');
       return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,available:!unavailable,error:unavailable,runs,limit,mayHaveMore}};
+    },
+  },{
+    name:'pull_request_checks',title:'Pull request checks',
+    description:'Shows the CI of one pull request in detail: every check and commit status on its head commit, and for the checks that failed (up to four) what GitHub reports about them, their annotations and, for GitHub Actions jobs, the last lines of the job log. Read live from GitHub.',
+    inputSchema:{type:'object',properties:{repository:REPOSITORY,number:{type:'integer',minimum:1,description:'Pull request number.'}},required:['number'],additionalProperties:false},
+    annotations:READ_ONLY,
+    run:async(args,{token,grantId})=>{
+      if(!Number.isSafeInteger(args.number)||args.number<1) throw exposed('number must be a pull request number.');
+      const repository=await repositoryOf(args,token,grantId);
+      const client=createGitHub({token,fetchImpl,userAgent:'repo-autopilot-chat'});
+      let pr;
+      try {pr=await client.pull(repository,args.number);}
+      catch(error) {if(error?.status===404) throw exposed(`${repository} has no pull request #${args.number}.`);throw error;}
+      const head=pr.head?.sha;
+      const {checks,statuses,complete,opened}=await client.checks(repository,head);
+      const failedChecks=checks.filter(c=>c.status==='completed'&&['failure','cancelled','timed_out','action_required','startup_failure','stale'].includes(c.conclusion));
+      const failedStatuses=statuses.filter(st=>['failure','error'].includes(st.state));
+      const running=checks.filter(c=>c.status!=='completed').length+statuses.filter(st=>st.state==='pending').length;
+      const lines=[`${repository} #${args.number} ${pr.title}: checks on ${short(head)}`,`${failedChecks.length+failedStatuses.length} failed · ${running} running · ${checks.length+statuses.length-failedChecks.length-failedStatuses.length-running} passed or skipped${complete?'':' (the list may be incomplete)'}`];
+      for(const c of failedChecks) {
+        lines.push('',`✗ ${c.name}: ${c.conclusion}${c.url?` · ${c.url}`:''}`);
+        if(c.title) lines.push(indent(c.title));
+        if(c.summary) lines.push(indent(c.summary.length>600?`${c.summary.slice(0,600)} […] (the whole summary is on the check)`:c.summary));
+        for(const a of c.annotations||[]) lines.push(`    ${a.path||''}${a.line?`:${a.line}`:''} ${a.level||''}: ${a.message||''}`.trimEnd());
+        if(c.annotationCount>(c.annotations||[]).length) lines.push(`    ${c.annotationCount-(c.annotations||[]).length} more annotations are not shown; see the check on GitHub.`);
+        if(c.log) lines.push('    Last lines of the log:',indent(c.log,'      '));
+        else if(c.annotations) lines.push(c.app==='github-actions'?'    The job log could not be read.':'    No log: this check does not come from GitHub Actions.');
+      }
+      if(failedChecks.length>opened) lines.push('',`${failedChecks.length-opened} more failed checks are listed without details.`);
+      for(const st of failedStatuses) lines.push('',`✗ ${st.context}: ${st.state}${st.description?` · ${st.description}`:''}${st.url?` · ${st.url}`:''}`);
+      const others=[...checks.filter(c=>!failedChecks.includes(c)).map(c=>`${c.name}: ${c.status==='completed'?c.conclusion:c.status.replace(/_/g,' ')}`),...statuses.filter(st=>!failedStatuses.includes(st)).map(st=>`${st.context}: ${st.state}`)];
+      if(others.length) lines.push('','Other checks:',...others.map(o=>`  ${o}`));
+      if(!checks.length&&!statuses.length) lines.push('No checks reported on this commit.');
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,number:args.number,headSha:head,checks,statuses,complete,dashboardUrl:dashboardUrl(repository,args.number)}};
+    },
+  },{
+    name:'codex_findings',title:'Codex findings in full',
+    description:'Shows the Codex findings of one pull request with their full text: what Codex says is wrong and how to fix it, with priority, place in the code, whether they concern the current code and their state (open, waiting for Codex, unverified, fixed).',
+    inputSchema:{type:'object',properties:{repository:REPOSITORY,number:{type:'integer',minimum:1,description:'Pull request number.'},state:{type:'string',enum:['all','open','waiting','unverified','fixed'],description:'Only findings in this state (default all).'},fresh:FRESH},required:['number'],additionalProperties:false},
+    annotations:READ_ONLY,
+    run:async(args,{token,grantId})=>{
+      if(!Number.isSafeInteger(args.number)||args.number<1) throw exposed('number must be a pull request number.');
+      const wanted=args.state??'all';
+      if(!['all','open','waiting','unverified','fixed'].includes(wanted)) throw exposed('state must be all, open, waiting, unverified or fixed.');
+      const reload=freshOf(args);
+      const repository=await repositoryOf(args,token,grantId);
+      const overview=await dashboardData({store,token,fetchImpl,repository,fresh:reload});
+      const listed=overview.pulls.find(p=>p.number===args.number);
+      let item;
+      try {item=await dashboardData({store,token,fetchImpl,repository,number:args.number,updated:listed?.updatedAt||'',fresh:reload});}
+      catch(error) {if(error?.status===404) throw exposed(`${repository} has no pull request #${args.number}.`);throw error;}
+      if(!item.progress?.findings) return {content:[{type:'text',text:`${repository} #${args.number}: the Codex findings could not be read from GitHub.`}],structuredContent:{repository,number:args.number,findingsAvailable:false,findings:[]}};
+      const state={waiting:'changed'}[wanted]||wanted;
+      const all=findingLines(item);
+      // This tool names the state waiting for Codex "waiting", as its state argument does.
+      const findings=all.filter(f=>wanted==='all'||f.status.state===state).map(f=>({priority:f.priority,title:f.title,text:typeof f.text==='string'?f.text:null,textCut:typeof f.text==='string'&&f.text.endsWith(FINDING_TEXT_CUT),path:f.path,line:f.line,url:f.url,commit:f.commit||null,current:f.current,state:f.status.state,why:f.status.why||null}));
+      const named=s=>s==='changed'?'waiting':s;
+      const lines=[`${repository} #${item.number} ${item.title}: ${findings.length} Codex finding${findings.length===1?'':'s'}${wanted==='all'?'':` (${wanted})`} of ${all.length}${item.progress.findings.incomplete?' (the list may be incomplete)':''}`];
+      for(const f of findings) {
+        lines.push('',`${FINDING_STATES[f.state].icon} ${f.priority} ${f.title} (${f.path?`${f.path}${f.line?`:${f.line}`:''}`:'location unknown'}; ${f.current?'current code':f.commit?`older commit ${short(f.commit)}`:'commit unknown'}; ${FINDING_STATES[f.state].label}${f.why?`: ${f.why}`:''})`,`    ${f.url||''}`.trimEnd());
+        lines.push(f.text?indent(f.text):'    The full text is not in the cached data; ask again with fresh: true.');
+      }
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,number:item.number,findingsAvailable:true,findingsIncomplete:Boolean(item.progress.findings.incomplete),findings:findings.map(f=>({...f,state:named(f.state)})),dashboardUrl:dashboardUrl(repository,item.number)}};
+    },
+  },{
+    name:'waiting_on_me',title:'What needs me',
+    description:`Lists the open pull requests across the repositories Repo Autopilot reads (the ${ATTENTION_REPOS} most recently pushed) and what each needs: something to fix (Codex findings, failed CI, a merge conflict, review comments), a merge, or waiting (CI, Codex or a reviewer). Pull requests to fix come first.`,
+    inputSchema:{type:'object',properties:{fresh:FRESH},additionalProperties:false},
+    annotations:READ_ONLY,
+    run:async(args,{token,grantId})=>{
+      const reload=freshOf(args);
+      const {list,truncated:reposCut}=await readRepos({...access(token,grantId),fresh:reload});
+      const checked=list.slice(0,ATTENTION_REPOS).map(r=>r.fullName);
+      const pulls=[],problems=[],truncated=[];
+      const client=createGitHub({token,fetchImpl,userAgent:'repo-autopilot-chat'});
+      const isolated=error=>{if(error?.status===401||!(error instanceof PublicError||error?.expose||error?.status)) throw error;};
+      let budget=FRESH_DETAILS;
+      for(const repository of checked) {
+        // The open pull requests themselves, not the dashboard's overview, which mixes in closed ones.
+        let open;
+        try {open=await client.openPulls(repository);}
+        catch(error) {isolated(error);problems.push(`${repository}: ${error.message}`);continue;}
+        if(open.mayHaveMore) truncated.push(repository);
+        for(const pr of open.pulls) {
+          let item=null;
+          try {
+            // Fresh reads GitHub again, within the budget; the rest come from the cache.
+            const again=reload&&budget>0;
+            if(!again) item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,cachedOnly:true});
+            if(!item&&budget>0) {budget--;item=await dashboardData({store,token,fetchImpl,repository,number:pr.number,updated:pr.updatedAt,fresh:again});}
+          } catch(error) {isolated(error);}
+          const summary=item?pullSummary(item):null;
+          pulls.push({repository,number:pr.number,title:pr.title,url:pr.url,dashboardUrl:dashboardUrl(repository,pr.number),
+            // Details that could only partly be read are not a reason to wait: they are checked by hand.
+            next:pr.draft?'draft':summary&&!summary.detailError?nextStep(summary):'check',reasons:summary?.detailError?[`details could not be read: ${summary.detailError}`]:summary?summary.readiness.reasons:[],ci:summary?.ci??null,codex:summary?.codex?.label??null,openFindings:summary?.findingCounts?.open??null});
+        }
+      }
+      const order={fix:0,merge:1,wait:2,check:3,draft:4};
+      pulls.sort((a,b)=>order[a.next]-order[b.next]);
+      const label={fix:'Fix',merge:'Ready to merge',wait:'Waiting',check:'Details not loaded; ask for pull_request_status',draft:'Draft'};
+      const lines=[`Open pull requests in ${checked.length} repositor${checked.length===1?'y':'ies'}: ${checked.join(', ')||'none'}`];
+      if(list.length>checked.length) lines.push(`${list.length-checked.length} less recently pushed repositories were not read.`);
+      if(reposCut) lines.push('The list of repositories may itself be incomplete: Repo Autopilot reads up to 5 GitHub App installations and 200 repositories each.');
+      for(const p of pulls) lines.push(`${label[p.next]}: ${p.repository} #${p.number} ${p.title}${p.reasons.length?` (${p.reasons.join('; ')})`:''} · ${p.dashboardUrl}`);
+      for(const repository of truncated) lines.push(`${repository} has more open pull requests than the 30 read here.`);
+      // With a repository unread, no open pull requests is not known.
+      if(!pulls.length) lines.push(problems.length?'No open pull requests were found in the repositories that could be read.':'No open pull requests.');
+      for(const problem of problems) lines.push(`Could not read ${problem}`);
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repositories:checked,notRead:Math.max(0,list.length-checked.length),pulls,truncated,problems,complete:!problems.length&&!truncated.length&&!reposCut&&list.length<=checked.length}};
     },
   }];
 }
