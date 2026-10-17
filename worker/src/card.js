@@ -15,7 +15,8 @@ function cardView() {
   const ORDER={open:0,changed:1,unverified:2,fixed:3};
   const CI={success:'CI passed',failure:'CI failed',pending:'CI running',unknown:'No checks'};
   let context={},caps={},args=null,data=null,repositories=[],failure=null,waiting=true,tool=null,filter='all',busy=false,loadedAt=null,connected=false,app=null;
-  const expanded=new Set(),showFixed=new Set();
+  const expanded=new Set(),showFixed=new Set(),loadingPulls=new Set();
+  const STATES={open:'Open',merged:'Merged',closed:'Closed without merge'};
   const $=id=>document.getElementById(id);
   const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls) node.className=cls;if(text!==undefined) node.textContent=text;return node;};
 
@@ -163,7 +164,20 @@ function cardView() {
     if(pr.detailsLoaded===false) {
       const head=el('div','pr-head');
       head.append(el('span','number',`#${pr.number}`),pr.url?linkTo(el('a','title',pr.title),pr.url):el('span','title',pr.title));
-      item.append(head,el('p','status',pr.error?`Details could not be read: ${pr.error}`:'Details not loaded yet. Ask about this pull request to load it.'));
+      // The list says whether it was merged or closed; the rest is loaded on request, one pull request at a time.
+      const state=STATES[pr.state];
+      const status=el('p','status');
+      if(state) status.append(el('span','badge',state));
+      const loading=loadingPulls.has(pr.number);
+      const note=pr.error?`Details could not be read: ${pr.error}`:loading?'Loading details…':pr.state==='open'?'Details not loaded yet.':'';
+      if(note) status.append(el('span','',`${state?' · ':''}${note}`));
+      item.append(head,status);
+      if(caps.serverTools&&data?.repository) {
+        const load=el('button','more',loading?'Loading…':'Load details');
+        load.type='button';load.disabled=loading||busy;
+        load.onclick=()=>loadPull(pr.number);
+        item.append(load);
+      } else if(pr.state==='open'&&!pr.error) item.append(el('p','note','Ask about this pull request to load it.'));
       return item;
     }
     // One pull request is always shown in full; in a list, each row opens and closes.
@@ -183,6 +197,23 @@ function cardView() {
     else {head.append(status);item.append(head);}
     if(open) item.append(details(pr,single));
     return item;
+  }
+
+  // One pull request of the list loaded in full through the host, in place; Refresh still repeats the list.
+  async function loadPull(number) {
+    if(loadingPulls.has(number)||!data?.pulls) return;
+    loadingPulls.add(number);render();
+    try {
+      const result=await app.callServerTool({name:'pull_request_status',arguments:{repository:data.repository,number}});
+      const pull=result?.isError?null:result?.structuredContent;
+      const at=data.pulls.findIndex(p=>p.number===number);
+      if(pull&&pull.number===number&&at>=0) {data.pulls[at]={...pull,dashboardUrl:pull.dashboardUrl||data.pulls[at].dashboardUrl};expanded.add(number);}
+      else if(at>=0) data.pulls[at]={...data.pulls[at],error:result?.content?.[0]?.text||'the chat app did not return it'};
+    } catch(error) {
+      const at=data.pulls.findIndex(p=>p.number===number);
+      if(at>=0) data.pulls[at]={...data.pulls[at],error:error.message};
+    }
+    loadingPulls.delete(number);render();
   }
 
   function render() {

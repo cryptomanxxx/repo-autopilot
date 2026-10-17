@@ -81,6 +81,7 @@ test('the card inlines the official MCP Apps client, and nothing from other site
   const html=cardHtml('https://autopilot.example');
   assert.ok(html.includes(EXT_APPS_SCRIPT),'the client is inlined');
   assert.doesNotMatch(html,/<script[^>]+src=/);
+  assert.ok(html.includes('Load details')&&html.includes("name:'pull_request_status'"),'an unloaded pull request loads its details through the host');
 });
 
 test('only Claude connections get Claude\'s sandbox origin for the card',async()=>{
