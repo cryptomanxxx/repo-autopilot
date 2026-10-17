@@ -129,11 +129,12 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     const statuses = (combined.statuses || []).map(s => ({context:s.context, state:s.state, description:cut(s.description, 300), url:s.target_url || null}));
     return {checks:list, statuses, complete:(runs.check_runs || []).length < 100 && (runs.total_count ?? 0) <= (runs.check_runs || []).length && statuses.length < 100, opened:failed.length};
   }
-  // The open pull requests of a repository, most recently updated first; more may exist beyond the limit.
+  // The open pull requests of a repository, most recently updated first, up to the limit.
   async function openPulls(value, limit = 30) {
     const repo = repositoryName(value);
-    const pulls = await get(`/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${limit}`);
-    return {pulls:pulls.map(p => ({number:p.number, title:p.title, url:p.html_url, draft:Boolean(p.draft), updatedAt:p.updated_at})), mayHaveMore:pulls.length >= limit};
+    // One more than the limit is asked for, so a full page is told apart from a longer list.
+    const pulls = await get(`/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${limit + 1}`);
+    return {pulls:pulls.slice(0, limit).map(p => ({number:p.number, title:p.title, url:p.html_url, draft:Boolean(p.draft), updatedAt:p.updated_at})), mayHaveMore:pulls.length > limit};
   }
   return {
     overview, pullDetails, checks, openPulls,

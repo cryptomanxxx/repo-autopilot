@@ -4,6 +4,7 @@ import {findingStatus,FINDING_STATES} from '../public/dashboard-view.js';
 import {PublicError} from './errors.js';
 import {CARD_TOOL_META} from './card.js';
 import {createGitHub} from '../../src/github.js';
+import {FINDING_TEXT_CUT} from '../../src/progress.js';
 
 // At most this many pull requests are loaded from GitHub in one list call; the rest come from the cache
 // or are marked as not loaded, so a call stays within the Workers subrequest limit.
@@ -252,7 +253,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       const state={waiting:'changed'}[wanted]||wanted;
       const all=findingLines(item);
       // This tool names the state waiting for Codex "waiting", as its state argument does.
-      const findings=all.filter(f=>wanted==='all'||f.status.state===state).map(f=>({priority:f.priority,title:f.title,text:typeof f.text==='string'?f.text:null,path:f.path,line:f.line,url:f.url,commit:f.commit||null,current:f.current,state:f.status.state,why:f.status.why||null}));
+      const findings=all.filter(f=>wanted==='all'||f.status.state===state).map(f=>({priority:f.priority,title:f.title,text:typeof f.text==='string'?f.text:null,textCut:typeof f.text==='string'&&f.text.endsWith(FINDING_TEXT_CUT),path:f.path,line:f.line,url:f.url,commit:f.commit||null,current:f.current,state:f.status.state,why:f.status.why||null}));
       const named=s=>s==='changed'?'waiting':s;
       const lines=[`${repository} #${item.number} ${item.title}: ${findings.length} Codex finding${findings.length===1?'':'s'}${wanted==='all'?'':` (${wanted})`} of ${all.length}${item.progress.findings.incomplete?' (the list may be incomplete)':''}`];
       for(const f of findings) {
@@ -268,7 +269,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
     annotations:READ_ONLY,
     run:async(args,{token,grantId})=>{
       const reload=freshOf(args);
-      const {list}=await readRepos(access(token,grantId));
+      const {list,truncated:reposCut}=await readRepos(access(token,grantId));
       const checked=list.slice(0,ATTENTION_REPOS).map(r=>r.fullName);
       const pulls=[],problems=[],truncated=[];
       const client=createGitHub({token,fetchImpl,userAgent:'repo-autopilot-chat'});
@@ -298,12 +299,13 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       const label={fix:'Fix',merge:'Ready to merge',wait:'Waiting',check:'Details not loaded; ask for pull_request_status',draft:'Draft'};
       const lines=[`Open pull requests in ${checked.length} repositor${checked.length===1?'y':'ies'}: ${checked.join(', ')||'none'}`];
       if(list.length>checked.length) lines.push(`${list.length-checked.length} less recently pushed repositories were not read.`);
+      if(reposCut) lines.push('The list of repositories may itself be incomplete: Repo Autopilot reads up to 5 GitHub App installations and 200 repositories each.');
       for(const p of pulls) lines.push(`${label[p.next]}: ${p.repository} #${p.number} ${p.title}${p.reasons.length?` (${p.reasons.join('; ')})`:''} · ${p.dashboardUrl}`);
       for(const repository of truncated) lines.push(`${repository} has more open pull requests than the 30 read here.`);
       // With a repository unread, no open pull requests is not known.
       if(!pulls.length) lines.push(problems.length?'No open pull requests were found in the repositories that could be read.':'No open pull requests.');
       for(const problem of problems) lines.push(`Could not read ${problem}`);
-      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repositories:checked,notRead:Math.max(0,list.length-checked.length),pulls,truncated,problems,complete:!problems.length&&!truncated.length&&list.length<=checked.length}};
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repositories:checked,notRead:Math.max(0,list.length-checked.length),pulls,truncated,problems,complete:!problems.length&&!truncated.length&&!reposCut&&list.length<=checked.length}};
     },
   }];
 }

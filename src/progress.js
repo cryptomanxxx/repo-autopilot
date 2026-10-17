@@ -10,12 +10,14 @@ export function findingTitle(body='') {
 }
 
 // The finding's explanation, without its headline, badge, feedback prompt and markers: what Codex says is
-// wrong and how to fix it, cut to 2000 characters.
+// wrong and how to fix it. A longer one is cut at 2000 characters and ends with FINDING_TEXT_CUT.
+export const FINDING_TEXT_CUT='\n[… cut here; the whole finding is on GitHub]';
 export function findingText(body='') {
-  return body.replace(/<!--[\s\S]*?-->/g,'')
+  const text=body.replace(/<!--[\s\S]*?-->/g,'')
     .replace(/^\s*\*\*(?:<sub><sub>)?!\[P[0-3] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?[^*]*\*\*\s*/i,'')
     .replace(/^\s*Useful\? React with .*$/gim,'')
-    .replace(/\n{3,}/g,'\n\n').trim().slice(0,2000);
+    .replace(/\n{3,}/g,'\n\n').trim();
+  return text.length>2000?text.slice(0,2000)+FINDING_TEXT_CUT:text;
 }
 
 export function reviewProgress(head, {reviews = [], comments = [], inline = [], commits = [], reactions = [], openedAt, mergedAt, findingsTruncated = false, truncated = false} = {}) {
