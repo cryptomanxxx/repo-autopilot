@@ -1228,9 +1228,47 @@ test('the consent page allows only its own script, which shows the click and sto
   const consent=await call(`/oauth/authorize?${new URLSearchParams({response_type:'code',client_id,redirect_uri:'https://claude.ai/api/mcp/auth_callback',code_challenge:'c'.repeat(43),code_challenge_method:'S256'})}`);
   const html=await consent.text(),scripts=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
   assert.equal(scripts.length,1);
-  assert.match(scripts[0],/Opening GitHub…/);
+  assert.match(scripts[0],/dataset\.busy/);
+  assert.match(html,/data-busy="Opening GitHub…">Allow and sign in with GitHub</,'without a dashboard session the owner signs in with GitHub');
   const hash=`'sha256-${createHash('sha256').update(scripts[0]).digest('base64')}'`;
   assert.match(consent.headers.get('Content-Security-Policy'),new RegExp(`script-src ${hash.replace(/[+/]/g,c=>'\\'+c)};`));
+});
+
+test('an owner signed in to the dashboard connects an app without going to GitHub, once per sign-in',async()=>{
+  const {env,store}=environment(),calls=[],base=github({calls});
+  // The dashboard sign-in hands out a refresh token, as GitHub App sign-ins do.
+  const fetchImpl=async(url,options={})=>url==='https://github.com/login/oauth/access_token'?(calls.push({url}),Response.json({access_token:'ghu_dash',expires_in:28800,refresh_token:'ghr_dash',refresh_token_expires_in:15811200,scope:''})):base(url,options);
+  const call=(path,options={})=>handle(request(path,options),env,{fetchImpl});
+  const form=(path,fields,headers={})=>handle(new Request(ORIGIN+path,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',...headers},body:new URLSearchParams(fields)}),env,{fetchImpl});
+  const auth=await session(env,fetchImpl);
+  assert.equal(store.rows('SELECT github FROM sessions')[0].github.includes('ghr_'),false,'the session keeps its GitHub tokens sealed');
+  const {client_id}=await (await call('/oauth/register',{method:'POST',body:{client_name:'Claude',redirect_uris:['https://claude.ai/api/mcp/auth_callback']}})).json();
+  const verifier='v'.repeat(50),challenge=createHash('sha256').update(verifier).digest('base64url');
+  const connect=async()=>{
+    const consent=await call(`/oauth/authorize?${new URLSearchParams({response_type:'code',client_id,redirect_uri:'https://claude.ai/api/mcp/auth_callback',code_challenge:challenge,code_challenge_method:'S256',state:'xyz'})}`,{cookie:auth.cookie});
+    const html=await consent.text();
+    const fields={request:html.match(/name="request" value="([^"]+)"/)[1],consent:html.match(/name="consent" value="([0-9a-f]+)"/)[1],decision:'allow'};
+    return {html,allowed:await form('/oauth/authorize',fields,{Origin:ORIGIN,Cookie:`${consent.headers.get('Set-Cookie').split(';')[0]}; ${auth.cookie}`})};
+  };
+  const before=calls.length;
+  const first=await connect();
+  assert.match(first.html,/signed in to Repo Autopilot as <strong>owner<\/strong>, so no GitHub sign-in is needed/);
+  assert.match(first.html,/data-busy="Connecting…">Allow</);
+  assert.equal(first.allowed.status,303,'the app gets its code at once');
+  const returned=new URL(first.allowed.headers.get('Location'));
+  assert.equal(returned.origin+returned.pathname,'https://claude.ai/api/mcp/auth_callback');
+  assert.equal(returned.searchParams.get('state'),'xyz');
+  assert.equal(calls.slice(before).some(c=>c.url.startsWith('https://github.com/')),false,'no trip to GitHub');
+  const tokens=await (await form('/oauth/token',{grant_type:'authorization_code',code:returned.searchParams.get('code'),redirect_uri:'https://claude.ai/api/mcp/auth_callback',client_id,code_verifier:verifier})).json();
+  assert.equal(tokens.token_type,'Bearer');
+  const listed=await (await call('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'list_repositories',arguments:{}}},headers:{Authorization:`Bearer ${tokens.access_token}`}})).json();
+  assert.match(listed.result.content[0].text,/owner\/repo/,'the app reads GitHub with the sign-in\'s tokens');
+  assert.equal(calls.filter(c=>c.options?.headers?.Authorization==='Bearer ghu_dash').length>0,true);
+  // A refresh token renews once, so a second app from the same sign-in signs in with GitHub itself.
+  const second=await connect();
+  assert.match(second.html,/Allow and sign in with GitHub/);
+  assert.equal(new URL(handoff(second.allowed)).origin,'https://github.com');
+  assert.equal((await (await handle(request('/api/session',{cookie:auth.cookie}),env,{fetchImpl})).json()).login,'owner','the dashboard session stays signed in');
 });
 
 test('an OAuth step that throws is logged as a 500',async()=>{

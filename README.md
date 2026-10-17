@@ -168,7 +168,7 @@ Claude and ChatGPT can read the same status the dashboard shows, through a conne
 
 - **Claude:** Customize → Connectors → **Add custom connector**, paste the address and click **Add**. If Claude asks how to identify itself, choose **Register automatically**. Custom connectors work on every Claude plan, and the Free plan allows one ([Claude's documentation](https://claude.com/docs/connectors/custom/remote-mcp)).
 - **ChatGPT:** turn on **Developer mode** in the settings (a beta feature) and add an app with the same address.
-- Connecting shows a Repo Autopilot page naming the app and where it returns to. **Allow** signs you in with GitHub, then you are back in the chat app.
+- Connecting shows a Repo Autopilot page naming the app and where it returns to. **Allow** signs you in with GitHub, then you are back in the chat app. If you are signed in to the dashboard in the same browser, **Allow** connects the app at once with the GitHub tokens of that sign-in, with no trip to GitHub; each dashboard sign-in connects one app this way, as GitHub renews a refresh token only once.
 
 The tools, all read-only and reading the same data and cache as the dashboard:
 

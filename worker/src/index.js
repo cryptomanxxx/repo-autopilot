@@ -8,6 +8,7 @@ export class ChatStore extends DurableObject {
   createSession(session) {return this.logic.createSession(session);}
   getSession(hash) {return this.logic.getSession(hash);}
   deleteSession(hash) {return this.logic.deleteSession(hash);}
+  takeSessionGithub(hash) {return this.logic.takeSessionGithub(hash);}
   acquireLock(name,owner,ms) {return this.logic.acquireLock(name,owner,ms);}
   releaseLock(name,owner) {return this.logic.releaseLock(name,owner);}
   listConversations(repository,options) {return this.logic.listConversations(repository,options);}
