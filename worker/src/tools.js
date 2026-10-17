@@ -37,6 +37,8 @@ export const nextStep=pr=>pr.draft?'draft':pr.readiness?.state==='ready'?'merge'
 // How many repositories the attention list reads in one call, so one call stays within the Workers
 // subrequest limit; they are the most recently pushed ones.
 export const ATTENTION_REPOS=6;
+// How much diff pull_request_files shows: in all, for each file, and for one file asked for by path.
+export const FILE_PATCH_BUDGET=12000,FILE_PATCH_MAX=3000,PATH_PATCH_MAX=20000;
 function findingLines(item) {
   const clearedAt=item.codex?.state==='clear'?item.codex.clearedAt:null;
   const findings=(item.progress?.findings?.items||[]).map(f=>({...f,status:findingStatus(f,{clearedAt})}));
@@ -232,6 +234,50 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       if(others.length) lines.push('','Other checks:',...others.map(o=>`  ${o}`));
       if(!checks.length&&!statuses.length) lines.push('No checks reported on this commit.');
       return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,number:args.number,headSha:head,checks,statuses,complete,dashboardUrl:dashboardUrl(repository,args.number)}};
+    },
+  },{
+    name:'pull_request_files',title:'Pull request files',
+    description:`Shows what one pull request changes: every changed file with its status and added and removed lines, and the diff of each file, up to ${FILE_PATCH_BUDGET} characters of diff in all (${PATH_PATCH_MAX} for one file asked for by path). Read live from GitHub; a pull request with more than 100 files is read a page at a time.`,
+    inputSchema:{type:'object',properties:{repository:REPOSITORY,number:{type:'integer',minimum:1,description:'Pull request number.'},path:{type:'string',description:'Only this file, with its whole diff (as far as GitHub gives it).'},page:{type:'integer',minimum:1,maximum:30,description:'Which 100 files to read (default 1), for a pull request with more than 100 files.'}},required:['number'],additionalProperties:false},
+    annotations:READ_ONLY,
+    run:async(args,{token,grantId})=>{
+      if(!Number.isSafeInteger(args.number)||args.number<1) throw exposed('number must be a pull request number.');
+      if(args.path!==undefined&&(typeof args.path!=='string'||!args.path.trim())) throw exposed('path must be a file path in the pull request.');
+      const page=args.page??1;
+      if(!Number.isSafeInteger(page)||page<1||page>30) throw exposed('page must be a number from 1 to 30.');
+      const repository=await repositoryOf(args,token,grantId);
+      const client=createGitHub({token,fetchImpl,userAgent:'repo-autopilot-chat'});
+      let pr;
+      try {pr=await client.pull(repository,args.number);}
+      catch(error) {if(error?.status===404) throw exposed(`${repository} has no pull request #${args.number}.`);throw error;}
+      const total=pr.changed_files??null;
+      const listed=await client.pullFiles(repository,args.number,page);
+      const wanted=args.path?.trim();
+      const files=wanted?listed.filter(f=>f.path===wanted||f.previousPath===wanted):listed;
+      // The diffs fill a fixed budget in file order; a cut diff says so, and so do the diffs left out.
+      let budget=wanted?PATH_PATCH_MAX:FILE_PATCH_BUDGET,left=0;
+      const shown=files.map(f=>{
+        const room=Math.min(budget,wanted?PATH_PATCH_MAX:FILE_PATCH_MAX);
+        if(f.patch===null) return {...f,patchCut:false,patchLeftOut:false};
+        // A diff that does not fit is cut, unless too little room is left to show anything useful.
+        if(f.patch.length>room&&room<200) {left++;return {...f,patch:null,patchCut:false,patchLeftOut:true};}
+        const cut=f.patch.length>room;
+        const patch=cut?`${f.patch.slice(0,room)}\n[… diff cut here; the whole diff is on GitHub]`:f.patch;
+        budget-=Math.min(f.patch.length,room);
+        return {...f,patch,patchCut:cut,patchLeftOut:false};
+      });
+      const lastPage=total===null?null:Math.max(1,Math.ceil(Math.min(total,3000)/100));
+      const lines=[`${repository} #${args.number} ${pr.title}: ${total??'?'} changed file${total===1?'':'s'} · +${pr.additions??'?'} −${pr.deletions??'?'} · ${pr.commits??'?'} commit${pr.commits===1?'':'s'}`,`GitHub: ${pr.html_url}/files`];
+      if(lastPage!==null&&lastPage>1) lines.push(`Page ${page} of ${lastPage} (100 files a page)${total>3000?'; GitHub lists only the first 3000 files':''}.`);
+      if(!listed.length) lines.push(page>1?`No files on page ${page}.`:'GitHub lists no changed files.');
+      else if(wanted&&!files.length) lines.push(`${wanted} is not among the files on page ${page}.${lastPage>page?' Later pages may hold it.':''}`);
+      for(const f of shown) {
+        lines.push('',`${f.path}${f.previousPath?` (renamed from ${f.previousPath})`:''}: ${f.status} · +${f.additions} −${f.deletions}`);
+        if(f.patch!==null) lines.push(indent(f.patch));
+        else if(!f.patchLeftOut) lines.push('    No diff from GitHub: a binary file, or a change too large for GitHub to show here.');
+      }
+      if(left) lines.push('',`${left} more diffs are not shown here; ask again with path for one file.`);
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,number:args.number,headSha:pr.head?.sha||null,changedFiles:total,additions:pr.additions??null,deletions:pr.deletions??null,page,lastPage,files:shown,patchesLeftOut:left,dashboardUrl:dashboardUrl(repository,args.number)}};
     },
   },{
     name:'codex_findings',title:'Codex findings in full',

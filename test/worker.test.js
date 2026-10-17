@@ -952,7 +952,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   const {env,store}=environment(),calls=[];let runsDenied=false,failedChecks=false,logAuth,logRanges=[],openDenied=false,detailsDenied=false;
   const bot={login:'chatgpt-codex-connector[bot]'},head='b'.repeat(40);
   const pulls=[
-    {number:1,title:'Add the benchmark',html_url:'https://github.com/owner/repo/pull/1',state:'open',merged_at:null,updated_at:'2026-10-16T10:00:00Z',created_at:'2026-10-16T09:00:00Z',draft:false,head:{sha:head},base:{ref:'main'},mergeable:true},
+    {number:1,title:'Add the benchmark',html_url:'https://github.com/owner/repo/pull/1',state:'open',merged_at:null,updated_at:'2026-10-16T10:00:00Z',created_at:'2026-10-16T09:00:00Z',draft:false,head:{sha:head},base:{ref:'main'},mergeable:true,changed_files:8,additions:120,deletions:30,commits:2},
     {number:2,title:'Update sources',html_url:'https://github.com/owner/repo/pull/2',state:'closed',merged_at:'2026-10-15T10:00:00Z',updated_at:'2026-10-15T10:00:00Z',created_at:'2026-10-15T09:00:00Z',draft:false,head:{sha:'c'.repeat(40)},base:{ref:'main'},mergeable:null},
   ];
   const finding={id:11,user:bot,body:'**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow)</sub></sub>  Fix sampling parameters**\n\nThe sampler uses temperature 2.0, which makes the benchmark noisy. Use 0.2.\n\nUseful? React with 👍 / 👎.\n\n<!-- codex-code-review-finding:v1 -->',path:'research/bench.py',line:68,original_commit_id:'a'.repeat(40),created_at:'2026-10-16T09:30:00Z',html_url:'https://github.com/owner/repo/pull/1#discussion_r11'};
@@ -977,6 +977,10 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
     const single=/^\/pulls\/(\d+)$/.exec(path);
     if(single) return pulls[Number(single[1])-1]?ok(pulls[Number(single[1])-1]):new Response('{}',{status:404});
     if(path==='/pulls/1/comments?per_page=100') return ok([finding]);
+    if(path==='/pulls/1/files?per_page=100&page=1') {
+      const file=(filename,patch,extra={})=>({filename,status:'modified',additions:3,deletions:1,patch,blob_url:`https://github.com/owner/repo/blob/${head}/${filename}`,...extra});
+      return ok([file('a.js','@@ -1 +1 @@\n-old\n+new'),file('b.js','@@ -1 +1 @@\n-x\n+y',{status:'renamed',previous_filename:'old.js'}),file('logo.png',undefined,{status:'added'}),file('big.js','+'.repeat(5000)),...[1,2,3,4].map(n=>file(`c${n}.js`,'-'.repeat(3000)))]);
+    }
     if(failedChecks&&path===`/commits/${head}/check-runs?per_page=100`) return ok({total_count:2,check_runs:[{id:77,name:'test',app:{slug:'github-actions'},status:'completed',conclusion:'failure',html_url:'https://github.com/owner/repo/runs/77',details_url:'https://github.com/owner/repo/actions/runs/5/job/991',output:{title:'1 test failed',summary:'cart totals'+'.'.repeat(1600),annotations_count:23}},{id:78,name:'lint',app:{slug:'github-actions'},status:'completed',conclusion:'success',html_url:'https://github.com/owner/repo/runs/78',output:{}}]});
     if(path==='/check-runs/77/annotations?per_page=20') return ok([{path:'src/cart.js',start_line:7,annotation_level:'failure',message:'expected 10.00, got 10.01'}]);
     if(path==='/actions/jobs/991/logs') return new Response(null,{status:302,headers:{Location:'https://logs.example/job77'}});
@@ -996,7 +1000,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   const token=await connectApp(env,fetchImpl);
   const tool=async(name,args)=>(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json()).result;
   const {result:{tools}}=await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method:'tools/list'},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json();
-  assert.deepEqual(tools.map(t=>t.name),['list_repositories','list_pull_requests','pull_request_status','list_workflow_runs','pull_request_checks','codex_findings','waiting_on_me']);
+  assert.deepEqual(tools.map(t=>t.name),['list_repositories','list_pull_requests','pull_request_status','list_workflow_runs','pull_request_checks','pull_request_files','codex_findings','waiting_on_me']);
   // The pull request tools are shown with the Repo Autopilot card (MCP Apps); the card is read with the same sign-in.
   const rpc=async(method,params)=>(await (await handle(request('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method,params},headers:{Authorization:`Bearer ${token}`}}),env,{fetchImpl})).json());
   // Every message, notifications included, leaves one line in the Worker's logs, without tokens or arguments.
@@ -1013,7 +1017,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.deepEqual(lines.map(l=>[l.connector,l.notification??false,l.resource??null,l.app,l.claude]),[['notifications/initialized',true,null,'Claude',true],['resources/read',false,'ui://repo-autopilot/pull-requests.html','Claude',true],['resources/read',false,'unknown','Claude',true],['unknown',false,null,'Claude',true],['parse-error',false,null,'Claude',true]]);
   assert.ok(!logged.some(line=>line.includes(token)||line.includes('abc123')||line.includes('xyz')),'nothing the app sent beyond known values reaches the logs');
   const card='ui://repo-autopilot/pull-requests.html';
-  assert.deepEqual(tools.map(t=>t._meta?.ui?.resourceUri??null),[null,card,card,null,null,null,null]);
+  assert.deepEqual(tools.map(t=>t._meta?.ui?.resourceUri??null),[null,card,card,null,null,null,null,null]);
   // The checks of a pull request, with what a failed one says: annotations and the end of its job log,
   // read from the signed log address without the token.
   failedChecks=true;
@@ -1029,6 +1033,23 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.match(checks.content[0].text,/22 more annotations are not shown/);
   assert.ok(checks.structuredContent.checks[0].summary.endsWith(' […]')&&checks.content[0].text.includes('(the whole summary is on the check)'),'a cut summary says so');
   assert.match((await tool('pull_request_checks',{number:9})).content[0].text,/has no pull request #9/);
+  // What a pull request changes: every file, and the diffs within a fixed budget.
+  const changes=await tool('pull_request_files',{number:1});
+  assert.match(changes.content[0].text,/8 changed files · \+120 −30 · 2 commits/);
+  assert.match(changes.content[0].text,/a\.js: modified · \+3 −1\n    @@ -1 \+1 @@\n    -old\n    \+new/);
+  assert.match(changes.content[0].text,/b\.js \(renamed from old\.js\): renamed/);
+  assert.match(changes.content[0].text,/logo\.png: added · \+3 −1\n    No diff from GitHub/);
+  const byPath=Object.fromEntries(changes.structuredContent.files.map(f=>[f.path,f]));
+  assert.ok(byPath['big.js'].patchCut&&byPath['big.js'].patch.endsWith('[… diff cut here; the whole diff is on GitHub]'),'a long diff is cut and says so');
+  assert.ok(byPath['c3.js'].patchCut,'the last diff is cut to what is left of the budget');
+  assert.ok(byPath['c4.js'].patchLeftOut&&byPath['c4.js'].patch===null);
+  assert.match(changes.content[0].text,/1 more diffs are not shown here; ask again with path for one file\./);
+  assert.equal(changes.structuredContent.patchesLeftOut,1);
+  const one=await tool('pull_request_files',{number:1,path:'big.js'});
+  assert.deepEqual(one.structuredContent.files.map(f=>[f.path,f.patch.length,f.patchCut]),[['big.js',5000,false]],'one file asked for by path gets its whole diff');
+  assert.equal((await tool('pull_request_files',{number:1,path:'old.js'})).structuredContent.files[0].path,'b.js','a renamed file is found by its old path');
+  assert.match((await tool('pull_request_files',{number:1,path:'none.js'})).content[0].text,/none\.js is not among the files on page 1\./);
+  assert.match((await tool('pull_request_files',{number:9})).content[0].text,/has no pull request #9/);
   // Codex findings with their full text, without the badge, the feedback prompt or markers.
   const full=await tool('codex_findings',{number:1,fresh:true});
   assert.equal(full.structuredContent.findings[0].text,'The sampler uses temperature 2.0, which makes the benchmark noisy. Use 0.2.');

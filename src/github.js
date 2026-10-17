@@ -142,8 +142,15 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     const pulls = await get(`/repos/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${limit + 1}`);
     return {pulls:pulls.slice(0, limit).map(p => ({number:p.number, title:p.title, url:p.html_url, draft:Boolean(p.draft), updatedAt:p.updated_at})), mayHaveMore:pulls.length > limit};
   }
+  // One page (up to 100) of the files a pull request changes, with GitHub's patch for each. GitHub leaves
+  // the patch out for binary files and very large changes, and lists at most 3000 files.
+  async function pullFiles(value, number, page = 1) {
+    const repo = repositoryName(value);
+    const files = await get(`/repos/${repo}/pulls/${number}/files?per_page=100&page=${page}`);
+    return files.map(f => ({path:f.filename, status:f.status, additions:f.additions ?? 0, deletions:f.deletions ?? 0, previousPath:f.previous_filename || null, patch:typeof f.patch === 'string' ? f.patch : null, url:f.blob_url || null}));
+  }
   return {
-    overview, pullDetails, checks, openPulls,
+    overview, pullDetails, checks, openPulls, pullFiles,
     pull:(value,number)=>get(`/repos/${repositoryName(value)}/pulls/${number}`),
     async snapshot(value) {
       const {repo, pulls, ...rest} = await overview(value);
