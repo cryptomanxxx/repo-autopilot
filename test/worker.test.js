@@ -1006,8 +1006,13 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.deepEqual(resources.map(r=>[r.uri,r.mimeType]),[[card,'text/html;profile=mcp-app']]);
   const {result:{contents:[content]}}=await rpc('resources/read',{uri:card});
   assert.equal(content.mimeType,'text/html;profile=mcp-app');
-  assert.deepEqual(content._meta.ui.csp,{connectDomains:[ORIGIN],resourceDomains:[]},'the card loads nothing and connects only to this server');
+  assert.deepEqual(content._meta.ui.csp,{connectDomains:[ORIGIN],resourceDomains:[ORIGIN]},'the card loads nothing and reaches only this server');
   assert.ok(content.text.includes(JSON.stringify(ORIGIN+'/card-log')),'the card reports to this server');
+  // The HTML itself requests the report pixel, before any script, with the same load id the script uses.
+  const ping=/<img src="([^"]+)"/.exec(content.text)[1].replace(/&amp;/g,'&');
+  const pinged=JSON.parse(new URL(ping).searchParams.get('r'));
+  assert.deepEqual([new URL(ping).origin+new URL(ping).pathname,pinged.event,pinged.via],[ORIGIN+'/card-log','html','html']);
+  assert.ok(content.text.includes(`,"${pinged.load}");</script>`),'the script reports with the same load id');
   // Claude loads the card from its sandbox origin, named after this connector's address.
   const expected=createHash('sha256').update(`${ORIGIN}/mcp`).digest('hex').slice(0,32)+'.claudemcpcontent.com';
   assert.equal(content._meta.ui.domain,expected,'a Claude connection gets Claude\'s sandbox origin');
@@ -1082,13 +1087,21 @@ test('the card reports how far it got, and only known values reach the logs',asy
       await post(JSON.stringify({event:'bogus',load:'0123456789abcdef'})),
       await post('{not json'),
       await post('x'.repeat(5000)),
+      await handle(new Request(ORIGIN+'/card-log',{method:'PUT'}),env),
+      await handle(new Request(ORIGIN+'/card-log?r='+encodeURIComponent(JSON.stringify({event:'html',load:'0123456789abcdef',via:'html'}))),env),
+      await handle(new Request(ORIGIN+'/card-log?r='+encodeURIComponent(JSON.stringify({event:'attempt',load:'0123456789abcdef',via:'image',attempt:2}))),env),
+      await handle(new Request(ORIGIN+'/card-log?r='+encodeURIComponent(JSON.stringify({event:'start',load:'0123456789abcdef',pad:'x'.repeat(3000)}))),env),
       await handle(new Request(ORIGIN+'/card-log'),env),
     ];
   } finally {console.log=log;}
-  assert.deepEqual(responses.map(r=>r.status),[204,204,204,204,204,400,400,400,405]);
+  assert.deepEqual(responses.map(r=>r.status),[204,204,204,204,204,400,400,400,405,200,200,400,400]);
   assert.equal(responses[0].headers.get('Access-Control-Allow-Origin'),'*');
+  // Image requests are answered with a transparent pixel.
+  assert.equal(responses[9].headers.get('Content-Type'),'image/gif');
+  assert.equal(new TextDecoder().decode((await responses[9].arrayBuffer()).slice(0,6)),'GIF89a');
   const lines=logged.map(line=>JSON.parse(line));
-  assert.deepEqual(lines.map(l=>l.card),['start','message','message','connected','error']);
+  assert.deepEqual(lines.map(l=>l.card),['start','message','message','connected','error','html','attempt']);
+  assert.deepEqual([lines[5].via,lines[6].via,lines[6].attempt],['html','image',2]);
   assert.deepEqual([lines[0].frame,lines[0].origin,lines[0].parentOrigin,lines[0].referrer,lines[0].ready],['frame','https://abc.claudemcpcontent.com','https://claude.ai','other','loading']);
   assert.deepEqual([lines[1].method,lines[2].method],['ui/notifications/tool-result','unknown']);
   assert.deepEqual([lines[3].host,lines[3].caps,lines[3].height,lines[3].attempt],['Claude b1.0/b',['openLinks','serverTools'],240,1]);
