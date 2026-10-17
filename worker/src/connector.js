@@ -7,7 +7,7 @@
 import {hex,randomHex,base64url,sha256,seal,unseal,sealState} from './crypto.js';
 import {readLimited} from './github.js';
 import {PublicError} from './errors.js';
-import {cardResource,cardContents,claudeDomain,isClaude,CARD_URI,CARD_MIME} from './card.js';
+import {cardResource,cardContents,claudeDomain,isClaude,CARD_URI,CARD_MIME,CARD_LOG_PATH} from './card.js';
 
 const APPS_EXTENSION='io.modelcontextprotocol/ui';
 // Methods logged by name; anything else is logged as "unknown".
@@ -21,7 +21,7 @@ export const MCP_PROTOCOLS=['2025-11-25','2025-06-18','2025-03-26'];
 const SCOPES=['read','offline_access'];
 const GRANT='github-grant',CONSENT='connector-consent',MAX_FORM=16384,MAX_MCP=65536;
 
-export const isConnectorPath=path=>path==='/mcp'||path.startsWith('/oauth/')||path.startsWith('/.well-known/oauth-');
+export const isConnectorPath=path=>path==='/mcp'||path===CARD_LOG_PATH||path.startsWith('/oauth/')||path.startsWith('/.well-known/oauth-');
 
 const CORS={'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'Authorization, Content-Type, Mcp-Protocol-Version, Mcp-Session-Id','Access-Control-Allow-Methods':'GET, POST, OPTIONS','Access-Control-Expose-Headers':'WWW-Authenticate, Mcp-Session-Id'};
 const json=(status,value,headers={})=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store',...CORS,...headers}});
@@ -322,6 +322,31 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
   return rpcError(id,-32601,`Method not found: ${method}`);
 }
 
+// What the card reports about itself (see cardReport in card.js), one line each in the Worker's logs. The card
+// has no token, so anyone can post here; only known values are written, and the one free text, a script
+// error, is cut short.
+const CARD_EVENTS=['start','message','attempt','failed','gave-up','connected','tool-input','tool-result','cancelled','teardown','error'];
+const CARD_MESSAGES=['ui/initialize','ui/notifications/initialized','ui/notifications/tool-input','ui/notifications/tool-input-partial','ui/notifications/tool-result','ui/notifications/tool-cancelled','ui/notifications/host-context-changed','ui/notifications/size-changed','ui/notifications/sandbox-proxy-ready','ui/notifications/sandbox-resource-ready','ui/resource-teardown','ui/open-link','ui/request-display-mode','ui/message','ui/update-model-context','tools/call','ping','notifications/message'];
+const MAX_CARD_LOG=2048;
+async function cardLog(request) {
+  if(request.method!=='POST') return json(405,{error:'Use POST.'},{Allow:'POST, OPTIONS'});
+  let report;
+  try {report=JSON.parse(await readBody(request,MAX_CARD_LOG));} catch {}
+  if(!report||typeof report!=='object'||!CARD_EVENTS.includes(report.event)||!/^[0-9a-f]{16}$/.test(report.load)) return json(400,{error:'Not a card report.'});
+  const origin=value=>typeof value!=='string'||value===''?undefined:value==='null'||/^https?:\/\/[a-z0-9.-]+(:\d{1,5})?$/i.test(value)?value:'other';
+  const count=(value,max)=>Number.isInteger(value)&&value>=0&&value<=max?value:undefined;
+  const flag=value=>typeof value==='boolean'?value:undefined;
+  const pick=(value,list)=>typeof value!=='string'?undefined:value===''||list.includes(value)?value:'unknown';
+  const text=(value,max)=>typeof value==='string'?value.replace(/[\u0000-\u001f\u007f]+/g,' ').slice(0,max):undefined;
+  console.log(JSON.stringify({card:report.event,load:report.load,
+    frame:pick(report.frame,['top','frame']),origin:origin(report.origin),parentOrigin:origin(report.parentOrigin),referrer:origin(report.referrer),ready:pick(report.ready,['loading','interactive','complete']),
+    from:pick(report.from,['parent','none','other']),method:pick(report.method,CARD_MESSAGES),reply:flag(report.reply),
+    attempt:count(report.attempt,99),host:text(report.host,80)?.replace(/[^\w .@/+-]/g,''),caps:Array.isArray(report.caps)?report.caps.filter(c=>typeof c==='string'&&/^[A-Za-z]{1,30}$/.test(c)).slice(0,12):undefined,
+    isError:flag(report.isError),structured:flag(report.structured),height:count(report.height,100000),error:text(report.error,200),
+    agent:(request.headers.get('User-Agent')||'').slice(0,120)}));
+  return new Response(null,{status:204,headers:CORS});
+}
+
 // Routes the connector's paths. Returns null for paths it does not own.
 export async function connector(request,url,context) {
   const {origin}=context;
@@ -333,5 +358,6 @@ export async function connector(request,url,context) {
   if(url.pathname==='/oauth/authorize'&&request.method==='GET') return showConsent(Object.fromEntries(url.searchParams),context);
   if(url.pathname==='/oauth/authorize'&&request.method==='POST') return decideConsent(request,context);
   if(url.pathname==='/mcp') return mcp(request,context);
+  if(url.pathname===CARD_LOG_PATH) return cardLog(request);
   return json(404,{error:'Not found.'});
 }

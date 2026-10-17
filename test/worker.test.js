@@ -1006,7 +1006,8 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.deepEqual(resources.map(r=>[r.uri,r.mimeType]),[[card,'text/html;profile=mcp-app']]);
   const {result:{contents:[content]}}=await rpc('resources/read',{uri:card});
   assert.equal(content.mimeType,'text/html;profile=mcp-app');
-  assert.deepEqual(content._meta.ui.csp,{connectDomains:[],resourceDomains:[]},'the card loads nothing and connects nowhere');
+  assert.deepEqual(content._meta.ui.csp,{connectDomains:[ORIGIN],resourceDomains:[]},'the card loads nothing and connects only to this server');
+  assert.ok(content.text.includes(JSON.stringify(ORIGIN+'/card-log')),'the card reports to this server');
   // Claude loads the card from its sandbox origin, named after this connector's address.
   const expected=createHash('sha256').update(`${ORIGIN}/mcp`).digest('hex').slice(0,32)+'.claudemcpcontent.com';
   assert.equal(content._meta.ui.domain,expected,'a Claude connection gets Claude\'s sandbox origin');
@@ -1064,4 +1065,34 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   broken=false;
   const other=await tool('pull_request_status',{repository:'someone/else',number:1});
   assert.equal(other.isError,true);assert.match(other.content[0].text,/cannot reach someone\/else/);
+});
+
+test('the card reports how far it got, and only known values reach the logs',async()=>{
+  const {env}=environment();
+  const post=body=>handle(new Request(ORIGIN+'/card-log',{method:'POST',headers:{'Content-Type':'text/plain;charset=UTF-8'},body}),env);
+  const logged=[],log=console.log;console.log=line=>logged.push(line);
+  let responses;
+  try {
+    responses=[
+      await post(JSON.stringify({event:'start',load:'0123456789abcdef',frame:'frame',origin:'https://abc.claudemcpcontent.com',parentOrigin:'https://claude.ai',referrer:'javascript:alert(1)',ready:'loading'})),
+      await post(JSON.stringify({event:'message',load:'0123456789abcdef',from:'parent',method:'ui/notifications/tool-result',reply:false})),
+      await post(JSON.stringify({event:'message',load:'0123456789abcdef',from:'parent',method:'secret-method-xyz'})),
+      await post(JSON.stringify({event:'connected',load:'0123456789abcdef',attempt:1,host:'Claude <b>1.0</b>',caps:['openLinks','serverTools','bad key'],height:240,token:'abc123'})),
+      await post(JSON.stringify({event:'error',load:'0123456789abcdef',error:'x\nboom'+'!'.repeat(500)})),
+      await post(JSON.stringify({event:'bogus',load:'0123456789abcdef'})),
+      await post('{not json'),
+      await post('x'.repeat(5000)),
+      await handle(new Request(ORIGIN+'/card-log'),env),
+    ];
+  } finally {console.log=log;}
+  assert.deepEqual(responses.map(r=>r.status),[204,204,204,204,204,400,400,400,405]);
+  assert.equal(responses[0].headers.get('Access-Control-Allow-Origin'),'*');
+  const lines=logged.map(line=>JSON.parse(line));
+  assert.deepEqual(lines.map(l=>l.card),['start','message','message','connected','error']);
+  assert.deepEqual([lines[0].frame,lines[0].origin,lines[0].parentOrigin,lines[0].referrer,lines[0].ready],['frame','https://abc.claudemcpcontent.com','https://claude.ai','other','loading']);
+  assert.deepEqual([lines[1].method,lines[2].method],['ui/notifications/tool-result','unknown']);
+  assert.deepEqual([lines[3].host,lines[3].caps,lines[3].height,lines[3].attempt],['Claude b1.0/b',['openLinks','serverTools'],240,1]);
+  assert.equal(lines[4].error.length,200);
+  assert.ok(lines[4].error.startsWith('x boom'));
+  assert.ok(!logged.some(line=>line.includes('abc123')||line.includes('xyz')),'nothing beyond known values reaches the logs');
 });
