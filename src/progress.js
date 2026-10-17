@@ -9,6 +9,15 @@ export function findingTitle(body='') {
   return text.trim().slice(0,200) || 'Codex finding';
 }
 
+// The finding's explanation, without its headline, badge, feedback prompt and markers: what Codex says is
+// wrong and how to fix it, cut to 2000 characters.
+export function findingText(body='') {
+  return body.replace(/<!--[\s\S]*?-->/g,'')
+    .replace(/^\s*\*\*(?:<sub><sub>)?!\[P[0-3] Badge\]\([^)]*\)(?:<\/sub><\/sub>)?[^*]*\*\*\s*/i,'')
+    .replace(/^\s*Useful\? React with .*$/gim,'')
+    .replace(/\n{3,}/g,'\n\n').trim().slice(0,2000);
+}
+
 export function reviewProgress(head, {reviews = [], comments = [], inline = [], commits = [], reactions = [], openedAt, mergedAt, findingsTruncated = false, truncated = false} = {}) {
   const events=[];
   const add=(kind,label,at,commit,url)=>{if(stamp(at)) events.push({kind,label,at:new Date(at).toISOString(),commit,url});};
@@ -27,7 +36,7 @@ export function reviewProgress(head, {reviews = [], comments = [], inline = [], 
     // Comments outside a review thread name their place only in a permalink to the code.
     const permalink=(c.body || '').match(/\/blob\/([0-9a-f]{7,40})\/([^#)\s]+)#L(\d+)/i);
     const commit=c.original_commit_id || c.commit_id || permalink?.[1];
-    findings.items.push({id:c.id ?? null,priority:priority.toUpperCase(),title:findingTitle(c.body),path:c.path || permalink?.[2] || null,line:c.line ?? c.original_line ?? (permalink?Number(permalink[3]):null),url:c.html_url,at:c.created_at,commit:commit || null,current:Boolean(commit && head.startsWith(commit)),resolved:null});
+    findings.items.push({id:c.id ?? null,priority:priority.toUpperCase(),title:findingTitle(c.body),text:findingText(c.body),path:c.path || permalink?.[2] || null,line:c.line ?? c.original_line ?? (permalink?Number(permalink[3]):null),url:c.html_url,at:c.created_at,commit:commit || null,current:Boolean(commit && head.startsWith(commit)),resolved:null});
     // The counts and the activity flow keep tracking P1 and P2; every priority is listed.
     if(!['p1','p2'].includes(priority)) continue;
     findings[priority]++;

@@ -13,6 +13,7 @@ export function repositoryName(value) {
   if (!/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(name) || ['.', '..'].includes(name.split('/')[1])) throw new Error(message);
   return name;
 }
+const FAILED_CHECKS = ['failure', 'cancelled', 'timed_out', 'action_required', 'startup_failure', 'stale'];
 export function ciState(checks, statuses) {
   const substantiveChecks=checks.filter(c=>c.name !== 'repo-autopilot-review-refresh-signal');
   const states = [...substantiveChecks.map(c => c.status === 'completed' ? c.conclusion : 'pending'), ...statuses.map(s => s.state)];
@@ -92,8 +93,36 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     const readiness=mergeReadiness(pr,{ci:details.ci,codex:details.codex,checksComplete:details.checksComplete,verification});
     return {warnings, changed, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, baseRef:pr.base?.ref, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details}};
   }
+  // The end of a GitHub Actions job's log. GitHub answers with a redirect to a signed download address,
+  // which is read without the token and, where the store allows it, only from its last bytes.
+  async function jobLog(repo, id) {
+    const response = await fetchImpl(`https://api.github.com/repos/${repo}/actions/jobs/${id}/logs`, {redirect: 'manual', headers: {Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', ...agent, ...(token ? {Authorization: `Bearer ${token}`} : {})}, signal: AbortSignal.timeout(15000)});
+    const location = response.headers.get('Location');
+    if (!location || !/^https:\/\//.test(location)) return null;
+    const log = await fetchImpl(location, {headers: {Range: 'bytes=-16384', ...agent}, signal: AbortSignal.timeout(15000)});
+    // A store that ignores the range sends the whole log; a very large one is not read.
+    if (!log.ok || log.status === 200 && Number(log.headers.get('Content-Length') || 0) > 5000000) return null;
+    const text = (await log.text()).slice(-16384);
+    const lines = text.split(/\r?\n/).map(line => line.replace(/\u001b\[[0-9;]*m/g, '').replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z ?/, '')).filter(line => line.trim());
+    return lines.slice(-40).join('\n').slice(-4000);
+  }
+  // The checks and statuses on a commit, and for the checks that failed what they say: GitHub's summary,
+  // their annotations and, for GitHub Actions jobs, the end of the log. At most four failures are opened.
+  async function checks(value, ref) {
+    const repo = repositoryName(value), root = `/repos/${repo}`;
+    const cut = (text, max) => typeof text === 'string' && text ? text.slice(0, max) : null;
+    const [runs, combined] = await Promise.all([get(`${root}/commits/${ref}/check-runs?per_page=100`), get(`${root}/commits/${ref}/status?per_page=100`)]);
+    const list = (runs.check_runs || []).filter(c => c.name !== 'repo-autopilot-review-refresh-signal').map(c => ({id:c.id, name:c.name, app:c.app?.slug || null, status:c.status, conclusion:c.conclusion || null, url:c.html_url || c.details_url || null, title:cut(c.output?.title, 200), summary:cut(c.output?.summary, 1500)}));
+    const failed = list.filter(c => c.status === 'completed' && FAILED_CHECKS.includes(c.conclusion)).slice(0, 4);
+    await Promise.all(failed.map(async c => {
+      c.annotations = (await get(`${root}/check-runs/${c.id}/annotations?per_page=20`).catch(() => [])).map(a => ({path:a.path || null, line:a.start_line ?? null, level:a.annotation_level || null, message:cut(a.message, 500)}));
+      c.log = c.app === 'github-actions' ? await jobLog(repo, c.id).catch(() => null) : null;
+    }));
+    const statuses = (combined.statuses || []).map(s => ({context:s.context, state:s.state, description:cut(s.description, 300), url:s.target_url || null}));
+    return {checks:list, statuses, complete:(runs.check_runs || []).length < 100 && (runs.total_count ?? 0) <= (runs.check_runs || []).length && statuses.length < 100, opened:failed.length};
+  }
   return {
-    overview, pullDetails,
+    overview, pullDetails, checks,
     pull:(value,number)=>get(`/repos/${repositoryName(value)}/pulls/${number}`),
     async snapshot(value) {
       const {repo, pulls, ...rest} = await overview(value);
