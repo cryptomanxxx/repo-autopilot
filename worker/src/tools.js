@@ -11,9 +11,13 @@ const READ_ONLY={readOnlyHint:true,openWorldHint:false};
 // Asking again with fresh reads GitHub instead of the cache, as the card's Refresh does. CI changes, for
 // example, do not change a pull request's update time, which keys the cache.
 const FRESH={type:'boolean',description:'Read GitHub again instead of the cached data. Only when the user asks for an update.'};
+// Some chat apps send the flag as text ("true"), for example when they hold an older copy of the tool list;
+// that is read the same as the boolean.
 const freshOf=args=>{
-  if(args.fresh!==undefined&&typeof args.fresh!=='boolean') throw Object.assign(new Error('fresh must be true or false.'),{expose:true});
-  return args.fresh===true;
+  const text=typeof args.fresh==='string'?args.fresh.trim().toLowerCase():null;
+  const value=text==='true'?true:text==='false'?false:args.fresh;
+  if(value!==undefined&&typeof value!=='boolean') throw Object.assign(new Error('fresh must be true or false.'),{expose:true});
+  return value===true;
 };
 const REPOSITORY={type:'string',description:'Repository as owner/name, for example "octocat/hello-world". Defaults to the Repo Autopilot repository itself.'};
 

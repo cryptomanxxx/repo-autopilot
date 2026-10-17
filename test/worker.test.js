@@ -1018,6 +1018,11 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   await tool('pull_request_status',{number:1,fresh:true});
   assert.ok(calls.some(c=>c.url.endsWith('/repos/owner/repo/pulls/1')),'fresh reads GitHub again instead of the cache');
   assert.match((await tool('pull_request_status',{number:1,fresh:'yes'})).content[0].text,/fresh must be true or false/);
+  // A chat app holding an older tool list may send the flag as text; it is read like the boolean.
+  calls.length=0;
+  assert.equal((await tool('pull_request_status',{number:1,fresh:'true'})).isError,undefined);
+  assert.ok(calls.some(c=>c.url.endsWith('/repos/owner/repo/pulls/1')),'"true" reads GitHub again');
+  assert.equal((await tool('pull_request_status',{number:1,fresh:'false'})).isError,undefined);
   calls.length=0;
   assert.match(status.content[0].text,/Merge: Not ready to merge/);
   assert.match(status.content[0].text,/🔄 P2 Fix sampling parameters \(research\/bench\.py:68; older commit aaaaaaa; code changed, waiting for Codex\)/);
