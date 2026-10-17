@@ -261,10 +261,18 @@ function github({calls,head='a'.repeat(40),login='owner',token='ghu_user',repoFi
 const ORIGIN='https://chat.example.workers.dev';
 const request=(path,{method='GET',cookie,body,headers={}}={})=>new Request(ORIGIN+path,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(body!==undefined?{'Content-Type':'application/json'}:{}),...headers},body:body!==undefined?JSON.stringify(body):undefined});
 
+// The way to GitHub is a page that moves on by itself, not a redirect: on Android a redirect after a click
+// is handed to the GitHub app, which loses the sign-in.
+function handoff(response) {
+  assert.equal(response.status,200);
+  assert.equal(response.headers.get('Location'),null,'no redirect the GitHub app could take over');
+  const target=response.headers.get('Refresh').replace(/^0;url=/,'');
+  assert.ok(response.headers.get('Content-Security-Policy').includes("default-src 'none'"));
+  return target;
+}
 async function signIn(env,fetchImpl,now=Date.now) {
   const login=await handle(request('/auth/login'),env,{fetchImpl,now});
-  assert.equal(login.status,303);
-  const target=new URL(login.headers.get('Location'));
+  const target=new URL(handoff(login));
   assert.equal(target.origin+target.pathname,'https://github.com/login/oauth/authorize');
   assert.equal(target.searchParams.get('redirect_uri'),`${ORIGIN}/auth/callback`);
   assert.equal(target.searchParams.get('code_challenge_method'),'S256');
@@ -863,8 +871,10 @@ test('a chat app connects through OAuth, reads through MCP, keeps working after 
   const denied=await form('/oauth/authorize',{...fields,decision:'deny'},{Origin:ORIGIN,Cookie:consentCookie});
   assert.match(denied.headers.get('Location'),/^https:\/\/claude\.ai\/api\/mcp\/auth_callback\?error=access_denied/);
   const allowed=await form('/oauth/authorize',fields,{Origin:ORIGIN,Cookie:consentCookie});
-  assert.equal(allowed.status,303);
-  const toGithub=new URL(allowed.headers.get('Location'));
+  const toGithub=new URL(handoff(allowed));
+  const handoffHtml=await allowed.clone().text();
+  const escaped=toGithub.href.replace(/&/g,'&amp;');
+  assert.ok(handoffHtml.includes(`<meta http-equiv="refresh" content="0;url=${escaped}">`)&&handoffHtml.includes(`<a href="${escaped}">continue to GitHub</a>`),'the page moves on by itself, with a link as a fallback');
   assert.equal(toGithub.origin+toGithub.pathname,'https://github.com/login/oauth/authorize');
   const browser=allowed.headers.getSetCookie().find(c=>c.startsWith('autopilot_login=')).match(/autopilot_login=([0-9a-f]+)/)[1];
   const back=await call(`/auth/callback?code=c&state=${encodeURIComponent(toGithub.searchParams.get('state'))}`,{cookie:`autopilot_login=${browser}`});
@@ -922,7 +932,7 @@ test('a cancelled GitHub sign-in returns the error to the connecting app, and pe
     const consent=await call(`/oauth/authorize?${new URLSearchParams({response_type:'code',client_id,redirect_uri:'https://chatgpt.com/connector_platform_oauth_redirect',code_challenge:'c'.repeat(43),code_challenge_method:'S256',state:'st'})}`);
     const html=await consent.text();
     const allowed=await handle(new Request(ORIGIN+'/oauth/authorize',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Origin:ORIGIN,Cookie:consent.headers.get('Set-Cookie').split(';')[0]},body:new URLSearchParams({request:html.match(/name="request" value="([^"]+)"/)[1],consent:html.match(/name="consent" value="([0-9a-f]+)"/)[1],decision:'allow'})}),env,{fetchImpl});
-    return {state:new URL(allowed.headers.get('Location')).searchParams.get('state'),browser:allowed.headers.getSetCookie().find(c=>c.startsWith('autopilot_login=')).match(/=([0-9a-f]+)/)[1]};
+    return {state:new URL(handoff(allowed)).searchParams.get('state'),browser:allowed.headers.getSetCookie().find(c=>c.startsWith('autopilot_login=')).match(/=([0-9a-f]+)/)[1]};
   };
   const {state,browser}=await start();
   const cancelled=await call(`/auth/callback?error=access_denied&state=${encodeURIComponent(state)}`,{cookie:`autopilot_login=${browser}`});
@@ -942,7 +952,7 @@ async function connectApp(env,fetchImpl) {
   const html=await consent.text();
   const allowed=await handle(new Request(ORIGIN+'/oauth/authorize',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Origin:ORIGIN,Cookie:consent.headers.get('Set-Cookie').split(';')[0]},body:new URLSearchParams({request:html.match(/name="request" value="([^"]+)"/)[1],consent:html.match(/name="consent" value="([0-9a-f]+)"/)[1],decision:'allow'})}),env,{fetchImpl});
   const browser=allowed.headers.getSetCookie().find(c=>c.startsWith('autopilot_login=')).match(/=([0-9a-f]+)/)[1];
-  const back=await call(`/auth/callback?code=c&state=${encodeURIComponent(new URL(allowed.headers.get('Location')).searchParams.get('state'))}`,{cookie:`autopilot_login=${browser}`});
+  const back=await call(`/auth/callback?code=c&state=${encodeURIComponent(new URL(handoff(allowed)).searchParams.get('state'))}`,{cookie:`autopilot_login=${browser}`});
   const code=new URL(back.headers.get('Location')).searchParams.get('code');
   const tokens=await (await handle(new Request(ORIGIN+'/oauth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'authorization_code',code,redirect_uri:'https://claude.ai/api/mcp/auth_callback',client_id,code_verifier:verifier})}),env,{fetchImpl})).json();
   return tokens.access_token;
@@ -1206,7 +1216,7 @@ test('each OAuth step leaves one line in the logs, without codes or tokens',asyn
   } finally {console.log=log;}
   const lines=logged.map(line=>JSON.parse(line)).filter(l=>l.connector==='oauth');
   assert.deepEqual(lines.map(l=>[l.step,l.status,l.error??null,l.to??null,l.grant??null]),[
-    ['register',201,null,null,null],['consent',200,null,null,null],['decision',303,null,'github.com',null],
+    ['register',201,null,null,null],['consent',200,null,null,null],['decision',200,null,'github.com',null],
     ['github',303,null,'claude.ai',null],['token',200,null,null,'authorization_code'],['token',400,'invalid_grant',null,'refresh_token'],['token',400,'invalid_grant',null,'authorization_code']]);
   assert.ok(!logged.some(line=>line.includes(token)||line.includes('secret-code-xyz')||line.includes('secret-refresh-xyz')||line.includes('code=')),'no codes or tokens in the logs');
 });
@@ -1242,7 +1252,7 @@ test('a GitHub callback that throws while finishing a connection is logged as a 
   const html=await consent.text();
   const allowed=await handle(new Request(ORIGIN+'/oauth/authorize',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Origin:ORIGIN,Cookie:consent.headers.get('Set-Cookie').split(';')[0]},body:new URLSearchParams({request:html.match(/name="request" value="([^"]+)"/)[1],consent:html.match(/name="consent" value="([0-9a-f]+)"/)[1],decision:'allow'})}),env,{fetchImpl});
   const browser=allowed.headers.getSetCookie().find(c=>c.startsWith('autopilot_login=')).match(/=([0-9a-f]+)/)[1];
-  const state=new URL(allowed.headers.get('Location')).searchParams.get('state');
+  const state=new URL(handoff(allowed)).searchParams.get('state');
   store.takePending=async()=>{throw new Error('storage down');};
   const logged=[],log=console.log,error=console.error;console.log=line=>logged.push(line);console.error=()=>{};
   let response;

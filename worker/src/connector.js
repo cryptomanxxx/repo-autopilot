@@ -81,14 +81,25 @@ function redirectBack({redirectUri,state},params,origin) {
   return new Response(null,{status:303,headers:{Location:target.href,'Cache-Control':'no-store'}});
 }
 
-function page(title,body,{csp,cookie}={}) {
+function page(title,body,{csp,cookie,head=''}={}) {
   const headers=new Headers({'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store'});
   if(csp) headers.set('Content-Security-Policy',csp);
   // With the app's usual no-referrer policy, browsers send "Origin: null" with the consent form; this page
   // lets them name its own origin.
   headers.set('Referrer-Policy','same-origin');
   if(cookie) headers.append('Set-Cookie',cookie);
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title><link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/chat.css"></head><body><main class="connect"><header><span class="eyebrow">REPO AUTOPILOT</span><h1>${escape(title)}</h1></header>${body}</main></body></html>`,{status:200,headers});
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)}</title>${head}<link rel="stylesheet" href="/dashboard.css"><link rel="stylesheet" href="/chat.css"></head><body><main class="connect"><header><span class="eyebrow">REPO AUTOPILOT</span><h1>${escape(title)}</h1></header>${body}</main></body></html>`,{status:200,headers});
+}
+// The way to GitHub's sign-in: a page that moves on by itself, not a redirect. On Android a redirect that
+// follows a click is handed to the GitHub app when it is installed, and the app returns it to the browser
+// as a blank page, so the sign-in never comes back; a page that moves on by itself is not a click, so the
+// browser keeps it. Its link is for a browser that does not move on.
+export function githubHandoff(target,cookies=[]) {
+  const href=escape(target);
+  const response=page('Opening GitHub…',`<p>Taking you to GitHub to sign in.</p><p class="muted">If nothing happens, <a href="${href}">continue to GitHub</a>.</p>`,{csp:"default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",head:`<meta http-equiv="refresh" content="0;url=${href}">`});
+  response.headers.set('Refresh',`0;url=${target}`);
+  for(const c of cookies) response.headers.append('Set-Cookie',c);
+  return response;
 }
 const errorPage=message=>{const response=page('Cannot connect',`<p>${escape(message)}</p>`);return new Response(response.body,{status:400,headers:response.headers});};
 
@@ -138,10 +149,7 @@ async function decideConsent(request,{store,env,origin,secure,now}) {
   const state=await sealState(env.GITHUB_CLIENT_SECRET,{browser,verifier,connect:pending,expires:now()+PENDING_MS});
   const target=new URL('https://github.com/login/oauth/authorize');
   for(const [k,v] of Object.entries({client_id:env.GITHUB_CLIENT_ID,redirect_uri:`${origin}/auth/callback`,state,code_challenge:base64url(await sha256(verifier)),code_challenge_method:'S256'})) target.searchParams.set(k,v);
-  const headers=new Headers({Location:target.href,'Cache-Control':'no-store'});
-  headers.append('Set-Cookie',clear);
-  headers.append('Set-Cookie',`autopilot_login=${browser}; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=600${secure?'; Secure':''}`);
-  return new Response(null,{status:303,headers});
+  return githubHandoff(target.href,[clear,`autopilot_login=${browser}; Path=/auth; HttpOnly; SameSite=Lax; Max-Age=600${secure?'; Secure':''}`]);
 }
 
 // Called by the sign-in callback when a connection's GitHub sign-in fails or is cancelled: the app gets the
@@ -336,7 +344,8 @@ const OAUTH_ERRORS=['invalid_request','invalid_client','invalid_client_metadata'
 export async function logOauth(step,response,extra={}) {
   let error,to;
   if(response.status>=400&&(response.headers.get('Content-Type')||'').includes('json')) error=(await response.clone().json().catch(()=>null))?.error;
-  const location=response.headers.get('Location');
+  // A page that moves on by itself (Refresh) names where it goes like a redirect does.
+  const location=response.headers.get('Location')||response.headers.get('Refresh')?.replace(/^\d+;\s*url=/i,'');
   if(location) {try {const target=new URL(location);to=REDIRECT_HOSTS.includes(target.host)?target.host:'other';error??=target.searchParams.get('error')||undefined;} catch {}}
   const title=response.status===400&&(response.headers.get('Content-Type')||'').includes('html')?'error page':undefined;
   console.log(JSON.stringify({connector:'oauth',step,status:response.status,error:error===undefined?title:OAUTH_ERRORS.includes(error)?error:'unknown',to,...extra}));
