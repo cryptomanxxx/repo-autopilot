@@ -77,7 +77,7 @@ function statusText(repository,s) {
   return lines.join('\n');
 }
 
-export function connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData,pullLimit}) {
+export function connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData,pullLimit,runStep=15,runMax=60}) {
   const access=(token,grantId)=>({store,session:{token},hash:`grant:${grantId}`,config,fetchImpl});
   // The pull request in this Worker's dashboard, where it can be merged: the dashboard opens the repository
   // and the pull request named in the link.
@@ -157,6 +157,33 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       catch(error) {if(error?.status===404) throw Object.assign(new Error(`${repository} has no pull request #${args.number}.`),{expose:true});throw error;}
       const summary={...pullSummary(item),dashboardUrl:dashboardUrl(repository,args.number)};
       return {content:[{type:'text',text:statusText(repository,summary)}],structuredContent:{repository,...summary}};
+    },
+  },{
+    name:'list_workflow_runs',title:'List workflow runs',
+    description:`Lists the most recent GitHub Actions workflow runs of a repository, newest first, as the Repo Autopilot dashboard shows them: workflow, run number, title, status and conclusion, branch, commit, time and link. It reads up to ${runMax} runs; failed_only and branch narrow those, not the whole history.`,
+    inputSchema:{type:'object',properties:{repository:REPOSITORY,limit:{type:'integer',minimum:1,maximum:runMax,description:`How many of the most recent runs to read (default ${runStep}, at most ${runMax}).`},failed_only:{type:'boolean',description:'Only runs that failed, timed out or were cancelled.'},branch:{type:'string',description:'Only runs on this branch.'},fresh:FRESH},additionalProperties:false},
+    annotations:READ_ONLY,
+    run:async(args,{token,grantId})=>{
+      const limit=args.limit??runStep;
+      if(!Number.isSafeInteger(limit)||limit<1||limit>runMax) throw Object.assign(new Error(`limit must be a number from 1 to ${runMax}.`),{expose:true});
+      if(args.failed_only!==undefined&&typeof args.failed_only!=='boolean') throw Object.assign(new Error('failed_only must be true or false.'),{expose:true});
+      if(args.branch!==undefined&&(typeof args.branch!=='string'||!args.branch.trim())) throw Object.assign(new Error('branch must be a branch name.'),{expose:true});
+      const reload=freshOf(args);
+      const repository=await repositoryOf(args,token,grantId);
+      // The dashboard reads runs in steps of its page size; the list is cut to the limit asked for.
+      const runLimit=Math.ceil(limit/runStep)*runStep;
+      const overview=await dashboardData({store,token,fetchImpl,repository,runLimit,fresh:reload});
+      const read=overview.workflows.slice(0,limit);
+      const failed=r=>['failure','timed_out','cancelled','startup_failure'].includes(r.conclusion);
+      const runs=read.filter(r=>(!args.failed_only||failed(r))&&(args.branch===undefined||r.branch===args.branch.trim()))
+        .map(r=>({id:r.id,runNumber:r.runNumber,workflow:r.name,title:r.title,status:r.status,conclusion:r.conclusion||null,branch:r.branch,commit:r.sha,url:r.url,updatedAt:r.updatedAt}));
+      const mayHaveMore=overview.workflows.length>=limit;
+      const narrowed=[args.failed_only&&'failed',args.branch!==undefined&&`on ${args.branch.trim()}`].filter(Boolean).join(', ');
+      const lines=[`${repository}: ${narrowed?`${runs.length} ${narrowed} of `:''}the ${read.length} most recent workflow runs`];
+      if(mayHaveMore) lines.push('Older runs are not included; ask with a larger limit to read more.');
+      for(const r of runs) lines.push(`${r.runNumber?`#${r.runNumber} `:''}${r.workflow} · ${r.title||''}: ${r.status==='completed'?r.conclusion||'completed':r.status.replace(/_/g,' ')} · branch ${r.branch||'unknown'} · ${short(r.commit)} · ${String(r.updatedAt).slice(0,16).replace('T',' ')} · ${r.url}`);
+      if(!runs.length) lines.push(read.length?'No runs match.':'No workflow runs found.');
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,runs,limit,mayHaveMore}};
     },
   }];
 }
