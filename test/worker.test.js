@@ -977,9 +977,9 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
     const single=/^\/pulls\/(\d+)$/.exec(path);
     if(single) return pulls[Number(single[1])-1]?ok(pulls[Number(single[1])-1]):new Response('{}',{status:404});
     if(path==='/pulls/1/comments?per_page=100') return ok([finding]);
-    if(failedChecks&&path===`/commits/${head}/check-runs?per_page=100`) return ok({total_count:2,check_runs:[{id:77,name:'test',app:{slug:'github-actions'},status:'completed',conclusion:'failure',html_url:'https://github.com/owner/repo/runs/77',output:{title:'1 test failed',summary:'cart totals'+'.'.repeat(1600),annotations_count:23}},{id:78,name:'lint',app:{slug:'github-actions'},status:'completed',conclusion:'success',html_url:'https://github.com/owner/repo/runs/78',output:{}}]});
+    if(failedChecks&&path===`/commits/${head}/check-runs?per_page=100`) return ok({total_count:2,check_runs:[{id:77,name:'test',app:{slug:'github-actions'},status:'completed',conclusion:'failure',html_url:'https://github.com/owner/repo/runs/77',details_url:'https://github.com/owner/repo/actions/runs/5/job/991',output:{title:'1 test failed',summary:'cart totals'+'.'.repeat(1600),annotations_count:23}},{id:78,name:'lint',app:{slug:'github-actions'},status:'completed',conclusion:'success',html_url:'https://github.com/owner/repo/runs/78',output:{}}]});
     if(path==='/check-runs/77/annotations?per_page=20') return ok([{path:'src/cart.js',start_line:7,annotation_level:'failure',message:'expected 10.00, got 10.01'}]);
-    if(path==='/actions/jobs/77/logs') return new Response(null,{status:302,headers:{Location:'https://logs.example/job77'}});
+    if(path==='/actions/jobs/991/logs') return new Response(null,{status:302,headers:{Location:'https://logs.example/job77'}});
     if(url==='https://logs.example/job77') {
       // Like blob storage: only start-end ranges.
       logAuth=options.headers?.Authorization;logRanges.push(options.headers?.Range);

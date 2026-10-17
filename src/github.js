@@ -118,16 +118,19 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
   }
   // The checks and statuses on a commit, and for the checks that failed what they say: GitHub's summary,
   // their annotations and, for GitHub Actions jobs, the end of the log. At most four failures are opened.
+  // The workflow job behind an Actions check, which its log is read by: the job named in the check's
+  // links (`/actions/runs/<run>/job/<job>`), else the check's own ID, which Actions gives its jobs too.
+  const actionsJob = c => c.app?.slug !== 'github-actions' ? null : Number([c.details_url, c.html_url].map(u => String(u || '').match(/\/actions\/runs\/\d+\/jobs?\/(\d+)/)?.[1]).find(Boolean) || c.id);
   async function checks(value, ref) {
     const repo = repositoryName(value), root = `/repos/${repo}`;
     // A cut text says so, so a shortened summary is not taken for the whole.
     const cut = (text, max) => typeof text === 'string' && text ? (text.length > max ? `${text.slice(0, max)} […]` : text) : null;
     const [runs, combined] = await Promise.all([get(`${root}/commits/${ref}/check-runs?per_page=100`), get(`${root}/commits/${ref}/status?per_page=100`)]);
-    const list = (runs.check_runs || []).filter(c => c.name !== 'repo-autopilot-review-refresh-signal').map(c => ({id:c.id, name:c.name, app:c.app?.slug || null, status:c.status, conclusion:c.conclusion || null, url:c.html_url || c.details_url || null, title:cut(c.output?.title, 200), summary:cut(c.output?.summary, 1500), annotationCount:Number.isInteger(c.output?.annotations_count) ? c.output.annotations_count : null}));
+    const list = (runs.check_runs || []).filter(c => c.name !== 'repo-autopilot-review-refresh-signal').map(c => ({id:c.id, name:c.name, app:c.app?.slug || null, status:c.status, conclusion:c.conclusion || null, url:c.html_url || c.details_url || null, title:cut(c.output?.title, 200), summary:cut(c.output?.summary, 1500), annotationCount:Number.isInteger(c.output?.annotations_count) ? c.output.annotations_count : null, jobId:actionsJob(c)}));
     const failed = list.filter(c => c.status === 'completed' && FAILED_CHECKS.includes(c.conclusion)).slice(0, 4);
     await Promise.all(failed.map(async c => {
       c.annotations = (await get(`${root}/check-runs/${c.id}/annotations?per_page=20`).catch(() => [])).map(a => ({path:a.path || null, line:a.start_line ?? null, level:a.annotation_level || null, message:cut(a.message, 500)}));
-      c.log = c.app === 'github-actions' ? await jobLog(repo, c.id).catch(() => null) : null;
+      c.log = c.jobId ? await jobLog(repo, c.jobId).catch(() => null) : null;
     }));
     const statuses = (combined.statuses || []).map(s => ({context:s.context, state:s.state, description:cut(s.description, 300), url:s.target_url || null}));
     return {checks:list, statuses, complete:(runs.check_runs || []).length < 100 && (runs.total_count ?? 0) <= (runs.check_runs || []).length && statuses.length < 100, opened:failed.length};
