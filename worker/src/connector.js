@@ -100,7 +100,7 @@ function page(title,body,{csp,cookie,head=''}={}) {
 // browser keeps it. Its link is for a browser that does not move on.
 export function githubHandoff(target,cookies=[]) {
   const href=escape(target);
-  const response=page('Opening GitHub…',`<p>Taking you to GitHub to sign in.</p><p class="muted">If nothing happens, <a href="${href}">continue to GitHub</a>.</p>`,{csp:"default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",head:`<meta http-equiv="refresh" content="0;url=${href}">`});
+  const response=page('Opening GitHub…',`<p>Taking you to GitHub to sign in.</p><p class="muted">If nothing happens, <a href="${href}">continue to GitHub</a>.</p>`,{csp:"default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",head:`<meta http-equiv="refresh" content="0;url=${href}">`});
   response.headers.set('Refresh',`0;url=${target}`);
   for(const c of cookies) response.headers.append('Set-Cookie',c);
   return response;

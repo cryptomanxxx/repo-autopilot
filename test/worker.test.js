@@ -277,6 +277,7 @@ function handoff(response) {
   assert.equal(response.headers.get('Location'),null,'no redirect the GitHub app could take over');
   const target=response.headers.get('Refresh').replace(/^0;url=/,'');
   assert.ok(response.headers.get('Content-Security-Policy').includes("default-src 'none'"));
+  assert.ok(response.headers.get('Content-Security-Policy').includes("img-src 'self'"),'the page may show its own icon');
   return target;
 }
 async function signIn(env,fetchImpl,now=Date.now) {
