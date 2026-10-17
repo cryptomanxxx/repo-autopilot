@@ -332,7 +332,7 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
 // error it returned or redirected with, and where it sent the browser (a chat app or GitHub; any other
 // address is "other"). Never codes, tokens or app data.
 const REDIRECT_HOSTS=['github.com','claude.ai','claude.com','chatgpt.com'];
-const OAUTH_ERRORS=['invalid_request','invalid_client','invalid_client_metadata','invalid_redirect_uri','invalid_grant','unsupported_grant_type','unsupported_response_type','invalid_scope','access_denied','server_error'];
+const OAUTH_ERRORS=['invalid_request','invalid_client','invalid_client_metadata','invalid_redirect_uri','invalid_grant','unsupported_grant_type','unsupported_response_type','invalid_scope','invalid_target','access_denied','server_error'];
 export async function logOauth(step,response,extra={}) {
   let error,to;
   if(response.status>=400&&(response.headers.get('Content-Type')||'').includes('json')) error=(await response.clone().json().catch(()=>null))?.error;

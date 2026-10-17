@@ -5,7 +5,7 @@ const REFRESH_MS=180000,VERSION_MS=15000;
 // "Show more" raises these in steps, up to the server's maximum.
 const PULLS={step:6,max:30},RUNS={step:15,max:60};
 let pullLimit=PULLS.step,runLimit=RUNS.step;
-let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,version=null,merging=false,retried=null,reloadAfter=false,notice='',noticeFrom=0,loads=0;
+let api=null,repository=()=>'',data=null,loading=false,lastLoad=0,pendingPull=null,pinned=null,version=null,merging=false,retried=null,reloadAfter=false,notice='',noticeFrom=0,loads=0;
 const askedCodex=new Set();
 const status=text=>{$('dashboard-status').replaceChildren(text);};
 const filters=()=>applyFilters({pullFilter:$('pr-filter'),workflowFilter:$('workflow-filter'),pulls:$('pulls'),workflows:$('workflows')});
@@ -35,9 +35,13 @@ function openPending() {
     // A pull request opened moments ago may be missing from earlier data: load fresh data once.
     retried=number;pendingPull=number;
     setTimeout(()=>loadDashboard({fresh:true}),0);
+  } else if(pinned!==number) {
+    // An older pull request, opened by a link: it is loaded by itself and shown after the recent ones.
+    pinned=number;pendingPull=number;
+    setTimeout(()=>loadDashboard(),0);
   } else {
-    retried=null;
-    status(el('span',`PR #${number} is not among the ${data.pulls.length} most recently updated pull requests. `));
+    retried=null;pinned=null;
+    status(el('span',`PR #${number} could not be loaded. `));
     $('dashboard-status').append(link('Open it on GitHub',`https://github.com/${data.repository}/pull/${number}`));
   }
 }
@@ -56,6 +60,9 @@ export async function loadDashboard({fresh=false}={}) {
     const overview=await api(`/api/dashboard?${query}${limits}${fresh?'&fresh=1':''}`);
     // Each pull request is loaded by its own request so every Worker call stays within its GitHub budget.
     const pulls=await Promise.all(overview.pulls.map(pr=>api(`/api/dashboard/pulls/${pr.number}?${query}&updated=${encodeURIComponent(pr.updatedAt)}${fresh?'&fresh=1':''}`).catch(error=>unavailable(pr,error))));
+    // A linked pull request older than the overview stays shown below it; one that cannot be read is dropped.
+    const extra=pinned&&!overview.pulls.some(pr=>pr.number===pinned)?await api(`/api/dashboard/pulls/${pinned}?${query}${fresh?'&fresh=1':''}`).catch(()=>null):null;
+    if(extra) pulls.push(extra);
     if(target!==repository()) return;
     version=seen>0?seen:version;
     data={...overview,pulls,warnings:[...overview.warnings,...pulls.flatMap(pr=>pr.warnings||[])]};
@@ -63,7 +70,7 @@ export async function loadDashboard({fresh=false}={}) {
     renderPulls($('pulls'),data.pulls,{onMerge:mergePull,onCodex:askCodex,askedCodex:(kind,pr)=>pr.codexReviewAsked===true||askedCodex.has(`${kind}:${target}#${pr.number}@${pr.headSha}`)});
     renderWorkflows($('workflows'),data.workflows);
     // More can exist only when a list came back full.
-    $('more-pulls').hidden=data.pulls.length<pullLimit||pullLimit>=PULLS.max;
+    $('more-pulls').hidden=overview.pulls.length<pullLimit||pullLimit>=PULLS.max;
     $('more-runs').hidden=data.workflows.length<runLimit||runLimit>=RUNS.max;
     filters();
     $('scope').textContent=[data.scope,...data.warnings].join(' ');
@@ -155,7 +162,7 @@ async function checkVersion() {
 
 // Called when another repository is selected: forget the old data and load the new one if visible.
 export function setRepository() {
-  data=null;version=null;pendingPull=null;retried=null;notice='';pullLimit=PULLS.step;runLimit=RUNS.step;
+  data=null;version=null;pendingPull=null;pinned=null;retried=null;notice='';pullLimit=PULLS.step;runLimit=RUNS.step;
   $('more-pulls').hidden=true;$('more-runs').hidden=true;
   for(const id of ['summary','pulls','workflows']) $(id).replaceChildren();
   $('scope').textContent='';$('data-age').textContent='';status('');

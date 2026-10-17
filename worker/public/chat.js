@@ -327,7 +327,9 @@ $('logout').onclick=async()=>{try {await api('/api/logout',{});} catch {} locati
 const SIGN_IN_PROBLEMS={cancelled:'Sign-in was cancelled.',expired:'The sign-in expired or started in another browser. Try again.',failed:'GitHub sign-in failed. Try again.',app:'The chat must use the client ID and secret of a GitHub App, not an OAuth app.',owner:'Only the repository owner account can use this chat.',github:'GitHub rejected the sign-in. Check the GitHub App\'s callback URL and client ID.'};
 const signInProblem=SIGN_IN_PROBLEMS[new URLSearchParams(location.search).get('signin')];
 // A link from the connector names the repository of the pull request it opens (?repo=owner/name#pr-12).
-const linkedRepo=new URLSearchParams(location.search).get('repo');
+// One opened while signed out is kept for this tab through the sign-in, which returns to "/".
+let linked={repo:new URLSearchParams(location.search).get('repo'),hash:location.hash};
+const LINK_KEY='autopilot-link';
 if(location.search) history.replaceState(null,'',location.pathname+location.hash);
 $('tab-dashboard').onclick=()=>showTab('dashboard');
 $('tab-chat').onclick=()=>showTab('chat');
@@ -341,8 +343,18 @@ $('repo-reload').onclick=async()=>{
 };
 try {
   const session=await api('/api/session');
-  if(!session.login) showSignedOut(signInProblem?`${signInProblem} Sign in with the owner account of ${session.repository}.`:`Sign in with the owner account of ${session.repository}.`);
-  else {
+  if(!session.login) {
+    try {if(linked.repo||/^#pr-\d+$/.test(linked.hash)) sessionStorage.setItem(LINK_KEY,JSON.stringify(linked));} catch {}
+    showSignedOut(signInProblem?`${signInProblem} Sign in with the owner account of ${session.repository}.`:`Sign in with the owner account of ${session.repository}.`);
+  } else {
+    try {
+      const saved=!linked.repo&&!linked.hash?JSON.parse(sessionStorage.getItem(LINK_KEY)||'null'):null;
+      sessionStorage.removeItem(LINK_KEY);
+      if(saved) {
+        linked={repo:typeof saved.repo==='string'?saved.repo:null,hash:/^#pr-\d+$/.test(saved.hash)?saved.hash:''};
+        if(linked.hash) history.replaceState(null,'',location.pathname+linked.hash);
+      }
+    } catch {}
     Object.assign(state,{csrf:session.csrf,home:session.repository,repository:session.repository,login:session.login,model:session.model,deployed:session.deployed||null});
     showAccount();
     // The remembered repository is used when it is still reachable; otherwise the app's own.
@@ -350,7 +362,7 @@ try {
     try {repositories=await loadRepos();} catch(error) {status(error.message);}
     try {remembered=localStorage.getItem('autopilot-repo');} catch {}
     const reachable=name=>name&&repositories.find(r=>sameRepo(r.fullName,name))?.fullName;
-    state.repository=reachable(linkedRepo)||reachable(remembered)||session.repository;
+    state.repository=reachable(linked.repo)||reachable(remembered)||session.repository;
     fillRepos(repositories);
     $('logout').hidden=false;$('tabs').hidden=false;$('repo-bar').hidden=false;
     startDashboard(api,{isVisible:()=>state.tab==='dashboard',selected:()=>state.repository});

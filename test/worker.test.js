@@ -1029,6 +1029,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   // Every pull request links to this Worker's dashboard, which opens its repository and the pull request.
   const link=n=>`${ORIGIN}/?repo=owner%2Frepo#pr-${n}`;
   assert.deepEqual(listed.structuredContent.pulls.map(p=>p.dashboardUrl),[link(1),link(2)]);
+  assert.ok(listed.content[0].text.includes(`${ORIGIN}/?repo=owner%2Frepo#dashboard`),'the repository link opens the dashboard tab');
   assert.ok(listed.content[0].text.includes(`CI running`)&&listed.content[0].text.includes(`dashboard ${link(1)}`)&&listed.content[0].text.includes(`dashboard ${link(2)}`));
 
   calls.length=0;

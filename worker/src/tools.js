@@ -127,7 +127,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       }
       // The overview reads a fixed number of the most recently updated pull requests; older ones are not in it.
       const mayHaveMore=overview.pulls.length>=pullLimit;
-      const lines=[`${repository}: the ${pulls.length} most recently updated pull requests`,`Dashboard, where pull requests are merged: ${config.origin}/?repo=${encodeURIComponent(repository)}`];
+      const lines=[`${repository}: the ${pulls.length} most recently updated pull requests`,`Dashboard, where pull requests are merged: ${config.origin}/?repo=${encodeURIComponent(repository)}#dashboard`];
       if(mayHaveMore) lines.push('Older pull requests are not listed and may include open ones; use pull_request_status with a number to see one.');
       for(const p of pulls) {
         if(p.detailsLoaded===false) {lines.push(`#${p.number} ${p.title} (${p.state}): ${p.error?`details could not be read (${p.error})`:'details not loaded'}; ask for pull_request_status · dashboard ${p.dashboardUrl}`);continue;}
