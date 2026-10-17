@@ -168,7 +168,7 @@ function cardView() {
       const state=STATES[pr.state];
       const status=el('p','status');
       if(state) status.append(el('span','badge',state));
-      const loading=loadingPulls.has(pr.number);
+      const loading=loadingPulls.has(`${data?.repository}#${pr.number}`);
       const note=pr.error?`Details could not be read: ${pr.error}`:loading?'Loading details…':pr.state==='open'?'Details not loaded yet.':'';
       if(note) status.append(el('span','',`${state?' · ':''}${note}`));
       item.append(head,status);
@@ -200,20 +200,22 @@ function cardView() {
   }
 
   // One pull request of the list loaded in full through the host, in place; Refresh still repeats the list.
+  // The answer belongs to the list it was asked from: one that came back after another repository or a
+  // refresh replaced that list is dropped, so a number in another repository is never overwritten.
   async function loadPull(number) {
-    if(loadingPulls.has(number)||!data?.pulls) return;
-    loadingPulls.add(number);render();
+    const list=data,key=`${list?.repository}#${number}`;
+    if(loadingPulls.has(key)||!list?.pulls) return;
+    loadingPulls.add(key);render();
+    let update;
     try {
-      const result=await app.callServerTool({name:'pull_request_status',arguments:{repository:data.repository,number}});
+      const result=await app.callServerTool({name:'pull_request_status',arguments:{repository:list.repository,number}});
       const pull=result?.isError?null:result?.structuredContent;
-      const at=data.pulls.findIndex(p=>p.number===number);
-      if(pull&&pull.number===number&&at>=0) {data.pulls[at]={...pull,dashboardUrl:pull.dashboardUrl||data.pulls[at].dashboardUrl};expanded.add(number);}
-      else if(at>=0) data.pulls[at]={...data.pulls[at],error:result?.content?.[0]?.text||'the chat app did not return it'};
-    } catch(error) {
-      const at=data.pulls.findIndex(p=>p.number===number);
-      if(at>=0) data.pulls[at]={...data.pulls[at],error:error.message};
-    }
-    loadingPulls.delete(number);render();
+      update=old=>pull&&pull.number===number&&pull.repository===list.repository?{...pull,dashboardUrl:pull.dashboardUrl||old.dashboardUrl}:{...old,error:result?.content?.[0]?.text||'the chat app did not return it'};
+    } catch(error) {update=old=>({...old,error:error.message});}
+    loadingPulls.delete(key);
+    const at=data===list?list.pulls.findIndex(p=>p.number===number):-1;
+    if(at>=0) {list.pulls[at]=update(list.pulls[at]);if(list.pulls[at].detailsLoaded!==false) expanded.add(number);}
+    render();
   }
 
   function render() {
