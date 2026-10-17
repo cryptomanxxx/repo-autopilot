@@ -124,9 +124,14 @@ async function route(request,env,config,url,{fetchImpl,now}) {
       if(pending?.connect) await logOauth('github',new Response(null,{status:400}),{reason:'browser'});
       return redirect(`/?signin=${reason}`);
     }
+    // A connection whose callback fails with an exception is logged too, as the 500 it is answered with.
+    const logThrown=async run=>{
+      try {return await run();}
+      catch(error) {console.log(JSON.stringify({connector:'oauth',step:'github',status:500,error:'exception'}));throw error;}
+    };
     const failed=async reason=>{
       // A connection in progress reports the failure to the app that started it.
-      const back=pending.connect&&await failConnect({pending:pending.connect,reason,store,origin:config.origin});
+      const back=pending.connect&&await logThrown(()=>failConnect({pending:pending.connect,reason,store,origin:config.origin}));
       if(back) {back.headers.append('Set-Cookie',cookie('autopilot_login','',{path:'/auth'}));return logOauth('github',back,{reason});}
       if(pending.connect) await logOauth('github',new Response(null,{status:400}),{reason});
       return redirect(`/?signin=${reason}`,[cookie('autopilot_login','',{path:'/auth'})]);
@@ -147,9 +152,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     if(typeof user.login!=='string'||user.login.toLowerCase()!==config.owner) return failed('owner');
     // A sign-in started by connecting Claude or ChatGPT finishes the connection instead of opening the dashboard.
     if(pending.connect) {
-      let connected;
-      try {connected=await finishConnect({pending:pending.connect,token,login:user.login,store,env,origin:config.origin,now});}
-      catch(error) {console.log(JSON.stringify({connector:'oauth',step:'github',status:500,error:'exception'}));throw error;}
+      const connected=await logThrown(()=>finishConnect({pending:pending.connect,token,login:user.login,store,env,origin:config.origin,now}));
       if(!connected) return failed('expired');
       connected.headers.append('Set-Cookie',cookie('autopilot_login','',{path:'/auth'}));
       return logOauth('github',connected);

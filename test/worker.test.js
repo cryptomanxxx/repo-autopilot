@@ -1112,3 +1112,21 @@ test('an OAuth step that throws is logged as a 500',async()=>{
   assert.equal(response.status,500);
   assert.deepEqual(logged.map(line=>JSON.parse(line)).filter(l=>l.connector==='oauth'),[{connector:'oauth',step:'register',status:500,error:'exception'}]);
 });
+
+test('a GitHub callback that throws while finishing a connection is logged as a 500',async()=>{
+  const {env,store}=environment(),fetchImpl=github({calls:[]});
+  const call=(path,options={})=>handle(request(path,options),env,{fetchImpl});
+  const {client_id}=await (await call('/oauth/register',{method:'POST',body:{client_name:'Claude',redirect_uris:['https://claude.ai/api/mcp/auth_callback']}})).json();
+  const consent=await call(`/oauth/authorize?${new URLSearchParams({response_type:'code',client_id,redirect_uri:'https://claude.ai/api/mcp/auth_callback',code_challenge:'c'.repeat(43),code_challenge_method:'S256'})}`);
+  const html=await consent.text();
+  const allowed=await handle(new Request(ORIGIN+'/oauth/authorize',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',Origin:ORIGIN,Cookie:consent.headers.get('Set-Cookie').split(';')[0]},body:new URLSearchParams({request:html.match(/name="request" value="([^"]+)"/)[1],consent:html.match(/name="consent" value="([0-9a-f]+)"/)[1],decision:'allow'})}),env,{fetchImpl});
+  const browser=allowed.headers.getSetCookie().find(c=>c.startsWith('autopilot_login=')).match(/=([0-9a-f]+)/)[1];
+  const state=new URL(allowed.headers.get('Location')).searchParams.get('state');
+  store.takePending=async()=>{throw new Error('storage down');};
+  const logged=[],log=console.log,error=console.error;console.log=line=>logged.push(line);console.error=()=>{};
+  let response;
+  try {response=await call(`/auth/callback?error=access_denied&state=${encodeURIComponent(state)}`,{cookie:`autopilot_login=${browser}`});}
+  finally {console.log=log;console.error=error;}
+  assert.equal(response.status,500);
+  assert.deepEqual(logged.map(line=>JSON.parse(line)).filter(l=>l.connector==='oauth'),[{connector:'oauth',step:'github',status:500,error:'exception'}]);
+});
