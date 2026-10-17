@@ -7,7 +7,7 @@
 import {hex,randomHex,base64url,sha256,seal,unseal,sealState} from './crypto.js';
 import {readLimited} from './github.js';
 import {PublicError} from './errors.js';
-import {cardResource,cardContents,CARD_URI,CARD_MIME} from './card.js';
+import {cardResource,cardContents,claudeDomain,isClaude,CARD_URI,CARD_MIME} from './card.js';
 
 const APPS_EXTENSION='io.modelcontextprotocol/ui';
 
@@ -284,7 +284,12 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
   // The card the pull request tools are shown with (MCP Apps). It is read with the same sign-in as the tools.
   if(method==='resources/list') return rpcResult(id,{resources:[cardResource]});
   if(method==='resources/templates/list') return rpcResult(id,{resourceTemplates:[]});
-  if(method==='resources/read') return params?.uri===CARD_URI?rpcResult(id,cardContents(origin)):rpcError(id,-32002,`Resource not found: ${params?.uri}`);
+  if(method==='resources/read') {
+    if(params?.uri!==CARD_URI) return rpcError(id,-32002,`Resource not found: ${params?.uri}`);
+    // Claude loads the card from the sandbox origin named after this connector's address.
+    const domain=isClaude(await store.getClient(grant.clientId))?await claudeDomain(`${origin}/mcp`):null;
+    return rpcResult(id,cardContents(origin,{domain}));
+  }
   if(method==='tools/list') return rpcResult(id,{tools:tools.map(({run,...tool})=>tool)});
   if(method==='tools/call') {
     const tool=tools.find(t=>t.name===params?.name);

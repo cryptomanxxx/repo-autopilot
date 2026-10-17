@@ -343,8 +343,20 @@ export function cardHtml(origin) {
 
 // What resources/list and resources/read return for the card.
 export const cardResource={uri:CARD_URI,name:'Repo Autopilot pull requests',description:'Pull requests with merge readiness, CI, Codex status and Codex findings, as the Repo Autopilot dashboard shows them.',mimeType:CARD_MIME};
-export function cardContents(origin) {
+// Claude serves an app from its own sandbox origin, named after the connector's address: the first 32 hex
+// characters of the SHA-256 of that address, under claudemcpcontent.com
+// (https://claude.com/docs/connectors/building/mcp-apps/getting-started#set-ui-domain-for-claude).
+export async function claudeDomain(serverUrl) {
+  const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(serverUrl)));
+  return `${[...digest].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,32)}.claudemcpcontent.com`;
+}
+// Whether a connected app is Claude, from the address it returns to after signing in.
+export const isClaude=client=>(client?.redirectUris||[]).some(uri=>{try {return /(^|\.)claude\.(ai|com)$/.test(new URL(uri).hostname);} catch {return false;}});
+
+// domain is the sandbox origin the host expects, when it has a format for one (Claude does); other hosts
+// choose their own.
+export function cardContents(origin,{domain=null}={}) {
   // No external origins: the card loads nothing and connects nowhere; everything comes from the host.
-  return {contents:[{uri:CARD_URI,mimeType:CARD_MIME,text:cardHtml(origin),_meta:{ui:{csp:{connectDomains:[],resourceDomains:[]},prefersBorder:true}}}]};
+  return {contents:[{uri:CARD_URI,mimeType:CARD_MIME,text:cardHtml(origin),_meta:{ui:{csp:{connectDomains:[],resourceDomains:[]},prefersBorder:true,...(domain?{domain}:{})}}}]};
 }
 export const CARD_TOOL_META={ui:{resourceUri:CARD_URI},'ui/resourceUri':CARD_URI};
