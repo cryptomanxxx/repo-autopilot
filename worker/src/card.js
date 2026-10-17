@@ -23,14 +23,19 @@ function cardView(protocol) {
   // view, where messages from the app can arrive without a source and the card's own messages can come back.
   const post=message=>window.parent.postMessage({jsonrpc:'2.0',...message},'*');
   const OUTGOING=new Set(['ui/initialize','ui/notifications/initialized','ui/notifications/size-changed','ui/open-link','ui/request-display-mode','ui/message','ui/update-model-context','tools/call']);
-  const request=(method,params)=>new Promise((resolve,reject)=>{const id=nextId++;pending.set(id,{resolve,reject});post({id,method,params});});
+  // The card's own ids carry a prefix, so a reply that comes back, or a host request with the same number,
+  // is never taken for an answer to the card.
+  const request=(method,params)=>new Promise((resolve,reject)=>{const id=`repo-autopilot-${nextId++}`;pending.set(id,{resolve,reject});post({id,method,params});});
   const notify=(method,params)=>post({method,params});
+  const replied=new Set();
   window.addEventListener('message',event=>{
     if(event.source!==window.parent&&event.source!==null) return;
     const message=event.data;
     if(!message||message.jsonrpc!=='2.0') return;
     if(OUTGOING.has(message.method)) return;
     if(message.method===undefined) {
+      // A reply the card sent itself that came back is not an answer from the host.
+      if(replied.delete(message.id)) return;
       const entry=pending.get(message.id);
       if(!entry) return;
       pending.delete(message.id);
@@ -38,13 +43,13 @@ function cardView(protocol) {
       else entry.resolve(message.result);
       return;
     }
-    const reply=value=>{if(message.id!==undefined) post({id:message.id,result:value});};
+    const reply=value=>{if(message.id!==undefined) {replied.add(message.id);post({id:message.id,result:value});}};
     if(message.method==='ui/notifications/tool-input') args=message.params?.arguments||{};
     else if(message.method==='ui/notifications/tool-result') {take(message.params);render();}
     else if(message.method==='ui/notifications/tool-cancelled') {waiting=false;failure='The request was cancelled.';render();}
     else if(message.method==='ui/notifications/host-context-changed') {applyContext(message.params||{});render();}
     else if(message.method==='ui/resource-teardown'||message.method==='ping') reply({});
-    else if(message.id!==undefined) post({id:message.id,error:{code:-32601,message:`Method not found: ${message.method}`}});
+    else if(message.id!==undefined) {replied.add(message.id);post({id:message.id,error:{code:-32601,message:`Method not found: ${message.method}`}});}
   });
 
   function applyContext(change) {
@@ -266,7 +271,8 @@ function cardView(protocol) {
   const hello=()=>{
     if(connected) return;
     if(tries++>=20) {clearInterval(timer);if(!data) {waiting=false;failure='The chat app did not connect to the card. Try again later.';}finish(null);return;}
-    request('ui/initialize',{protocolVersion:protocol,appInfo:{name:'Repo Autopilot',version:'1.0.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']}}).then(finish,()=>finish(null));
+    // A refusal may come from a host that is not ready yet, so the card keeps asking until it gives up.
+    request('ui/initialize',{protocolVersion:protocol,appInfo:{name:'Repo Autopilot',version:'1.0.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']}}).then(finish,()=>{});
   };
   const start=()=>{hello();timer=setInterval(hello,1000);};
   if(document.readyState==='complete') start();
