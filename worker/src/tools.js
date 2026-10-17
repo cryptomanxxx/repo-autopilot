@@ -250,9 +250,18 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       let pr;
       try {pr=await client.pull(repository,args.number);}
       catch(error) {if(error?.status===404) throw exposed(`${repository} has no pull request #${args.number}.`);throw error;}
+      // A push while the files are read would pair them with the older totals and head; the pull request is
+      // read again after them, and once more on a change, else the answer says it changed.
+      let listed,moved=true;
+      for(let attempt=0;attempt<2&&moved;attempt++) {
+        listed=await client.pullFiles(repository,args.number,page);
+        const after=await client.pull(repository,args.number);
+        moved=after.head?.sha!==pr.head?.sha;
+        pr=after;
+      }
       const total=pr.changed_files??null;
-      const listed=await client.pullFiles(repository,args.number,page);
-      const wanted=args.path?.trim();
+      // The path is matched as given: a file name may itself begin or end with a space.
+      const wanted=args.path;
       const files=wanted?listed.filter(f=>f.path===wanted||f.previousPath===wanted):listed;
       // The diffs fill a fixed budget in file order; a cut diff says so, and so do the diffs left out.
       let budget=wanted?PATH_PATCH_MAX:FILE_PATCH_BUDGET,left=0;
@@ -268,6 +277,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
       });
       const lastPage=total===null?null:Math.max(1,Math.ceil(Math.min(total,3000)/100));
       const lines=[`${repository} #${args.number} ${pr.title}: ${total??'?'} changed file${total===1?'':'s'} · +${pr.additions??'?'} −${pr.deletions??'?'} · ${pr.commits??'?'} commit${pr.commits===1?'':'s'}`,`GitHub: ${pr.html_url}/files`];
+      if(moved) lines.push('The pull request changed while it was read: the files may not match these totals. Ask again.');
       if(lastPage!==null&&lastPage>1) lines.push(`Page ${page} of ${lastPage} (100 files a page)${total>3000?'; GitHub lists only the first 3000 files':''}.`);
       if(!listed.length) lines.push(page>1?`No files on page ${page}.`:'GitHub lists no changed files.');
       else if(wanted&&!files.length) lines.push(`${wanted} is not among the files on page ${page}.${lastPage>page?' Later pages may hold it.':''}`);
@@ -277,7 +287,7 @@ export function connectorTools({store,fetchImpl,config,readRepos,resolveReposito
         else if(!f.patchLeftOut) lines.push('    No diff from GitHub: a binary file, or a change too large for GitHub to show here.');
       }
       if(left) lines.push('',`${left} more diffs are not shown here; ask again with path for one file.`);
-      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,number:args.number,headSha:pr.head?.sha||null,changedFiles:total,additions:pr.additions??null,deletions:pr.deletions??null,page,lastPage,files:shown,patchesLeftOut:left,dashboardUrl:dashboardUrl(repository,args.number)}};
+      return {content:[{type:'text',text:lines.join('\n')}],structuredContent:{repository,number:args.number,headSha:pr.head?.sha||null,changedWhileRead:moved,changedFiles:total,additions:pr.additions??null,deletions:pr.deletions??null,page,lastPage,files:shown,patchesLeftOut:left,dashboardUrl:dashboardUrl(repository,args.number)}};
     },
   },{
     name:'codex_findings',title:'Codex findings in full',

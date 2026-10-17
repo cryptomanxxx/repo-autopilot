@@ -949,7 +949,7 @@ async function connectApp(env,fetchImpl) {
 }
 
 test('the connector lists pull requests and shows one as the dashboard does, from the same cache',async()=>{
-  const {env,store}=environment(),calls=[];let runsDenied=false,failedChecks=false,logAuth,logRanges=[],openDenied=false,detailsDenied=false;
+  const {env,store}=environment(),calls=[];let runsDenied=false,failedChecks=false,logAuth,logRanges=[],openDenied=false,detailsDenied=false,movingHead=false,moves=0;
   const bot={login:'chatgpt-codex-connector[bot]'},head='b'.repeat(40);
   const pulls=[
     {number:1,title:'Add the benchmark',html_url:'https://github.com/owner/repo/pull/1',state:'open',merged_at:null,updated_at:'2026-10-16T10:00:00Z',created_at:'2026-10-16T09:00:00Z',draft:false,head:{sha:head},base:{ref:'main'},mergeable:true,changed_files:8,additions:120,deletions:30,commits:2},
@@ -975,6 +975,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
       return ok({workflow_runs:[run(3,13,'CI','in_progress',null,'feature'),run(2,12,'CI','completed','failure','feature'),run(1,11,'Deploy','completed','success','main')]});
     }
     const single=/^\/pulls\/(\d+)$/.exec(path);
+    if(single&&movingHead&&single[1]==='1') return ok({...pulls[0],head:{sha:String(++moves).padStart(40,'0')}});
     if(single) return pulls[Number(single[1])-1]?ok(pulls[Number(single[1])-1]):new Response('{}',{status:404});
     if(path==='/pulls/1/comments?per_page=100') return ok([finding]);
     if(path==='/pulls/1/files?per_page=100&page=1') {
@@ -1035,6 +1036,7 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.match((await tool('pull_request_checks',{number:9})).content[0].text,/has no pull request #9/);
   // What a pull request changes: every file, and the diffs within a fixed budget.
   const changes=await tool('pull_request_files',{number:1});
+  assert.equal(changes.structuredContent.changedWhileRead,false);
   assert.match(changes.content[0].text,/8 changed files · \+120 −30 · 2 commits/);
   assert.match(changes.content[0].text,/a\.js: modified · \+3 −1\n    @@ -1 \+1 @@\n    -old\n    \+new/);
   assert.match(changes.content[0].text,/b\.js \(renamed from old\.js\): renamed/);
@@ -1050,6 +1052,12 @@ test('the connector lists pull requests and shows one as the dashboard does, fro
   assert.equal((await tool('pull_request_files',{number:1,path:'old.js'})).structuredContent.files[0].path,'b.js','a renamed file is found by its old path');
   assert.match((await tool('pull_request_files',{number:1,path:'none.js'})).content[0].text,/none\.js is not among the files on page 1\./);
   assert.match((await tool('pull_request_files',{number:9})).content[0].text,/has no pull request #9/);
+  assert.match((await tool('pull_request_files',{number:1,path:' a.js'})).content[0].text,/ a\.js is not among the files/,'the path is matched as given, not trimmed');
+  movingHead=true;
+  const moving=await tool('pull_request_files',{number:1});
+  movingHead=false;
+  assert.ok(moving.structuredContent.changedWhileRead&&moving.content[0].text.includes('The pull request changed while it was read'),'a push during the read is reported');
+  assert.equal(moves,3,'the pull request is read again after the files, and the files once more after a change');
   // Codex findings with their full text, without the badge, the feedback prompt or markers.
   const full=await tool('codex_findings',{number:1,fresh:true});
   assert.equal(full.structuredContent.findings[0].text,'The sampler uses temperature 2.0, which makes the benchmark noisy. Use 0.2.');
