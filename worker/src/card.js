@@ -22,6 +22,27 @@ function cardView() {
   // The official MCP Apps client, the SDK's App (inlined before this script as McpApps), speaks the protocol
   // with the host: the handshake, tool input and results, links, display modes, tool calls and sizing.
   // Its handlers are set before it connects, so the first tool input and result are not missed.
+  // The transport is the SDK's PostMessageTransport with two additions for native web views: a message
+  // without a source is accepted, and where the card is the top page (window.parent is the card itself)
+  // its own messages coming back are dropped. In a frame they never come back, so nothing is filtered.
+  const makeTransport=()=>{
+    const loops=window.parent===window,mine=new Set();
+    const key=m=>m.method!==undefined?`${m.method}#${m.id??''}`:`reply#${m.id}#${JSON.stringify(m.result??m.error??null)}`;
+    const transport={
+      onmessage:undefined,onerror:undefined,onclose:undefined,
+      listener:event=>{
+        if(event.source!==window.parent&&event.source!==null) return;
+        const message=event.data;
+        if(!message||typeof message!=='object'||message.jsonrpc!=='2.0') return;
+        if(loops&&mine.delete(key(message))) return;
+        transport.onmessage?.(message);
+      },
+      async start() {window.addEventListener('message',transport.listener);},
+      async send(message) {if(loops) mine.add(key(message));window.parent.postMessage(message,'*');},
+      async close() {window.removeEventListener('message',transport.listener);transport.onclose?.();},
+    };
+    return transport;
+  };
   const makeApp=()=>{
     const client=new McpApps.App({name:'Repo Autopilot',version:'1.0.0'},{availableDisplayModes:['inline','fullscreen']},{autoResize:true});
     client.ontoolinput=params=>{args=params?.arguments||{};};
@@ -221,10 +242,12 @@ function cardView() {
   const ATTEMPTS=12,ATTEMPT_MS=5000;
   const connect=async attempt=>{
     app=makeApp();
-    try {await app.connect(undefined,{timeout:ATTEMPT_MS});}
+    const started=Date.now();
+    try {await app.connect(makeTransport(),{timeout:ATTEMPT_MS});}
     catch {
       try {await app.close();} catch {}
-      if(attempt+1<ATTEMPTS) return connect(attempt+1);
+      // A host that refuses at once may still be starting, so every attempt takes its full time.
+      if(attempt+1<ATTEMPTS) {setTimeout(()=>connect(attempt+1),Math.max(0,ATTEMPT_MS-(Date.now()-started)));return;}
       if(!data) {waiting=false;failure='The chat app did not connect to the card. Try again later.';}
       render();
       return;
