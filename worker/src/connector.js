@@ -343,19 +343,27 @@ export async function logOauth(step,response,extra={}) {
   return response;
 }
 
+// A step that fails with an exception is logged too, as the 500 the app's handler answers it with.
+async function oauthStep(step,run,extra={}) {
+  let response;
+  try {response=await run();}
+  catch(error) {console.log(JSON.stringify({connector:'oauth',step,status:500,error:'exception',...extra}));throw error;}
+  return logOauth(step,response,extra);
+}
+
 // Routes the connector's paths. Returns null for paths it does not own.
 export async function connector(request,url,context) {
   const {origin}=context;
   if(request.method==='OPTIONS') return new Response(null,{status:204,headers:{...CORS,'Access-Control-Max-Age':'86400'}});
   if(url.pathname==='/.well-known/oauth-protected-resource'||url.pathname==='/.well-known/oauth-protected-resource/mcp') return json(200,resourceMetadata(origin));
   if(url.pathname==='/.well-known/oauth-authorization-server') return json(200,serverMetadata(origin));
-  if(url.pathname==='/oauth/register'&&request.method==='POST') return logOauth('register',await register(request,context));
+  if(url.pathname==='/oauth/register'&&request.method==='POST') return oauthStep('register',()=>register(request,context));
   if(url.pathname==='/oauth/token'&&request.method==='POST') {
     const grantType=(await readParams(request.clone()))?.grant_type;
-    return logOauth('token',await token(request,context),{grant:['authorization_code','refresh_token'].includes(grantType)?grantType:'unknown'});
+    return oauthStep('token',()=>token(request,context),{grant:['authorization_code','refresh_token'].includes(grantType)?grantType:'unknown'});
   }
-  if(url.pathname==='/oauth/authorize'&&request.method==='GET') return logOauth('consent',await showConsent(Object.fromEntries(url.searchParams),context));
-  if(url.pathname==='/oauth/authorize'&&request.method==='POST') return logOauth('decision',await decideConsent(request,context));
+  if(url.pathname==='/oauth/authorize'&&request.method==='GET') return oauthStep('consent',()=>showConsent(Object.fromEntries(url.searchParams),context));
+  if(url.pathname==='/oauth/authorize'&&request.method==='POST') return oauthStep('decision',()=>decideConsent(request,context));
   if(url.pathname==='/mcp') return mcp(request,context);
   return json(404,{error:'Not found.'});
 }

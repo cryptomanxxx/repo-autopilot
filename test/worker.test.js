@@ -1101,3 +1101,14 @@ test('the consent page allows only its own script, which shows the click and sto
   const hash=`'sha256-${createHash('sha256').update(scripts[0]).digest('base64')}'`;
   assert.match(consent.headers.get('Content-Security-Policy'),new RegExp(`script-src ${hash.replace(/[+/]/g,c=>'\\'+c)};`));
 });
+
+test('an OAuth step that throws is logged as a 500',async()=>{
+  const {env,store}=environment(),fetchImpl=github({calls:[]});
+  store.registerClient=async()=>{throw new Error('storage down');};
+  const logged=[],log=console.log,error=console.error;console.log=line=>logged.push(line);console.error=()=>{};
+  let response;
+  try {response=await handle(request('/oauth/register',{method:'POST',body:{client_name:'Claude',redirect_uris:['https://claude.ai/api/mcp/auth_callback']}}),env,{fetchImpl});}
+  finally {console.log=log;console.error=error;}
+  assert.equal(response.status,500);
+  assert.deepEqual(logged.map(line=>JSON.parse(line)).filter(l=>l.connector==='oauth'),[{connector:'oauth',step:'register',status:500,error:'exception'}]);
+});

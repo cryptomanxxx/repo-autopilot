@@ -147,7 +147,9 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     if(typeof user.login!=='string'||user.login.toLowerCase()!==config.owner) return failed('owner');
     // A sign-in started by connecting Claude or ChatGPT finishes the connection instead of opening the dashboard.
     if(pending.connect) {
-      const connected=await finishConnect({pending:pending.connect,token,login:user.login,store,env,origin:config.origin,now});
+      let connected;
+      try {connected=await finishConnect({pending:pending.connect,token,login:user.login,store,env,origin:config.origin,now});}
+      catch(error) {console.log(JSON.stringify({connector:'oauth',step:'github',status:500,error:'exception'}));throw error;}
       if(!connected) return failed('expired');
       connected.headers.append('Set-Cookie',cookie('autopilot_login','',{path:'/auth'}));
       return logOauth('github',connected);

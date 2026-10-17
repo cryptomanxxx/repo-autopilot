@@ -193,6 +193,9 @@ export function showDashboard() {
   else openPending();
 }
 
+// A message for the dashboard's status line that stays through the next load.
+export function dashboardNotice(text) {notice=text;noticeFrom=0;status(text);}
+
 export function showPull(number) {
   pendingPull=number;
   if(data&&!loading) openPending();
