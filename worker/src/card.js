@@ -1,56 +1,57 @@
 // The Repo Autopilot card: an MCP App (https://modelcontextprotocol.io/extensions/apps) that chat apps such as
 // Claude and ChatGPT render next to the answer when a pull request tool is used. It draws the tool result
-// the host passes in, the same structured data the model reads, and talks to the host only through the
-// MCP Apps postMessage protocol. It can open links and reload the same tool; it cannot change anything.
+// the host passes in, the same structured data the model reads, and talks to the host through the official
+// MCP Apps SDK client, inlined from worker/src/vendor. It can open links and reload the same tool; it cannot
+// change anything.
+import {EXT_APPS_SCRIPT} from './vendor/ext-apps.js';
 export const CARD_URI='ui://repo-autopilot/pull-requests.html';
 export const CARD_MIME='text/html;profile=mcp-app';
-export const CARD_PROTOCOL='2026-01-26';
 
 // Runs inside the card's sandboxed frame. It is serialized with Function.prototype.toString, so it must not
 // use anything from this module's scope.
-function cardView(protocol) {
+function cardView() {
   const ICONS={fixed:'✅',changed:'🔄',open:'⚠',unverified:'❔'};
   const LABELS={fixed:'fixed',changed:'waiting for Codex',open:'open',unverified:'unverified'};
   const ORDER={open:0,changed:1,unverified:2,fixed:3};
   const CI={success:'CI passed',failure:'CI failed',pending:'CI running',unknown:'No checks'};
-  const pending=new Map();
-  let nextId=1,context={},caps={},args=null,data=null,failure=null,waiting=true,tool=null,filter='all',busy=false,loadedAt=null;
+  let context={},caps={},args=null,data=null,failure=null,waiting=true,tool=null,filter='all',busy=false,loadedAt=null,connected=false,app=null;
   const expanded=new Set(),showFixed=new Set();
   const $=id=>document.getElementById(id);
   const el=(tag,cls,text)=>{const node=document.createElement(tag);if(cls) node.className=cls;if(text!==undefined) node.textContent=text;return node;};
 
-  // JSON-RPC over postMessage with the host through the parent window. Mobile apps load the card in a web
-  // view, where messages from the app can arrive without a source and the card's own messages can come back.
-  const post=message=>window.parent.postMessage({jsonrpc:'2.0',...message},'*');
-  const OUTGOING=new Set(['ui/initialize','ui/notifications/initialized','ui/notifications/size-changed','ui/open-link','ui/request-display-mode','ui/message','ui/update-model-context','tools/call']);
-  // The card's own ids carry a prefix, so a reply that comes back, or a host request with the same number,
-  // is never taken for an answer to the card.
-  const request=(method,params)=>new Promise((resolve,reject)=>{const id=`repo-autopilot-${nextId++}`;pending.set(id,{resolve,reject});post({id,method,params});});
-  const notify=(method,params)=>post({method,params});
-  const replied=new Set();
-  window.addEventListener('message',event=>{
-    if(event.source!==window.parent&&event.source!==null) return;
-    const message=event.data;
-    if(!message||message.jsonrpc!=='2.0') return;
-    if(OUTGOING.has(message.method)) return;
-    if(message.method===undefined) {
-      // A reply the card sent itself that came back is not an answer from the host.
-      if(replied.delete(message.id)) return;
-      const entry=pending.get(message.id);
-      if(!entry) return;
-      pending.delete(message.id);
-      if(message.error) entry.reject(new Error(message.error.message||'The chat app refused the request.'));
-      else entry.resolve(message.result);
-      return;
-    }
-    const reply=value=>{if(message.id!==undefined) {replied.add(message.id);post({id:message.id,result:value});}};
-    if(message.method==='ui/notifications/tool-input') args=message.params?.arguments||{};
-    else if(message.method==='ui/notifications/tool-result') {take(message.params);render();}
-    else if(message.method==='ui/notifications/tool-cancelled') {waiting=false;failure='The request was cancelled.';render();}
-    else if(message.method==='ui/notifications/host-context-changed') {applyContext(message.params||{});render();}
-    else if(message.method==='ui/resource-teardown'||message.method==='ping') reply({});
-    else if(message.id!==undefined) {replied.add(message.id);post({id:message.id,error:{code:-32601,message:`Method not found: ${message.method}`}});}
-  });
+  // The official MCP Apps client, the SDK's App (inlined before this script as McpApps), speaks the protocol
+  // with the host: the handshake, tool input and results, links, display modes, tool calls and sizing.
+  // Its handlers are set before it connects, so the first tool input and result are not missed.
+  // The transport is the SDK's PostMessageTransport with two additions for native web views: a message
+  // without a source is accepted, and where the card is the top page (window.parent is the card itself)
+  // its own messages coming back are dropped. In a frame they never come back, so nothing is filtered.
+  const makeTransport=()=>{
+    const loops=window.parent===window,mine=new Set();
+    const key=m=>m.method!==undefined?`${m.method}#${m.id??''}`:`reply#${m.id}#${JSON.stringify(m.result??m.error??null)}`;
+    const transport={
+      onmessage:undefined,onerror:undefined,onclose:undefined,
+      listener:event=>{
+        if(event.source!==window.parent&&event.source!==null) return;
+        const message=event.data;
+        if(!message||typeof message!=='object'||message.jsonrpc!=='2.0') return;
+        if(loops&&mine.delete(key(message))) return;
+        transport.onmessage?.(message);
+      },
+      async start() {window.addEventListener('message',transport.listener);},
+      async send(message) {if(loops) mine.add(key(message));window.parent.postMessage(message,'*');},
+      async close() {window.removeEventListener('message',transport.listener);transport.onclose?.();},
+    };
+    return transport;
+  };
+  const makeApp=()=>{
+    const client=new McpApps.App({name:'Repo Autopilot',version:'1.0.0'},{availableDisplayModes:['inline','fullscreen']},{autoResize:true});
+    client.ontoolinput=params=>{args=params?.arguments||{};};
+    client.ontoolresult=result=>{take(result);render();};
+    client.ontoolcancelled=()=>{waiting=false;failure='The request was cancelled.';render();};
+    client.onhostcontextchanged=change=>{applyContext(change||{});render();};
+    client.onteardown=async()=>({});
+    return client;
+  };
 
   function applyContext(change) {
     context={...context,...change,styles:change.styles||context.styles};
@@ -64,23 +65,6 @@ function cardView(protocol) {
     root.dataset.mode=context.displayMode||'inline';
   }
 
-  // The host sizes the inline frame to the content, so every change of height is reported.
-  // Nothing but the handshake is sent before it completes: strict hosts keep the frame hidden otherwise.
-  let lastHeight=0,lastWidth=0,queued=false,connected=false;
-  const measure=()=>{
-    if(queued||!connected) return;
-    queued=true;
-    requestAnimationFrame(()=>{
-      queued=false;
-      const root=document.documentElement,before=root.style.height;
-      root.style.height='max-content';
-      const height=Math.ceil(root.getBoundingClientRect().height);
-      root.style.height=before;
-      const width=Math.ceil(window.innerWidth);
-      if(height!==lastHeight||width!==lastWidth) {lastHeight=height;lastWidth=width;notify('ui/notifications/size-changed',{width,height});}
-    });
-  };
-
   // A tool result replaces what is shown; a failed one keeps the last good data and says what went wrong.
   function take(value) {
     waiting=false;
@@ -92,7 +76,7 @@ function cardView(protocol) {
     if(!/^https:\/\//.test(url||'')) return node;
     node.href=url;node.target='_blank';node.rel='noopener noreferrer';
     // Until the host has answered, a click does nothing: navigating would replace the card itself.
-    node.onclick=event=>{if(connected&&!caps.openLinks) return;event.preventDefault();if(connected) request('ui/open-link',{url}).catch(()=>{});};
+    node.onclick=event=>{if(connected&&!caps.openLinks) return;event.preventDefault();if(connected) app.openLink({url}).catch(()=>{});};
     return node;
   };
   // The same tool again, with the arguments the host passed, or worked out from the data shown.
@@ -213,7 +197,6 @@ function cardView(protocol) {
     const problem=failure&&el('p','note problem',failure);
     if(!data) {
       body.replaceChildren(problem||el('p','note',waiting?'Loading from Repo Autopilot…':'Nothing to show.'));
-      measure();
       return;
     }
     $('repo').textContent=data.repository||'';
@@ -234,13 +217,12 @@ function cardView(protocol) {
     const nodes=[...(problem?[problem]:[]),shown.length?list:el('p','note',filter==='ready'?'No pull request is ready to merge.':'Nothing needs attention.')];
     if(data.mayHaveMore) nodes.push(el('p','note',`Only the ${data.limit} most recently updated pull requests are shown.`));
     body.replaceChildren(...nodes);
-    measure();
   }
 
   for(const button of $('filters').querySelectorAll('button')) button.onclick=()=>{filter=button.dataset.filter;render();};
   $('expand').onclick=async()=>{
     const mode=context.displayMode==='fullscreen'?'inline':'fullscreen';
-    try {const applied=await request('ui/request-display-mode',{mode});applyContext({displayMode:applied?.mode||context.displayMode});} catch {}
+    try {const applied=await app.requestDisplayMode({mode});applyContext({displayMode:applied?.mode||context.displayMode});} catch {}
     render();
   };
   // Loading the same tool again through the host gives fresh data; the server still checks the sign-in.
@@ -248,37 +230,36 @@ function cardView(protocol) {
     const call=refreshCall();
     if(busy||!call) return;
     busy=true;render();
-    try {take(await request('tools/call',call));}
+    try {take(await app.callServerTool(call));}
     catch(error) {take({isError:true,content:[{type:'text',text:error.message}]});}
     busy=false;render();
   };
 
-  new ResizeObserver(measure).observe(document.body);
-  // The handshake starts once the page has loaded and is repeated until the host answers: a host may start
-  // listening only after the card has loaded. The first answer counts; later ones are ignored.
+  // The handshake starts once the page has loaded, as it does when the SDK is loaded as a module. A host
+  // that has not answered within a few seconds is asked again with a fresh client, for about a minute;
+  // until the card is connected, links cannot navigate it away.
   linkTo($('dashboard'),$('dashboard').getAttribute('href'));
-  let tries=0,timer=null;
-  const finish=init=>{
-    if(connected) return;
-    clearInterval(timer);
-    applyContext(init?.hostContext||{});
-    tool=init?.hostContext?.toolInfo?.tool?.name||null;
-    caps=init?.hostCapabilities||{};
-    notify('ui/notifications/initialized',{});
+  const ATTEMPTS=12,ATTEMPT_MS=5000;
+  const connect=async attempt=>{
+    app=makeApp();
+    const started=Date.now();
+    try {await app.connect(makeTransport(),{timeout:ATTEMPT_MS});}
+    catch {
+      try {await app.close();} catch {}
+      // A host that refuses at once may still be starting, so every attempt takes its full time.
+      if(attempt+1<ATTEMPTS) {setTimeout(()=>connect(attempt+1),Math.max(0,ATTEMPT_MS-(Date.now()-started)));return;}
+      if(!data) {waiting=false;failure='The chat app did not connect to the card. Try again later.';}
+      render();
+      return;
+    }
+    caps=app.getHostCapabilities()||{};
+    applyContext(app.getHostContext()||{});
+    tool=app.getHostContext()?.toolInfo?.tool?.name||null;
     connected=true;
     render();
   };
-  const hello=()=>{
-    if(connected) return;
-    // Giving up only says so: the card stays unconnected, so links still cannot replace it, and a late
-    // answer to one of the earlier requests still connects it.
-    if(tries++>=20) {clearInterval(timer);if(!data) {waiting=false;failure='The chat app did not connect to the card. Try again later.';}render();return;}
-    // A refusal may come from a host that is not ready yet, so the card keeps asking until it gives up.
-    request('ui/initialize',{protocolVersion:protocol,appInfo:{name:'Repo Autopilot',version:'1.0.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']}}).then(finish,()=>{});
-  };
-  const start=()=>{hello();timer=setInterval(hello,1000);};
-  if(document.readyState==='complete') start();
-  else window.addEventListener('load',start,{once:true});
+  if(document.readyState==='complete') connect(0);
+  else window.addEventListener('load',()=>connect(0),{once:true});
 }
 
 const STYLE=`
@@ -357,7 +338,7 @@ const BODY=`
 // The card's HTML. The dashboard link is the only server value in it; merging happens there.
 export function cardHtml(origin) {
   const dashboard=`${origin}/`.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Repo Autopilot</title><style>${STYLE}</style></head><body>${BODY.replace('__DASHBOARD__',dashboard)}<script>(${cardView.toString()})(${JSON.stringify(CARD_PROTOCOL)});</script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>Repo Autopilot</title><style>${STYLE}</style></head><body>${BODY.replace('__DASHBOARD__',dashboard)}<script>${EXT_APPS_SCRIPT}</script><script>(${cardView.toString()})();</script></body></html>`;
 }
 
 // What resources/list and resources/read return for the card.
