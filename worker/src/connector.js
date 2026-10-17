@@ -269,15 +269,15 @@ async function mcp(request,{store,env,origin,fetchImpl,now,tools}) {
   const text=await readBody(request,MAX_MCP);
   let message;try {message=JSON.parse(text);} catch {return json(400,{jsonrpc:'2.0',id:null,error:{code:-32700,message:'Parse error.'}});}
   if(!message||typeof message!=='object'||Array.isArray(message)||message.jsonrpc!=='2.0'||typeof message.method!=='string') return json(400,{jsonrpc:'2.0',id:null,error:{code:-32600,message:'Send one JSON-RPC 2.0 request.'}});
+  const {id,method,params={}}=message;
+  // One line per message in the Worker's logs (Cloudflare → Workers → repo-autopilot-chat → Logs), to see
+  // what a chat app sends: never tokens or tool arguments, only the method, the tool or resource asked
+  // for, which app sent it, and its user agent. Notifications are logged too, before they are answered.
+  const client=await store.getClient(grant.clientId);
+  console.log(JSON.stringify({connector:method,notification:'id' in message?undefined:true,tool:method==='tools/call'?String(params?.name||'').slice(0,64):undefined,resource:method==='resources/read'?String(params?.uri||'').slice(0,128):undefined,app:client?.name||null,claude:isClaude(client),extensions:method==='initialize'?Object.keys(params?.capabilities?.extensions||{}):undefined,agent:(request.headers.get('User-Agent')||'').slice(0,120)}));
   // Notifications and responses need no answer.
   if(!('id' in message)) return new Response(null,{status:202,headers:CORS});
-  const {id,method,params={}}=message;
   await store.touchGrant(grant.id);
-  // One line per request in the Worker's logs (Cloudflare → Workers → repo-autopilot-chat → Logs), to see
-  // what a chat app asks for: never tokens or tool arguments, only the method, the tool or resource asked
-  // for, which app asked, and its user agent.
-  const client=await store.getClient(grant.clientId);
-  console.log(JSON.stringify({connector:method,tool:method==='tools/call'?String(params?.name||'').slice(0,64):undefined,resource:method==='resources/read'?String(params?.uri||'').slice(0,128):undefined,app:client?.name||null,claude:isClaude(client),extensions:method==='initialize'?Object.keys(params?.capabilities?.extensions||{}):undefined,agent:(request.headers.get('User-Agent')||'').slice(0,120)}));
   if(method==='initialize') {
     const requested=params?.protocolVersion;
     // MCP Apps is answered in kind: a chat app that declares it hears that the card is offered.
