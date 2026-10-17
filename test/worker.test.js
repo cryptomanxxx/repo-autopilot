@@ -277,6 +277,7 @@ function handoff(response) {
   assert.equal(response.headers.get('Location'),null,'no redirect the GitHub app could take over');
   const target=response.headers.get('Refresh').replace(/^0;url=/,'');
   assert.ok(response.headers.get('Content-Security-Policy').includes("default-src 'none'"));
+  assert.ok(response.headers.get('Content-Security-Policy').includes("img-src 'self'"),'the page may show its own icon');
   return target;
 }
 async function signIn(env,fetchImpl,now=Date.now) {
@@ -903,6 +904,10 @@ test('a chat app connects through OAuth, reads through MCP, keeps working after 
   const rpc=(method,params,token=tokens.access_token)=>call('/mcp',{method:'POST',body:{jsonrpc:'2.0',id:1,method,params},headers:{Authorization:`Bearer ${token}`}});
   const init=await (await rpc('initialize',{protocolVersion:'2025-06-18'})).json();
   assert.equal(init.result.protocolVersion,'2025-06-18');assert.equal(init.result.serverInfo.name,'repo-autopilot');
+  assert.deepEqual(init.result.serverInfo.icons.map(i=>[i.src,i.mimeType]),[[`${ORIGIN}/icon.png`,'image/png'],[`${ORIGIN}/favicon.ico`,'image/x-icon']],'chat apps can show the Repo Autopilot robot');
+  for(const file of ['icon.png','apple-touch-icon.png','favicon.ico']) assert.ok(readFileSync(new URL(`../worker/public/${file}`,import.meta.url)).length>1000,`${file} is served from worker/public`);
+  assert.match(readFileSync(new URL('../worker/public/index.html',import.meta.url),'utf8'),/<link rel="icon" href="\/favicon\.ico"/);
+  assert.match(html,/<link rel="icon" href="\/favicon\.ico"/,'the consent page shows the robot in its tab');
   const {result:{tools}}=await (await rpc('tools/list')).json();
   assert.ok(tools.every(t=>t.annotations.readOnlyHint===true),'every tool only reads');
   const listed=await (await rpc('tools/call',{name:'list_repositories',arguments:{}})).json();
