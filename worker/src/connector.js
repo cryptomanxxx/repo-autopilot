@@ -108,26 +108,30 @@ const errorPage=message=>{const response=page('Cannot connect',`<p>${escape(mess
 // The consent form's only script: a click shows at once that it was taken, and a second click cannot send the
 // form again (which would find the page used up and say it expired). The buttons are disabled after the
 // browser has read the form, so the chosen decision is still sent.
-const CONSENT_SCRIPT="(()=>{let sent=false;const form=document.querySelector('form');form.addEventListener('submit',event=>{if(sent){event.preventDefault();return;}sent=true;const chosen=event.submitter;if(chosen) chosen.textContent=chosen.value==='allow'?'Opening GitHub…':'Cancelling…';setTimeout(()=>{for(const button of form.querySelectorAll('button')) button.disabled=true;},0);});})();";
+const CONSENT_SCRIPT="(()=>{let sent=false;const form=document.querySelector('form');form.addEventListener('submit',event=>{if(sent){event.preventDefault();return;}sent=true;const chosen=event.submitter;if(chosen) chosen.textContent=chosen.dataset.busy;setTimeout(()=>{for(const button of form.querySelectorAll('button')) button.disabled=true;},0);});})();";
 let consentScriptHash;
 const scriptHash=async()=>consentScriptHash??=`'sha256-${btoa(String.fromCharCode(...await sha256(CONSENT_SCRIPT)))}'`;
-async function showConsent(params,{store,env,origin,secure,now}) {
+async function showConsent(request,params,{store,env,origin,secure,now,ownerSession}) {
   const checked=await authorizationRequest(params,{store,origin});
   if(checked.page) return errorPage(checked.page);
   if(checked.error) return redirectBack(checked,{error:checked.error,error_description:checked.description},origin);
   const consent=randomHex(16);
   const sealed=await seal(env.GITHUB_CLIENT_SECRET,CONSENT,{...checked.request,consent,expires:now()+PENDING_MS});
   const host=new URL(checked.request.redirectUri).host;
+  // Signed in to the dashboard in this browser, the owner connects without leaving this page for GitHub.
+  const owner=await ownerSession?.(request);
+  const direct=Boolean(owner?.canConnect);
+  const next=direct?`You are signed in to Repo Autopilot as <strong>${escape(owner.login)}</strong>, so no GitHub sign-in is needed.`:'Next you sign in with GitHub.';
   const body=`<p>The app <strong>${escape(checked.client.name)}</strong> wants to read your Repo Autopilot status. Afterwards you return to <strong>${escape(host)}</strong>.</p>
 <p>It will be able to read pull requests, CI, Codex reviews and findings in the repositories where the Repo Autopilot GitHub App is installed. It cannot change, comment on or merge anything.</p>
-<p class="muted">Next you sign in with GitHub. The app stays connected until you revoke it under <strong>Connected apps</strong> in the dashboard.</p>
-<form method="post" action="/oauth/authorize" class="actions"><input type="hidden" name="request" value="${escape(sealed)}"><input type="hidden" name="consent" value="${consent}"><button name="decision" value="allow">Allow and sign in with GitHub</button><button name="decision" value="deny" class="secondary">Deny</button></form><script>${CONSENT_SCRIPT}</script>`;
+<p class="muted">${next} The app stays connected until you revoke it under <strong>Connected apps</strong> in the dashboard.</p>
+<form method="post" action="/oauth/authorize" class="actions"><input type="hidden" name="request" value="${escape(sealed)}"><input type="hidden" name="consent" value="${consent}"><button name="decision" value="allow" data-busy="${direct?'Connecting…':'Opening GitHub…'}">${direct?'Allow':'Allow and sign in with GitHub'}</button><button name="decision" value="deny" class="secondary" data-busy="Cancelling…">Deny</button></form><script>${CONSENT_SCRIPT}</script>`;
   const redirectOrigin=new URL(checked.request.redirectUri).origin;
   const csp=`default-src 'self'; script-src ${await scriptHash()}; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self' https://github.com ${redirectOrigin}`;
   return page(`Connect ${checked.client.name}?`,body,{csp,cookie:`autopilot_consent=${consent}; Path=/oauth; HttpOnly; SameSite=Lax; Max-Age=600${secure?'; Secure':''}`});
 }
 
-async function decideConsent(request,{store,env,origin,secure,now}) {
+async function decideConsent(request,{store,env,origin,secure,now,ownerSession}) {
   // The form must come from this site: by its Origin, or, where a browser withholds the origin, by its own
   // same-site signal. The consent cookie below is checked either way.
   const from=request.headers.get('Origin');
@@ -142,7 +146,18 @@ async function decideConsent(request,{store,env,origin,secure,now}) {
     const response=redirectBack(sealed,{error:'access_denied',error_description:'The owner denied access.'},origin);
     response.headers.append('Set-Cookie',clear);return response;
   }
-  // Allowed: sign in with GitHub, like the dashboard does, and finish in the sign-in callback.
+  // Allowed, by an owner signed in to the dashboard in this browser: the app is connected with the GitHub
+  // tokens of that sign-in, without a trip to GitHub. On Android, that trip can be taken over by the GitHub
+  // app, which ends it in another tab, where Claude no longer finishes connecting.
+  const owner=await ownerSession?.(request);
+  const github=owner?.canConnect?await owner.take():null;
+  const tokens=github&&await unseal(env.GITHUB_CLIENT_SECRET,GRANT,github);
+  const at=now();
+  if(tokens&&(tokens.refresh?!tokens.refreshExpires||tokens.refreshExpires>at:!tokens.accessExpires||tokens.accessExpires>at+CODE_MS)) {
+    const response=await connectGrant({request:sealed,github,expires:grantExpires(tokens,at),login:owner.login,store,origin,now});
+    response.headers.append('Set-Cookie',clear);return response;
+  }
+  // Otherwise: sign in with GitHub, like the dashboard does, and finish in the sign-in callback.
   const pending=randomHex(16);
   await store.putPending(pending,{clientId:sealed.clientId,redirectUri:sealed.redirectUri,challenge:sealed.challenge,state:sealed.state},PENDING_MS);
   const browser=randomHex(),verifier=randomHex();
@@ -162,16 +177,26 @@ export async function failConnect({pending,reason,store,origin}) {
   return redirectBack(request,{error,error_description:description},origin);
 }
 
+// GitHub's tokens from a sign-in, sealed with the client secret, as a connected app or a dashboard session
+// keeps them; and how long a grant holding them lasts: as long as GitHub lets them be renewed.
+const grantExpires=(github,at)=>github.refresh?(github.refreshExpires||at+NO_EXPIRY_MS):(github.accessExpires||at+NO_EXPIRY_MS);
+export async function sealGithub(env,token,at) {
+  const seconds=value=>Number.isFinite(value)&&value>0?value*1000:null;
+  const github={access:token.access_token,accessExpires:seconds(token.expires_in)&&at+seconds(token.expires_in),refresh:token.refresh_token||null,refreshExpires:token.refresh_token&&seconds(token.refresh_token_expires_in)?at+seconds(token.refresh_token_expires_in):null};
+  return {sealed:await seal(env.GITHUB_CLIENT_SECRET,GRANT,github),expires:grantExpires(github,at)};
+}
+
 // Called by the sign-in callback once GitHub confirmed the owner: the app is connected and gets its code.
 export async function finishConnect({pending,token,login,store,env,origin,now}) {
   const request=await store.takePending(pending);
   if(!request) return null;
-  const at=now(),seconds=value=>Number.isFinite(value)&&value>0?value*1000:null;
-  const github={access:token.access_token,accessExpires:seconds(token.expires_in)&&at+seconds(token.expires_in),refresh:token.refresh_token||null,refreshExpires:token.refresh_token&&seconds(token.refresh_token_expires_in)?at+seconds(token.refresh_token_expires_in):null};
-  // The grant lasts as long as GitHub lets its tokens be renewed.
-  const expires=github.refresh?(github.refreshExpires||at+NO_EXPIRY_MS):(github.accessExpires||at+NO_EXPIRY_MS);
-  const grantId=randomHex(16),code=randomHex();
-  await store.createGrant({id:grantId,clientId:request.clientId,login,github:await seal(env.GITHUB_CLIENT_SECRET,GRANT,github),expires});
+  const {sealed,expires}=await sealGithub(env,token,now());
+  return connectGrant({request,github:sealed,expires,login,store,origin,now});
+}
+// The app is connected: a grant holds the GitHub tokens, and the app gets a code for it at its address.
+async function connectGrant({request,github,expires,login,store,origin,now}) {
+  const at=now(),grantId=randomHex(16),code=randomHex();
+  await store.createGrant({id:grantId,clientId:request.clientId,login,github,expires});
   await store.putToken({hash:await tokenHash(code),grantId,kind:'code',data:{clientId:request.clientId,redirectUri:request.redirectUri,challenge:request.challenge},expires:at+CODE_MS});
   return redirectBack(request,{code},origin);
 }
@@ -371,7 +396,7 @@ export async function connector(request,url,context) {
     const grantType=(await readParams(request.clone()))?.grant_type;
     return oauthStep('token',()=>token(request,context),{grant:['authorization_code','refresh_token'].includes(grantType)?grantType:'unknown'});
   }
-  if(url.pathname==='/oauth/authorize'&&request.method==='GET') return oauthStep('consent',()=>showConsent(Object.fromEntries(url.searchParams),context));
+  if(url.pathname==='/oauth/authorize'&&request.method==='GET') return oauthStep('consent',()=>showConsent(request,Object.fromEntries(url.searchParams),context));
   if(url.pathname==='/oauth/authorize'&&request.method==='POST') return oauthStep('decision',()=>decideConsent(request,context));
   if(url.pathname==='/mcp') return mcp(request,context);
   return json(404,{error:'Not found.'});

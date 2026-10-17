@@ -31,21 +31,44 @@ export class ChatStoreLogic {
     // Conversations from before repository selection have no repository; they belong to the app's own one.
     try {sql.exec('SELECT repository FROM conversations LIMIT 0');}
     catch {sql.exec('ALTER TABLE conversations ADD COLUMN repository TEXT');}
+    // A dashboard sign-in keeps its GitHub tokens, sealed, so connecting an app from the same browser needs no
+    // second GitHub sign-in; sessions from before have none.
+    try {sql.exec('SELECT github FROM sessions LIMIT 0');}
+    catch {sql.exec('ALTER TABLE sessions ADD COLUMN github TEXT');}
     // Answers record the repository, branch and commit they were based on; older ones have none.
     try {sql.exec('SELECT meta FROM messages LIMIT 0');}
     catch {sql.exec('ALTER TABLE messages ADD COLUMN meta TEXT');}
   }
   rows(query,...bindings) {return this.sql.exec(query,...bindings).toArray();}
 
-  createSession({hash,token,csrf,login,expires}) {
+  createSession({hash,token,csrf,login,expires,github=null}) {
     this.sql.exec('DELETE FROM sessions WHERE expires <= ?',this.now());
     // At most 20 sessions; a new sign-in replaces the oldest instead of locking the owner out.
     this.sql.exec('DELETE FROM sessions WHERE hash IN (SELECT hash FROM sessions ORDER BY expires DESC LIMIT -1 OFFSET 19)');
-    this.sql.exec('INSERT INTO sessions (hash, token, csrf, login, expires) VALUES (?, ?, ?, ?, ?)',hash,token,csrf,login,Math.min(expires,this.now()+8*HOUR));
+    this.sql.exec('INSERT INTO sessions (hash, token, csrf, login, expires, github) VALUES (?, ?, ?, ?, ?, ?)',hash,token,csrf,login,Math.min(expires,this.now()+8*HOUR),github);
+  }
+  // Expired sessions are removed with the GitHub tokens they hold; the Durable Object also wakes for it at
+  // the next expiry (nextSessionExpiry), so tokens do not outlive their session while nobody visits.
+  purgeSessions() {this.sql.exec('DELETE FROM sessions WHERE expires <= ?',this.now());}
+  nextSessionExpiry() {
+    const [row]=this.rows('SELECT MIN(expires) AS at FROM sessions WHERE github IS NOT NULL');
+    return row?.at??null;
   }
   getSession(hash) {
-    const [session]=this.rows('SELECT token, csrf, login, expires FROM sessions WHERE hash = ? AND expires > ?',hash,this.now());
-    return session || null;
+    this.purgeSessions();
+    const [session]=this.rows('SELECT token, csrf, login, expires, github IS NOT NULL AS can_connect FROM sessions WHERE hash = ? AND expires > ?',hash,this.now());
+    if(!session) return null;
+    const {can_connect,...rest}=session;
+    return {...rest,canConnect:Boolean(can_connect)};
+  }
+  // A session's GitHub tokens connect one app: GitHub renews a refresh token only once, so two apps
+  // cannot share it. They are handed out once and then gone from the session.
+  takeSessionGithub(hash) {
+    this.purgeSessions();
+    const [row]=this.rows('SELECT github FROM sessions WHERE hash = ? AND expires > ? AND github IS NOT NULL',hash,this.now());
+    if(!row) return null;
+    this.sql.exec('UPDATE sessions SET github = NULL WHERE hash = ?',hash);
+    return row.github;
   }
   deleteSession(hash) {this.sql.exec('DELETE FROM sessions WHERE hash = ?',hash);}
 

@@ -2,7 +2,7 @@ import {githubClient,GitHubError,readLimited} from './github.js';
 import {repositoryName,createGitHub} from '../../src/github.js';
 import {PublicError,UserError} from './errors.js';
 import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
-import {connector,isConnectorPath,finishConnect,failConnect,logOauth,githubHandoff} from './connector.js';
+import {connector,isConnectorPath,finishConnect,failConnect,logOauth,githubHandoff,sealGithub} from './connector.js';
 import {connectorTools} from './tools.js';
 export {UserError};
 import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
@@ -70,6 +70,16 @@ async function readJson(request) {
 }
 
 const chatStore=env=>env.CHAT.get(env.CHAT.idFromName('main'));
+const sessionCookieName=config=>config.secure?'__Host-autopilot_session':'autopilot_session';
+// The owner's dashboard session in this browser, for connecting an app without a second GitHub sign-in.
+async function ownerSession(request,store,config) {
+  const id=cookies(request)[sessionCookieName(config)];
+  if(!id||!/^[0-9a-f]{64}$/.test(id)) return null;
+  const hash=hex(await sha256(id));
+  const session=await store.getSession(hash);
+  if(!session||session.login.toLowerCase()!==config.owner) return null;
+  return {login:session.login,canConnect:session.canConnect,take:()=>store.takeSessionGithub(hash)};
+}
 
 export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
   const config=settings(env,request);
@@ -81,7 +91,7 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
       if(config.error) return withHeaders(json(503,{error:config.error}),secure);
       if(!config.sameOrigin) return withHeaders(json(404,{error:'Not found.'}),secure);
       const store=chatStore(env);
-      return withHeaders(await connector(request,url,{store,env,origin:config.origin,secure,fetchImpl,now,tools:connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData,pullLimit:DASHBOARD_PULLS,runStep:DASHBOARD_RUNS,runMax:DASHBOARD_MAX_RUNS})}),secure);
+      return withHeaders(await connector(request,url,{store,env,origin:config.origin,secure,fetchImpl,now,ownerSession:request=>ownerSession(request,store,config),tools:connectorTools({store,fetchImpl,config,readRepos,resolveRepository,dashboardData,pullLimit:DASHBOARD_PULLS,runStep:DASHBOARD_RUNS,runMax:DASHBOARD_MAX_RUNS})}),secure);
     }
     if(!url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/auth/')) {
       if(!env.ASSETS) return withHeaders(new Response('Not found',{status:404}),secure);
@@ -102,7 +112,7 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
 
 async function route(request,env,config,url,{fetchImpl,now}) {
   const store=chatStore(env);
-  const sessionCookie=config.secure?'__Host-autopilot_session':'autopilot_session';
+  const sessionCookie=sessionCookieName(config);
   const cookie=(name,value,{path='/',maxAge}={})=>`${name}=${value}; Path=${path}; HttpOnly; SameSite=Lax; Max-Age=${maxAge??(value?28800:0)}${config.secure?'; Secure':''}`;
   const callback=`${config.origin}/auth/callback`;
 
@@ -158,7 +168,10 @@ async function route(request,env,config,url,{fetchImpl,now}) {
       return logOauth('github',connected);
     }
     const id=randomHex(),lifetime=Number.isFinite(token.expires_in)&&token.expires_in>0?token.expires_in*1000:8*HOUR;
-    await store.createSession({hash:hex(await sha256(id)),token:token.access_token,csrf:randomHex(),login:user.login,expires:now()+Math.min(lifetime,8*HOUR)});
+    // The session keeps the sign-in's GitHub tokens too, sealed, so an app connected from this browser
+    // needs no second GitHub sign-in. It ends two minutes before its token does: an app connected with the
+    // same tokens renews them a minute before, which ends the session's token.
+    await store.createSession({hash:hex(await sha256(id)),token:token.access_token,csrf:randomHex(),login:user.login,expires:now()+Math.min(lifetime-2*60000,8*HOUR),github:(await sealGithub(env,token,now())).sealed});
     return redirect('/',[cookie(sessionCookie,id),cookie('autopilot_login','',{path:'/auth'})]);
   }
 

@@ -10,7 +10,7 @@
 - **Workflow runs in the chat.** `list_workflow_runs` lists a repository's recent GitHub Actions runs, optionally only failed ones or one branch.
 - **Choose the repository in the card.** The card has a repository picker, and **Pin** where the chat app can keep the card in view.
 - **Links to the dashboard.** The pull request tools link each pull request to your Repo Autopilot dashboard as well as to GitHub; the link opens its repository and the pull request, where it can be merged.
-- **Connecting in one round on Android.** With the GitHub app installed, Android handed the GitHub sign-in to the app, which returned it to the browser as a blank page, so the connection had to be made twice. Repo Autopilot now goes to GitHub through a short page that moves on by itself, which the browser keeps.
+- **Connecting in one round on Android.** With the GitHub app installed, Android handed the GitHub sign-in to the app, which returned it to the browser as a blank page, so the connection had to be made twice. Repo Autopilot now goes to GitHub through a short page that moves on by itself, which the browser keeps. Signed in to the dashboard in the same browser, connecting needs no GitHub sign-in at all: **Allow** connects the app with the tokens of that sign-in.
 - **A clearer connect page.** **Allow and sign in with GitHub** shows at once that it was clicked, and a second click no longer ends on an expired page.
 - **Logs for troubleshooting the connector.** Each MCP message and each step of connecting an app leaves one line in the Worker's log, without codes, tokens or tool arguments.
 - **Codex findings show when they are fixed.** A finding is marked ✅ once Codex has given the current code a 👍, and 🔄 while changed code waits for Codex.

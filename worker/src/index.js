@@ -5,9 +5,18 @@ import {handle} from './app.js';
 // One SQLite-backed Durable Object holds sessions, conversations and locks for the single owner.
 export class ChatStore extends DurableObject {
   constructor(ctx,env) {super(ctx,env);this.logic=new ChatStoreLogic(ctx.storage.sql);}
-  createSession(session) {return this.logic.createSession(session);}
+  async createSession(session) {this.logic.createSession(session);await this.scheduleSessionPurge();}
+  // Wakes when the next session holding GitHub tokens expires, to remove it.
+  async scheduleSessionPurge() {
+    const next=this.logic.nextSessionExpiry();
+    if(next===null) return;
+    const current=await this.ctx.storage.getAlarm();
+    if(current===null||current>next) await this.ctx.storage.setAlarm(next);
+  }
+  async alarm() {this.logic.purgeSessions();await this.scheduleSessionPurge();}
   getSession(hash) {return this.logic.getSession(hash);}
   deleteSession(hash) {return this.logic.deleteSession(hash);}
+  takeSessionGithub(hash) {return this.logic.takeSessionGithub(hash);}
   acquireLock(name,owner,ms) {return this.logic.acquireLock(name,owner,ms);}
   releaseLock(name,owner) {return this.logic.releaseLock(name,owner);}
   listConversations(repository,options) {return this.logic.listConversations(repository,options);}
