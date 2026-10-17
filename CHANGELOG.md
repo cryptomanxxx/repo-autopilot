@@ -9,6 +9,7 @@
 - **What a pull request changes, in the chat.** `pull_request_files` lists the changed files with their added and removed lines and shows the diffs, in any repository Repo Autopilot reads.
 - **The Repo Autopilot robot as the icon.** The Worker serves the robot as its favicon and app icon, and names it in the MCP server information (`serverInfo.icons`), for chat apps that show a connector's icon.
 - **Workflow runs in the chat.** `list_workflow_runs` lists a repository's recent GitHub Actions runs, optionally only failed ones or one branch.
+- **Load a pull request's details in the card.** Rows the list did not load in full show whether the pull request is open, merged or closed, and **Load details** loads it in place.
 - **Choose the repository in the card.** The card has a repository picker, and **Pin** where the chat app can keep the card in view.
 - **Links to the dashboard.** The pull request tools link each pull request to your Repo Autopilot dashboard as well as to GitHub; the link opens its repository and the pull request, where it can be merged.
 - **Connecting in one round on Android.** With the GitHub app installed, Android handed the GitHub sign-in to the app, which returned it to the browser as a blank page, so the connection had to be made twice. Repo Autopilot now goes to GitHub through a short page that moves on by itself, which the browser keeps. Signed in to the dashboard in the same browser, connecting needs no GitHub sign-in at all: **Allow** connects the app with the tokens of that sign-in.
