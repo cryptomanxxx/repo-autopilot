@@ -14,3 +14,11 @@ This workflow uses `blablador/alias-code`. It installs OpenCode in an Ubuntu run
 GitHub runner usage and Blablador availability still apply. OpenCode can execute commands, so only submit trusted tasks and always review the resulting changes. No automatic merging is enabled.
 
 References: https://sdlaml.pages.jsc.fz-juelich.de/ai/guides/blablador_opencode/ and https://opencode.ai/docs/cli/.
+
+## Security boundary (initial version)
+
+The OpenCode job has read-only repository permissions and receives the Blablador key, but **never receives a GitHub write token**. It creates a bounded patch artifact after local project checks. A separate fresh GitHub Actions job downloads the patch, checks that it is based on the same default-branch commit, independently validates protected paths and file types, then creates a pull request with short-lived write credentials. No code from the proposed repository edits is executed in the privileged publishing job, and no automatic merge occurs.
+
+For safety, manual dispatch of this experimental workflow is currently restricted to the **personal repository owner**. Organization-owned forks are not yet supported by this workflow, even though the dashboard itself supports organization forks. A repository variable such as `AUTOPILOT_TASK_USER` is not an adequate workflow authorization boundary because collaborators with write access may change it. An organization-compatible version must introduce a separately protected approval or authorization policy.
+
+If the default branch changes during an agent run, the privileged publisher refuses the stale patch and the workflow must be rerun. OpenCode's installed package version is pinned to `1.19.3`.
