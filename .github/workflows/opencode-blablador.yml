@@ -19,6 +19,9 @@ jobs:
     if: github.event.repository.owner.type == 'User' && github.actor == github.repository_owner
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    # Configure a protected environment with required owner reviewers and
+    # deployment branches limited to the default branch before running.
+    environment: opencode-blablador
     permissions:
       contents: read
     outputs:
@@ -211,6 +214,19 @@ jobs:
             fi
           done < <(git diff --cached --name-only --no-renames -z)
           git diff --cached --check
+          total=0
+          while IFS= read -r -d '' path; do
+            size="$(git cat-file -s ":$path")"
+            if (( size > 1048576 )); then
+              echo "::error::Staged file exceeds 1 MiB: $path"
+              exit 1
+            fi
+            total=$((total + size))
+            if (( total > 5242880 )); then
+              echo "::error::Total staged output exceeds 5 MiB."
+              exit 1
+            fi
+          done < <(git diff --cached --diff-filter=ACMT --name-only --no-renames -z)
           if git diff --cached --quiet; then
             echo "::error::Patch made no changes."
             exit 1
