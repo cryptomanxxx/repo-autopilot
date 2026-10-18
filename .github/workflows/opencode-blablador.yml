@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 35
     # Configure a protected environment with required owner reviewers and
     # deployment branches limited to the default branch before running.
-    environment: opencode-blablador
+    environment: ai-agent-production
     permissions:
       contents: read
     outputs:
