@@ -4,7 +4,7 @@ Repo Autopilot has an experimental manual GitHub Actions coding workflow in `.gi
 
 ## Setup from Android
 
-1. Add the repository Actions secret `BLABLADOR_API_KEY` to `repo-autopilot`. Secrets in other repositories are not shared automatically.
+1. Add `BLABLADOR_API_KEY` directly as an **environment secret** under Settings → Environments → `ai-agent-production`. Do not create a repository-level copy. Configure required owner approval and allow only `main` before enabling the workflow.
 2. In GitHub repository Settings, enable the Actions option allowing GitHub Actions to create pull requests, if your policies permit it.
 3. Once this PR is merged, open Actions, select `OpenCode coding agent (Blablador)`, choose Run workflow, and enter a short coding task.
 4. Review any resulting PR and follow its CI and Codex feedback in the dashboard. Merge manually.
@@ -25,7 +25,7 @@ If the default branch changes during an agent run, the privileged publisher refu
 
 ## Required protected environment configuration (security-critical)
 
-**Do not run this workflow yet** until the environment is configured. In GitHub **Settings → Environments**, create `opencode-blablador`, restrict deployments to the repository's default branch only, and configure required reviewers to include the trusted repository owner (where the plan supports required reviewers). In Settings → Environments → opencode-blablador → Environment secrets, add `BLABLADOR_API_KEY` there. **Delete the repository-level `BLABLADOR_API_KEY` secret** afterwards; otherwise another write collaborator can dispatch a modified workflow on another ref and read the repository secret without passing the environment gate. A repository-level secret is not protected by declaring an environment on this job. The existing `HIP_API_KEY` is not used by this workflow; restrict it separately if collaborators are not trusted.
+**Do not run this workflow yet** until the environment is configured. In GitHub **Settings → Environments**, create `ai-agent-production`, restrict deployments to the repository's default branch only, and configure required reviewers to include the trusted repository owner (where the plan supports required reviewers). In Settings → Environments → ai-agent-production → Environment secrets, add `BLABLADOR_API_KEY` there. **Delete the repository-level `BLABLADOR_API_KEY` secret** afterwards; otherwise another write collaborator can dispatch a modified workflow on another ref and read the repository secret without passing the environment gate. A repository-level secret is not protected by declaring an environment on this job. The existing `HIP_API_KEY` is not used by this workflow; restrict it separately if collaborators are not trusted.
 
 If your repository plan does not support protected environment reviewers or branch restrictions, do not treat this as an owner-only security boundary; instead use a separate tightly controlled private execution repository or another trusted access mechanism. The workflow still contains an in-file actor guard, but that alone is not authorization against writers who can change workflow YAML on branches.
 
