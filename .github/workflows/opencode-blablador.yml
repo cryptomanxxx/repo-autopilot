@@ -20,9 +20,8 @@ jobs:
   opencode:
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    if: github.actor == github.repository_owner
+    if: github.actor == (vars.AUTOPILOT_TASK_USER != '' && vars.AUTOPILOT_TASK_USER || github.repository_owner)
     env:
-      GH_TOKEN: ${{ github.token }}
       TASK: ${{ inputs.task }}
     steps:
       - name: Checkout default branch
@@ -30,6 +29,7 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -51,7 +51,7 @@ jobs:
           fi
 
       - name: Install OpenCode
-        run: npm install --global opencode-ai
+        run: npm install --global opencode-ai@1.19.3
 
       - name: Configure OpenCode for Blablador
         shell: bash
@@ -92,7 +92,7 @@ jobs:
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/opencode-task.txt" <<'TXT'
-          You are working in Repo Autopilot. Implement the user's coding request in this checked-out repository. Do not merge, push, create a pull request, change GitHub workflow files, touch credentials or modify security-sensitive configuration. Do not run remote scripts. Prefer a minimal scoped change. The enclosing GitHub Actions job will run tests and open a pull request for human review.
+          You are working in Repo Autopilot. Implement the user's coding request in this checked-out repository. Do not create local commits, merge, push, create a pull request, change GitHub workflow files, touch credentials or modify security-sensitive configuration. Do not run remote scripts. Prefer a minimal scoped change. The enclosing GitHub Actions job will run tests and open a pull request for human review.
           TXT
           printf '\nUser request:\n%s\n' "$TASK" >> "$RUNNER_TEMP/opencode-task.txt"
           opencode run --model blablador/alias-code "$(cat "$RUNNER_TEMP/opencode-task.txt")"
@@ -101,22 +101,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "$(git status --porcelain)" ]]; then
+          # Restore the original checkout HEAD if the agent committed locally.
+          # This preserves tracked edits while avoiding unreviewed parent commits.
+          base="${{ github.sha }}"
+          git reset --mixed "$base"
+          if [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
             echo "::notice::OpenCode made no changes; no PR will be created."
             echo "changed=false" >> "$GITHUB_ENV"
             exit 0
           fi
-          # OpenCode is an untrusted editing agent. Never upload credential or workflow changes.
-          if git status --porcelain --untracked-files=all | sed -E 's/^...//' | grep -E '(^\.github/|(^|/)(\.env[^/]*|\.npmrc|\.git|.*(secret|credential|private.key))($|/))'; then
-            echo "::error::Agent touched a protected path; refusing to create a PR."
-            exit 1
-          fi
           npm run check
           npm test
-          echo "changed=true" >> "$GITHUB_ENV"
+          # Stage only after tests, then validate every staged path including both
+          # sides of renames ( --no-renames ) and generated files from test scripts.
+          git add -A
+          while IFS= read -r -d '' path; do
+            if [[ "$path" == .github/* || "$path" == .git/* ||
+                  "$path" == .env* || "$path" == */.env* ||
+                  "$path" == .npmrc || "$path" == */.npmrc ||
+                  "$path" == *secret* || "$path" == *credential* ||
+                  "$path" == *private.key* ]]; then
+              echo "::error::Protected path changed: $path"
+              exit 1
+            fi
+          done < <(git diff --cached --name-only --no-renames -z "$base")
+          if git diff --cached --quiet "$base"; then
+            echo "changed=false" >> "$GITHUB_ENV"
+          else
+            echo "changed=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Push branch and open pull request
         if: env.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -126,6 +144,6 @@ jobs:
           git switch -c "$branch"
           git add -A
           git commit -m "feat: implement OpenCode agent task"
-          git push origin "$branch"
+          git -c http.extraheader="AUTHORIZATION: basic $(printf "x-access-token:%s" "$GH_TOKEN" | base64 -w0)" push origin "$branch"
           printf '%s\n\n%s\n\n%s\n'             'Created by OpenCode with Helmholtz Blablador via a manually triggered GitHub Actions run.'             "Requested task: $TASK"             'Tests: npm run check and npm test. Human review required; no automatic merge.' > "$RUNNER_TEMP/pr-body.txt"
           gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" --title "OpenCode: proposed coding change" --body-file "$RUNNER_TEMP/pr-body.txt"
