@@ -1,0 +1,131 @@
+name: OpenCode coding agent (Blablador)
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Coding task for OpenCode (creates a PR; never merges)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: opencode-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  opencode:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    if: github.actor == github.repository_owner
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TASK: ${{ inputs.task }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check prerequisites
+        env:
+          BLABLADOR_API_KEY: ${{ secrets.BLABLADOR_API_KEY }}
+        shell: bash
+        run: |
+          if [[ -z "$BLABLADOR_API_KEY" ]]; then
+            echo "::error::Set the BLABLADOR_API_KEY repository Actions secret before running this workflow."
+            exit 1
+          fi
+          if [[ -z "$TASK" || ${#TASK} -gt 4000 ]]; then
+            echo "::error::Task must be between 1 and 4000 characters."
+            exit 1
+          fi
+
+      - name: Install OpenCode
+        run: npm install --global opencode-ai
+
+      - name: Configure OpenCode for Blablador
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.config/opencode"
+          cat > "$HOME/.config/opencode/opencode.json" <<'JSON'
+          {
+            "$schema": "https://opencode.ai/config.json",
+            "model": "blablador/alias-code",
+            "small_model": "blablador/alias-fast",
+            "provider": {
+              "blablador": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "Helmholtz Blablador",
+                "options": {
+                  "baseURL": "https://api.blablador.fz-juelich.de/v1",
+                  "apiKey": "{env:BLABLADOR_API_KEY}"
+                },
+                "models": {
+                  "alias-code": {
+                    "name": "Blablador Code",
+                    "limit": {"context": 98304, "output": 32768}
+                  },
+                  "alias-fast": {
+                    "name": "Blablador Fast",
+                    "limit": {"context": 98304, "output": 32768}
+                  }
+                }
+              }
+            }
+          }
+          JSON
+          chmod 600 "$HOME/.config/opencode/opencode.json"
+
+      - name: Run coding agent
+        env:
+          BLABLADOR_API_KEY: ${{ secrets.BLABLADOR_API_KEY }}
+        shell: bash
+        run: |
+          cat > "$RUNNER_TEMP/opencode-task.txt" <<'TXT'
+          You are working in Repo Autopilot. Implement the user's coding request in this checked-out repository. Do not merge, push, create a pull request, change GitHub workflow files, touch credentials or modify security-sensitive configuration. Do not run remote scripts. Prefer a minimal scoped change. The enclosing GitHub Actions job will run tests and open a pull request for human review.
+          TXT
+          printf '\nUser request:\n%s\n' "$TASK" >> "$RUNNER_TEMP/opencode-task.txt"
+          opencode run --model blablador/alias-code "$(cat "$RUNNER_TEMP/opencode-task.txt")"
+
+      - name: Validate changed files and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "::notice::OpenCode made no changes; no PR will be created."
+            echo "changed=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          # OpenCode is an untrusted editing agent. Never upload credential or workflow changes.
+          if git status --porcelain --untracked-files=all | sed -E 's/^...//' | grep -E '(^\.github/|(^|/)(\.env[^/]*|\.npmrc|\.git|.*(secret|credential|private.key))($|/))'; then
+            echo "::error::Agent touched a protected path; refusing to create a PR."
+            exit 1
+          fi
+          npm run check
+          npm test
+          echo "changed=true" >> "$GITHUB_ENV"
+
+      - name: Push branch and open pull request
+        if: env.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="autopilot/opencode-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A
+          git commit -m "feat: implement OpenCode agent task"
+          git push origin "$branch"
+          printf '%s\n\n%s\n\n%s\n'             'Created by OpenCode with Helmholtz Blablador via a manually triggered GitHub Actions run.'             "Requested task: $TASK"             'Tests: npm run check and npm test. Human review required; no automatic merge.' > "$RUNNER_TEMP/pr-body.txt"
+          gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" --title "OpenCode: proposed coding change" --body-file "$RUNNER_TEMP/pr-body.txt"
