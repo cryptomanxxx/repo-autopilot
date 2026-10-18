@@ -22,3 +22,11 @@ The OpenCode job has read-only repository permissions and receives the Blablador
 For safety, manual dispatch of this experimental workflow is currently restricted to the **personal repository owner**. Organization-owned forks are not yet supported by this workflow, even though the dashboard itself supports organization forks. A repository variable such as `AUTOPILOT_TASK_USER` is not an adequate workflow authorization boundary because collaborators with write access may change it. An organization-compatible version must introduce a separately protected approval or authorization policy.
 
 If the default branch changes during an agent run, the privileged publisher refuses the stale patch and the workflow must be rerun. OpenCode's installed package version is pinned to `1.19.3`.
+
+## Required protected environment configuration (security-critical)
+
+**Do not run this workflow yet** until the environment is configured. In GitHub **Settings → Environments**, create `opencode-blablador`, restrict deployments to the repository's default branch only, and configure required reviewers to include the trusted repository owner (where the plan supports required reviewers). In Settings → Environments → opencode-blablador → Environment secrets, add `BLABLADOR_API_KEY` there. **Delete the repository-level `BLABLADOR_API_KEY` secret** afterwards; otherwise another write collaborator can dispatch a modified workflow on another ref and read the repository secret without passing the environment gate. A repository-level secret is not protected by declaring an environment on this job. The existing `HIP_API_KEY` is not used by this workflow; restrict it separately if collaborators are not trusted.
+
+If your repository plan does not support protected environment reviewers or branch restrictions, do not treat this as an owner-only security boundary; instead use a separate tightly controlled private execution repository or another trusted access mechanism. The workflow still contains an in-file actor guard, but that alone is not authorization against writers who can change workflow YAML on branches.
+
+The publisher validates that each staged added/modified blob is at most 1 MiB and the total is at most 5 MiB, after applying the patch and before obtaining its GitHub write token.
