@@ -5,7 +5,7 @@ Repo Autopilot has an experimental manual GitHub Actions coding workflow in `.gi
 ## Setup from Android
 
 1. Deploy `repo-autopilot-ai-gateway` (see its README) and store `BLABLADOR_API_KEY` and `GATEWAY_LEASE_SIGNING_KEY` **only as Cloudflare Worker secrets**. Delete any `BLABLADOR_API_KEY` secret from GitHub (repository and environment level).
-   Under Settings → Environments → `ai-agent-production`, allow only `main` (and add the owner as a required reviewer if your plan supports it; see *Plan constraints* below), and add the **environment variable** `AI_GATEWAY_URL` with the gateway's https origin (for example `https://repo-autopilot-ai-gateway.<account>.workers.dev`, no trailing path).
+   Under Settings → Environments → `ai-agent-production`, allow only `main` and add yourself as a **required reviewer** (available on every plan for public repositories), and add the **environment variable** `AI_GATEWAY_URL` with the gateway's https origin (for example `https://repo-autopilot-ai-gateway.<account>.workers.dev`, no trailing path).
 2. In GitHub repository Settings, enable the Actions option allowing GitHub Actions to create pull requests, if your policies permit it.
 3. Once this PR is merged, open Actions, select `OpenCode coding agent (Blablador)`, choose Run workflow, and enter a short coding task.
 4. Review any resulting PR and follow its CI and Codex feedback in the dashboard. Merge manually.
@@ -19,15 +19,19 @@ References: https://sdlaml.pages.jsc.fz-juelich.de/ai/guides/blablador_opencode/
 ## Security boundary
 
 ```
-lease job (id-token: write, ai-agent-production) ──OIDC JWT──► gateway /v1/session ──► 30-min lease (100 calls)
-propose job (no id-token) : OpenCode ──lease──► gateway /v1/chat/completions ──BLABLADOR_API_KEY (Cloudflare secret)──► Blablador
-publish job (contents/pull-requests: write) : validates the patch and opens a PR
+propose job (id-token: write, ai-agent-production):
+  GitHub OIDC JWT ──► gateway /v1/session ──► 30-min lease (100 calls)
+  OpenCode ──lease──► gateway /v1/chat/completions ──BLABLADOR_API_KEY (Cloudflare secret)──► Blablador
+publish job (contents/pull-requests: write): validates the patch and opens a PR
 ```
+
+**This repository is public.** Its Actions logs and artifacts can be read by anyone, which shapes the design below.
 
 - **Provider key:** exists only in Cloudflare Worker secrets. Neither GitHub nor OpenCode ever sees it.
 - **Identity:** the gateway accepts only a GitHub-signed OIDC token from this repository's `opencode-blablador.yml` on `main`, dispatched by the owner via `workflow_dispatch` in the `ai-agent-production` environment, first run attempt only. Runs from other refs, reruns and other actors get no lease.
-- **OIDC isolation:** only the small `lease` job has `id-token: write`, and it runs no repository or agent code. OpenCode, `npm run check` and `npm test` run in the `propose` job, which has neither the OIDC permission nor the environment, so agent-modified scripts cannot mint GitHub OIDC tokens.
-- **Lease:** OpenCode receives a lease that is valid only at the gateway, for 30 minutes and at most 100 model calls, with one in-flight generation. It is handed from the `lease` job to the `propose` job as a one-day artifact, so it never appears in logs. Anyone with read access to this private repository could download that artifact while the lease is valid; on a personal repository without read-only collaborators this is only the owner.
+- **Lease:** OpenCode receives a lease that is valid only at the gateway, for 30 minutes and at most 100 model calls, with one in-flight generation. It is obtained and masked inside the `propose` job and never leaves that runner as a job output or artifact, since both would be public here.
+- **OIDC in the agent job:** because the lease is obtained in the same job, agent-controlled code (OpenCode, npm scripts, tests) could request another GitHub OIDC token for this run. That gains nothing at the gateway, which returns the same lease for the same run. **Do not let any other system (cloud provider, registry, etc.) trust this repository's OIDC identity.**
+- **Leak checks:** before the patch artifact is uploaded, and again in the publisher, any content or file name shaped like a gateway lease is rejected. This catches accidents. It cannot stop a deliberately malicious agent that sends the lease over the network, which is why the lease is short-lived and capped.
 - **Publishing:** the OpenCode job has read-only repository permissions and **never receives a GitHub write token**. It creates a bounded patch artifact after local project checks. A separate fresh job downloads the patch and checks that it is based on the same default-branch commit. It then independently validates protected paths, file types and sizes, and rejects any staged content shaped like a gateway lease. Only then does it create a pull request with short-lived write credentials. No code from the proposed edits runs in the privileged publishing job, and nothing is merged automatically.
 
 For safety, manual dispatch is restricted to the **personal repository owner**, both by the in-file actor guard and by the gateway's identity check (which cannot be edited from this repository). Organization-owned forks are not supported by this workflow.
@@ -36,9 +40,9 @@ If the default branch changes during an agent run, the publisher refuses the sta
 
 ## Required environment configuration (security-critical)
 
-**Do not run this workflow** until the gateway is deployed and the environment is configured. In GitHub **Settings → Environments**, create `ai-agent-production`, set **Deployment branches and tags** to the default branch only, and add the `AI_GATEWAY_URL` environment variable. Environment variables can only be changed by repository admins. The existing `HIP_API_KEY` is not used by this workflow; HIP will be added to the gateway later, not to GitHub.
+**Do not run this workflow** until the gateway is deployed and the environment is configured. In GitHub **Settings → Environments**, create `ai-agent-production`, set **Deployment branches and tags** to the default branch only, and add the `AI_GATEWAY_URL` environment variable. Environment variables can only be changed by repository admins. Never store a provider key or other secret in this repository: its logs and artifacts are public. The existing `HIP_API_KEY` is not used by this workflow; HIP will be added to the gateway later, not to GitHub.
 
-**Plan constraints.** For private repositories, environments and deployment-branch restrictions need GitHub Pro, Team or Enterprise. *Required reviewers* need GitHub Enterprise; on Free, Pro and Team they are available only for public repositories. Add the owner as a required reviewer where your plan offers it, but the workflow does not rely on it:
+**Approval.** Add yourself as a required reviewer on `ai-agent-production` so that every run waits for your approval. For public repositories this works on every GitHub plan. The workflow does not rely on it alone:
 
 - **Who can use the model** is decided by the gateway, not by GitHub settings. It issues a lease only when GitHub's signed OIDC token shows the owner's account ID as the dispatching actor, `workflow_dispatch`, `refs/heads/main`, this exact workflow file on `main`, the `ai-agent-production` environment and the first run attempt. A collaborator who dispatches, or who edits the workflow on another branch, gets no lease. These checks live in the gateway's code and cannot be changed from this repository.
 - **What reaches `main`** stays protected by the publisher job, which only opens a pull request. Protect `main` with a branch rule that requires a pull request, so that changes to this workflow are also reviewed before they run.

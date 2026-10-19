@@ -13,89 +13,31 @@ on:
 # lease; the gateway enforces provider-wide concurrency and rate limits.
 
 jobs:
-  lease:
+  propose:
     # This initial backend supports owner-operated personal repositories only.
     # An Actions repository variable is not a safe authorization boundary.
     if: github.event.repository.owner.type == 'User' && github.actor == github.repository_owner
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    # Configure a protected environment with required owner reviewers and
-    # deployment branches limited to the default branch before running.
-    # The gateway only issues leases to this environment's OIDC identity.
+    timeout-minutes: 35
+    # Configure this environment with required owner reviewers and deployment
+    # branches limited to the default branch before running. The gateway
+    # only issues leases to this environment's OIDC identity.
     environment: ai-agent-production
     permissions:
+      contents: read
       # Only to prove this run's identity to the AI gateway. No provider key
       # is ever stored in GitHub; it lives in the gateway's Cloudflare secrets.
-      # This job runs no repository or agent code, so nothing untrusted can
-      # reach the OIDC token request credentials.
+      # The lease is obtained in this same job on purpose: this repository is
+      # public, so a lease handed between jobs via an artifact or output would
+      # be downloadable or visible to anyone. Agent-controlled code in this job
+      # could request another OIDC token, but the gateway returns the same
+      # lease for the same run, and nothing else trusts this OIDC identity.
       id-token: write
-    outputs:
-      gateway_url: ${{ steps.exchange.outputs.gateway_url }}
-    steps:
-      - name: Exchange GitHub OIDC for a short-lived gateway lease
-        id: exchange
-        env:
-          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! "$AI_GATEWAY_URL" =~ ^https://[A-Za-z0-9.-]+$ ]]; then
-            echo "::error::Set the AI_GATEWAY_URL variable on the ai-agent-production environment (https origin, no path)."
-            exit 1
-          fi
-          jwt="$(curl -sSf --max-time 30 \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=repo-autopilot-ai-gateway" | jq -er .value)"
-          echo "::add-mask::$jwt"
-          lease="$(curl -sSf --max-time 30 --proto '=https' -X POST \
-            -H "Authorization: Bearer $jwt" \
-            "$AI_GATEWAY_URL/v1/session" | jq -er .access_token)"
-          if [[ ! "$lease" =~ ^g1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$ ]]; then
-            echo "::error::Gateway returned an unexpected lease format."
-            exit 1
-          fi
-          echo "::add-mask::$lease"
-          # Handed over as a file, never as a job output or env value, which
-          # GitHub would print in the next job's log. Valid 30 min / 100 calls.
-          mkdir -p "$RUNNER_TEMP/lease"
-          umask 077
-          printf '%s' "$lease" > "$RUNNER_TEMP/lease/gateway-lease"
-          echo "gateway_url=$AI_GATEWAY_URL" >> "$GITHUB_OUTPUT"
-
-      - name: Hand the lease to the agent job
-        uses: actions/upload-artifact@v4
-        with:
-          name: gateway-lease
-          path: ${{ runner.temp }}/lease/gateway-lease
-          if-no-files-found: error
-          retention-days: 1
-
-  propose:
-    needs: lease
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    # No id-token permission and no environment: agent-controlled code
-    # (OpenCode, npm scripts, tests) runs only in this job.
-    permissions:
-      contents: read
     outputs:
       changed: ${{ steps.patch.outputs.changed }}
     env:
       TASK: ${{ inputs.task }}
     steps:
-      - name: Receive the gateway lease
-        uses: actions/download-artifact@v4
-        with:
-          name: gateway-lease
-          path: ${{ runner.temp }}
-
-      - name: Mask the gateway lease
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod 600 "$RUNNER_TEMP/gateway-lease"
-          echo "::add-mask::$(cat "$RUNNER_TEMP/gateway-lease")"
-
       - name: Checkout default branch without stored credentials
         uses: actions/checkout@v4
         with:
@@ -115,9 +57,15 @@ jobs:
           node-version: '22'
 
       - name: Check prerequisites
+        env:
+          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ ! "$AI_GATEWAY_URL" =~ ^https://[A-Za-z0-9.-]+$ ]]; then
+            echo "::error::Set the AI_GATEWAY_URL variable on the ai-agent-production environment (https origin, no path)."
+            exit 1
+          fi
           if [[ -z "$TASK" || ${#TASK} -gt 4000 ]]; then
             echo "::error::Task must be between 1 and 4000 characters."
             exit 1
@@ -126,9 +74,31 @@ jobs:
       - name: Install pinned OpenCode
         run: npm install --global opencode-ai@1.19.3
 
+      - name: Exchange GitHub OIDC for a short-lived gateway lease
+        env:
+          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jwt="$(curl -sSf --max-time 30 \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=repo-autopilot-ai-gateway" | jq -er .value)"
+          echo "::add-mask::$jwt"
+          lease="$(curl -sSf --max-time 30 --proto '=https' -X POST \
+            -H "Authorization: Bearer $jwt" \
+            "$AI_GATEWAY_URL/v1/session" | jq -er .access_token)"
+          if [[ ! "$lease" =~ ^g1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$ ]]; then
+            echo "::error::Gateway returned an unexpected lease format."
+            exit 1
+          fi
+          # Masked before anything could print it: this repository's logs are public.
+          echo "::add-mask::$lease"
+          umask 077
+          printf '%s' "$lease" > "$RUNNER_TEMP/gateway-lease"
+
       - name: Configure OpenCode for the AI gateway
         env:
-          AI_GATEWAY_URL: ${{ needs.lease.outputs.gateway_url }}
+          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
         shell: bash
         run: |
           mkdir -p "$HOME/.config/opencode"
@@ -168,12 +138,11 @@ jobs:
           You are working in Repo Autopilot. Implement the user's coding request in this checked-out repository. Do not create local commits, merge, push, create a pull request, modify GitHub workflow files, touch credentials or alter security-sensitive configuration. Do not run remote scripts. Prefer minimal changes. The enclosing workflow validates, tests and opens a PR for human review.
           TXT
           printf '\nUser request:\n%s\n' "$TASK" >> "$RUNNER_TEMP/opencode-task.txt"
-          # The lease was minted by the previous job; queueing eats into its
-          # 30 minutes. Refuse to start with too little left, and stop the
-          # agent a minute before the gateway would start rejecting it.
+          # Refuse to start with too little of the 30-minute lease left, and
+          # stop the agent a minute before the gateway would reject it.
           remaining="$(node -e 'const t=require("fs").readFileSync(process.argv[1],"utf8").split(".")[1];console.log(JSON.parse(Buffer.from(t,"base64url")).exp-Math.floor(Date.now()/1000))' "$RUNNER_TEMP/gateway-lease")"
           if (( remaining < 600 )); then
-            echo "::error::Gateway lease has only ${remaining}s left (runner queue delay). Dispatch the workflow again."
+            echo "::error::Gateway lease has only ${remaining}s left. Dispatch the workflow again."
             exit 1
           fi
           # The agent sees only the expiring gateway lease, never a provider key.
@@ -224,6 +193,21 @@ jobs:
             echo "::error::Invalid or oversized patch."
             exit 1
           fi
+          # The patch artifact is downloadable by anyone in a public repository.
+          # Catch an accidentally included lease before upload by scanning the
+          # staged blobs (binary files are compressed inside the patch) and
+          # the staged paths. The publisher repeats both checks.
+          lease_pattern='g1\.[A-Za-z0-9_-]{30,400}\.[A-Za-z0-9_-]{43}'
+          if git grep --cached -a -q -E "$lease_pattern"; then
+            echo "::error::Proposal contains a gateway lease token."
+            exit 1
+          fi
+          while IFS= read -r -d '' path; do
+            if [[ "$path" =~ $lease_pattern || "${path//\//.}" =~ $lease_pattern ]]; then
+              echo "::error::Proposal path contains a gateway lease token."
+              exit 1
+            fi
+          done < <(git diff --cached --name-only --no-renames -z "$OPENCODE_BASE_SHA")
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload untrusted patch for isolated publisher
