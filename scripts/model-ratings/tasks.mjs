@@ -44,8 +44,12 @@ const script=code=>code.replace(/^\s*export\s+(default\s+)?/gm,'');
 
 // The SEARCH/REPLACE edits of an answer, read by the agent chat's own parser, so an answer passes
 // only if the chat could apply it too: a malformed or unmatched marker makes the answer invalid.
-export function readEdits(answer) {
-  try {return parseEdits(visible(answer)).edits;} catch {return null;}
+// A block may name a file only if it names the task's file, as the chat would look it up.
+export function readEdits(answer,name) {
+  try {
+    const {edits}=parseEdits(visible(answer));
+    return edits.every(edit=>edit.path===null||edit.path===name)?edits:null;
+  } catch {return null;}
 }
 // Applies edits to a file: every SEARCH text must occur exactly once at that point. Null if one does not.
 export function applyEdits(file,edits) {
@@ -149,7 +153,7 @@ Change the timeout to 10000 ms and add the entry region: 'eu-west-1' directly af
 (the new lines)
 >>>>>>> REPLACE`,
     grade:answer=>{
-      const list=readEdits(answer);
+      const list=readEdits(answer,'config.js');
       return list?.length===1&&edits(CONFIG,list,[['JSON.stringify(config)',JSON.stringify({retries:3,timeoutMs:10000,region:'eu-west-1',verbose:false})]]);
     }
   },
@@ -252,7 +256,7 @@ Make two changes: raise maxUsers to 25, and make describe() also mention the pro
 >>>>>>> REPLACE`,
     grade:answer=>{
       // Two blocks, each making exactly one of the changes on its own.
-      const list=readEdits(answer);
+      const list=readEdits(answer,'plans.js');
       return list?.length===2&&edits(PLANS,list,planChecks(true,true))&&
         (edits(PLANS,[list[0]],planChecks(true,false))&&edits(PLANS,[list[1]],planChecks(false,true))||
          edits(PLANS,[list[0]],planChecks(false,true))&&edits(PLANS,[list[1]],planChecks(true,false)));

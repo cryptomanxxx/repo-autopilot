@@ -52,6 +52,8 @@ test('every task passes its reference answer and fails a wrong one',()=>{
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('return `${plan.name}: ${plan.users} users, ${plan.projects} projects`;','return "Team: 4 users, 2 projects";')),false,'a describe() that ignores its argument');
   assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('if (Array.isArray(a) !== Array.isArray(b)) return false;','if (Array.isArray(a) && !Array.isArray(b)) return false;')),false,'an object equal to an array');
   assert.equal(task('edit-multi').grade(GOOD['edit-multi']+'\n\n<<<<<<< SEARCH\n  maxProjects: 5,\n'),false,'an incomplete extra block');
+  assert.equal(task('edit').grade(GOOD.edit.replace('<<<<<<< SEARCH','<<<<<<< SEARCH wrong.js')),false,'a block naming another file');
+  assert.equal(task('edit').grade(GOOD.edit.replace('<<<<<<< SEARCH','<<<<<<< SEARCH config.js')),true,'a block naming the task file');
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace(/>>>>>>> REPLACE$/,'>>>>>>> REPLACE junk')),false,'a malformed closing marker');
   assert.equal(task('implement-csv').grade(GOOD['implement-csv'].replace('      if (field.includes(\'"\')) return null;\n','')),false,'a quote inside an unquoted field');
   assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('  if (Array.isArray(a) !== Array.isArray(b)) return false;','  if (Array.isArray(a) !== Array.isArray(b)) return false;\n  if (Array.isArray(a)) return a.length === b.length && a.every((value, index) => deepEqual(value, b[index]));')),false,'arrays with extra properties');
