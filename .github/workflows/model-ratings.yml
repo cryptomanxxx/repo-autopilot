@@ -163,6 +163,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Only to start CI on the new branch (below).
+      actions: write
     steps:
       - name: Clean checkout without persisted credentials
         uses: actions/checkout@v4
@@ -205,3 +207,6 @@ jobs:
           git push origin "$branch"
           printf '\n%s\n' 'Created by the Model ratings workflow. Merging deploys the agent chat with these ratings.' >> "$RUNNER_TEMP/pr-body.md"
           gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" --title "Model ratings: $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/pr-body.md"
+          # A pull request opened with GITHUB_TOKEN starts no pull_request workflows, so CI is
+          # started here; its check on the branch's commit is the one the pull request needs.
+          gh workflow run ci.yml --ref "$branch"
