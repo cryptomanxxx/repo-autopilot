@@ -51,6 +51,10 @@ test('every task passes its reference answer and fails a wrong one',()=>{
   assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('  const keys = Object.keys(a);','  if (Array.isArray(a)) return a.every((value, index) => deepEqual(value, b[index]));\n  const keys = Object.keys(a);')),false,'arrays of different lengths');
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('return `${plan.name}: ${plan.users} users, ${plan.projects} projects`;','return "Team: 4 users, 2 projects";')),false,'a describe() that ignores its argument');
   assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('if (Array.isArray(a) !== Array.isArray(b)) return false;','if (Array.isArray(a) && !Array.isArray(b)) return false;')),false,'an object equal to an array');
+  assert.equal(task('edit-multi').grade(GOOD['edit-multi']+'\n\n<<<<<<< SEARCH\n  maxProjects: 5,\n'),false,'an incomplete extra block');
+  assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace(/>>>>>>> REPLACE$/,'>>>>>>> REPLACE junk')),false,'a malformed closing marker');
+  assert.equal(task('implement-csv').grade(GOOD['implement-csv'].replace('      if (field.includes(\'"\')) return null;\n','')),false,'a quote inside an unquoted field');
+  assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('  if (Array.isArray(a) !== Array.isArray(b)) return false;','  if (Array.isArray(a) !== Array.isArray(b)) return false;\n  if (Array.isArray(a)) return a.length === b.length && a.every((value, index) => deepEqual(value, b[index]));')),false,'arrays with extra properties');
   assert.equal(task('edit').grade("<<<<<<< SEARCH\nexport const config = {\n  retries: 3,\n  timeoutMs: 5000,\n=======\nconst config = {\n  retries: 3,\n  timeoutMs: 10000,\n  region: 'eu-west-1',\n>>>>>>> REPLACE"),false,'an edit that drops the export');
   assert.equal(task('implement-csv').grade(GOOD['implement-csv'].replace('      if (i === line.length) return fields;\n      if (line[i] !== ",") return null;\n      i++;','      if (i === line.length) return fields;\n      if (line[i] !== ",") return null;\n      i++;\n      if (i === line.length) return fields;')),false,'a trailing empty field after a quoted one');
 });
@@ -136,7 +140,7 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     writeFileSync(join(dir,'lease'),lease);
     const current={...empty(),models:{'hip:old':{stars:2,passed:4,total:9,seconds:3,testedAt:'2026-01-02'},'hip:down':{stars:3,passed:6,total:9,seconds:3,testedAt:'2026-01-01'}}};
     writeFileSync(join(dir,'current.json'),JSON.stringify(current));
-    const env={...process.env,AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,LEASE_FILE:join(dir,'lease'),
+    const env={...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,LEASE_FILE:join(dir,'lease'),
       OUT:join(dir,'answers.json'),RATINGS:join(dir,'current.json'),PROVIDER:'all',MAX_MODELS:'5'};
     const collected=await run(process.execPath,[script('collect.mjs')],{env});
     assert.doesNotMatch(collected.stdout+collected.stderr,/g1\./,'the lease is never printed');
@@ -146,10 +150,14 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     // tested; hip:old (tested most recently) does not fit in five.
     assert.deepEqual(JSON.parse(answers).models.map(m=>m.id),['blablador:good','hip:bad','blablador:later','blablador:third','hip:down']);
     assert.equal(calls.length,5*TASKS.length);
-    // A one-model run starts with the provider that has fewer rated models, so small runs alternate.
+    // Each run number starts the turns at another provider, then at another model of it, so that
+    // one-model runs alternate and an untested model that keeps failing does not block the rest.
     writeFileSync(join(dir,'one.json'),JSON.stringify({...empty(),models:{'blablador:good':current.models['hip:old']}}));
-    await run(process.execPath,[script('collect.mjs')],{env:{...env,RATINGS:join(dir,'one.json'),OUT:join(dir,'one-answers.json'),MAX_MODELS:'1'}});
-    assert.deepEqual(JSON.parse(readFileSync(join(dir,'one-answers.json'),'utf8')).models.map(m=>m.id),['hip:bad']);
+    const oneModel=async turn=>{
+      await run(process.execPath,[script('collect.mjs')],{env:{...env,GITHUB_RUN_NUMBER:String(turn),RATINGS:join(dir,'one.json'),OUT:join(dir,'one-answers.json'),MAX_MODELS:'1'}});
+      return JSON.parse(readFileSync(join(dir,'one-answers.json'),'utf8')).models.map(m=>m.id)[0];
+    };
+    assert.deepEqual([await oneModel(0),await oneModel(1),await oneModel(2)],['blablador:later','hip:bad','blablador:third']);
     // Once everything is rated, the oldest rating goes first, whichever provider it belongs to.
     const all=Object.fromEntries(['blablador:good','blablador:later','blablador:third','hip:bad','hip:down','hip:old'].map((id,i)=>[id,{...current.models['hip:old'],testedAt:`2026-0${i<3?5:4}-0${i+1}`}]));
     writeFileSync(join(dir,'all.json'),JSON.stringify({...empty(),models:all}));

@@ -11,7 +11,8 @@ if(!sandbox('const one=1;',[['one',1]])) throw new Error('The model code sandbox
 const collected=JSON.parse(readFileSync(answersPath,'utf8'));
 let ratings;
 try {ratings=validate(JSON.parse(readFileSync(currentPath,'utf8')));} catch {ratings=empty();}
-const testedAt=new Date().toISOString().slice(0,10);
+// To the second, so that a rerated model moves behind models rated earlier the same day.
+const testedAt=new Date().toISOString().slice(0,19)+'Z';
 for(const model of Array.isArray(collected?.models)?collected.models:[]) {
   if(!validId(model?.id)||!Array.isArray(model.answers)) continue;
   const answers=new Map(model.answers.map(a=>[a?.task,a]));

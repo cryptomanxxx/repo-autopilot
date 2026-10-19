@@ -41,7 +41,7 @@ export function validate(value) {
     if(total!==TASK_IDS.length||!Number.isInteger(passed)||passed<0||passed>total) fail('passed for '+id);
     if(seconds!==null&&(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<0||seconds>600)) fail('seconds for '+id);
     if(given!==stars(passed,seconds)) fail('stars for '+id);
-    if(typeof testedAt!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(testedAt)||Number.isNaN(Date.parse(testedAt))) fail('date for '+id);
+    if(typeof testedAt!=='string'||!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}Z)?$/.test(testedAt)||Number.isNaN(Date.parse(testedAt))) fail('date for '+id);
   }
   return value;
 }

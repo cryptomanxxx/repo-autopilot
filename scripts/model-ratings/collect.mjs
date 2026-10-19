@@ -28,12 +28,15 @@ for(const [provider,status] of Object.entries(catalog.providers||{})) console.lo
 const ordered=(catalog.data||[])
   .filter(row=>validId(row?.id)&&(PROVIDER==='all'||row.provider===PROVIDER))
   .sort((a,b)=>(previous[a.id]?.testedAt||'').localeCompare(previous[b.id]?.testedAt||'')||a.id.localeCompare(b.id));
-// The provider with the fewest rated models goes first, so that even runs of one model alternate.
-const ratedCount=provider=>Object.keys(previous).filter(id=>id.startsWith(provider+':')).length;
-const providers=[...new Set(ordered.map(row=>row.provider))].sort((a,b)=>ratedCount(a)-ratedCount(b)||a.localeCompare(b));
+// Each run starts the turns at a different provider and model (by the workflow's run number), so
+// that small runs alternate and an untested model that keeps failing does not block the others.
+const turn=Math.max(0,Number.parseInt(process.env.GITHUB_RUN_NUMBER,10)||0);
+const rotate=(list,by)=>list.length?[...list.slice(by%list.length),...list.slice(0,by%list.length)]:list;
+const providers=rotate([...new Set(ordered.map(row=>row.provider))].sort(),turn);
 function inTurn(rows) {
   const queues=new Map(providers.map(provider=>[provider,[]]));
   for(const row of rows) queues.get(row.provider).push(row);
+  for(const [provider,queue] of queues) queues.set(provider,rotate(queue,Math.floor(turn/providers.length)));
   const result=[];
   while([...queues.values()].some(queue=>queue.length))
     for(const queue of queues.values()) if(queue.length) result.push(queue.shift());

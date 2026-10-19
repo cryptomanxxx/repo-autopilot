@@ -3,6 +3,7 @@
 // only in sandbox() below, in the grading job, which holds no lease and no write token.
 import {spawnSync} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
+import {parseEdits} from '../../worker/src/agent.js';
 
 // With MODEL_SANDBOX=isolated (the workflow sets it) each run is also put behind an OS boundary: its
 // own network namespace with no network, as the unprivileged user nobody, so it can neither reach
@@ -41,23 +42,26 @@ const lastLine=answer=>codeBlock(answer).split('\n').map(line=>line.trim().repla
 // Model code is run as a plain script, so ES module exports become plain declarations.
 const script=code=>code.replace(/^\s*export\s+(default\s+)?/gm,'');
 
-// Applies SEARCH/REPLACE edits to a file: every SEARCH text must occur exactly once at that point.
-// Null if the answer has no edit, or one does not apply.
-export function applyEdits(file,answer) {
-  const blocks=[...visible(answer).replace(/\r\n/g,'\n').matchAll(/<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n?>>>>>>> REPLACE/g)];
-  if(!blocks.length) return null;
+// The SEARCH/REPLACE edits of an answer, read by the agent chat's own parser, so an answer passes
+// only if the chat could apply it too: a malformed or unmatched marker makes the answer invalid.
+export function readEdits(answer) {
+  try {return parseEdits(visible(answer)).edits;} catch {return null;}
+}
+// Applies edits to a file: every SEARCH text must occur exactly once at that point. Null if one does not.
+export function applyEdits(file,edits) {
+  if(!edits?.length) return null;
   let text=file;
-  for(const [,search,replace] of blocks) {
+  for(const {search,replace} of edits) {
     if(!search||text.split(search).length!==2) return null;
     text=text.replace(search,()=>replace);
   }
-  return {text,count:blocks.length};
+  return text;
 }
 // The edited file is run in the sandbox and checked by what it does, so formatting is free but every
 // token, string and line break that changes the meaning counts.
 // The file must still export what the original exports; script() then turns exports into declarations.
 const exportsOf=text=>[...text.matchAll(/^\s*export\s+(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/gm)].map(m=>m[1]).sort().join();
-const edits=(file,answer,checks)=>{const edited=applyEdits(file,answer);return !!edited&&exportsOf(edited.text)===exportsOf(file)&&sandbox(script(edited.text),checks);};
+const edits=(file,list,checks)=>{const edited=applyEdits(file,list);return edited!==null&&exportsOf(edited)===exportsOf(file)&&sandbox(script(edited),checks);};
 // What plans.js must do with only the first change, only the second, or both.
 const planChecks=(users,projects)=>[['JSON.stringify(limits)',JSON.stringify({maxUsers:users?25:10,maxProjects:5})],
   ['describe({name:"Team",users:4,projects:2})',projects?'Team: 4 users, 2 projects':'Team: 4 users'],
@@ -145,8 +149,8 @@ Change the timeout to 10000 ms and add the entry region: 'eu-west-1' directly af
 (the new lines)
 >>>>>>> REPLACE`,
     grade:answer=>{
-      const edited=applyEdits(CONFIG,answer);
-      return edited?.count===1&&edits(CONFIG,answer,[['JSON.stringify(config)',JSON.stringify({retries:3,timeoutMs:10000,region:'eu-west-1',verbose:false})]]);
+      const list=readEdits(answer);
+      return list?.length===1&&edits(CONFIG,list,[['JSON.stringify(config)',JSON.stringify({retries:3,timeoutMs:10000,region:'eu-west-1',verbose:false})]]);
     }
   },
   {
@@ -199,7 +203,7 @@ Fix every bug. Reply with only the corrected function, named deepEqual, in one \
       ['deepEqual({a:[1,{b:NaN}],c:"x"},{c:"x",a:[1,{b:NaN}]})',true],['deepEqual(NaN,NaN)',true],['deepEqual(NaN,1)',false],['deepEqual(1,NaN)',false],['deepEqual(null,null)',true],
       ['deepEqual([1,[2,3]],[1,[2,3]])',true],['deepEqual(null,{})',false],['deepEqual({},null)',false],['deepEqual({a:1},{a:1,b:2})',false],
       ['deepEqual([],{})',false],['deepEqual({},[])',false],['deepEqual({0:1},[1])',false],['deepEqual([1],{0:1})',false],['deepEqual({0:1,length:1},[1])',false],['deepEqual({a:undefined},{b:undefined})',false],
-      ['deepEqual(0,"0")',false],['deepEqual([1,2],[2,1])',false],['deepEqual([1],[1,2])',false],['deepEqual([1,2],[1])',false],['deepEqual({a:1},{b:1})',false],
+      ['deepEqual(0,"0")',false],['deepEqual([1,2],[2,1])',false],['deepEqual([1],[1,2])',false],['deepEqual([1,2],[1])',false],['deepEqual({a:1},{b:1})',false],['(()=>{const x=[1];x.extra=2;return deepEqual([1],x);})()',false],['(()=>{const x=[1];x.extra=2;return deepEqual(x,[1]);})()',false],
       ['deepEqual({a:[1,{b:2}]},{a:[1,{b:2,c:3}]})',false],['deepEqual({x:{y:null}},{x:{y:{}}})',false]])
   },
   {
@@ -212,7 +216,7 @@ Reply with only the function in one \`\`\`js code block.`,
     grade:answer=>sandbox(script(codeBlock(answer)),[
       ['a,b',['a','b']],['"x, y",z',['x, y','z']],['a,,',['a','','']],['',['']],['"he said ""hi""",2',['he said "hi"','2']],
       ['""',['']],[' a , b ',[' a ',' b ']],['"a,b","c"',['a,b','c']],['x,"",y',['x','','y']],['"a",',['a','']],
-      ['"open',null],['"a"b',null],['a,"b',null],[42,null]]
+      ['"open',null],['a"b',null],['x,a"b',null],['"a"b',null],['a,"b',null],[42,null]]
       .map(([input,expected])=>[`JSON.stringify(parseCsvLine(${JSON.stringify(input)}))`,JSON.stringify(expected)]))
   },
   {
@@ -248,10 +252,10 @@ Make two changes: raise maxUsers to 25, and make describe() also mention the pro
 >>>>>>> REPLACE`,
     grade:answer=>{
       // Two blocks, each making exactly one of the changes on its own.
-      const blocks=[...visible(answer).replace(/\r\n/g,'\n').matchAll(/<<<<<<< SEARCH\n[\s\S]*?\n>>>>>>> REPLACE/g)].map(m=>m[0]);
-      return blocks.length===2&&edits(PLANS,answer,planChecks(true,true))&&
-        (edits(PLANS,blocks[0],planChecks(true,false))&&edits(PLANS,blocks[1],planChecks(false,true))||
-         edits(PLANS,blocks[0],planChecks(false,true))&&edits(PLANS,blocks[1],planChecks(true,false)));
+      const list=readEdits(answer);
+      return list?.length===2&&edits(PLANS,list,planChecks(true,true))&&
+        (edits(PLANS,[list[0]],planChecks(true,false))&&edits(PLANS,[list[1]],planChecks(false,true))||
+         edits(PLANS,[list[0]],planChecks(false,true))&&edits(PLANS,[list[1]],planChecks(true,false)));
     }
   }
 ]);
