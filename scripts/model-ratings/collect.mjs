@@ -3,28 +3,35 @@
 // writes only the models' answers and timings to OUT. Grading happens in a later job.
 import {readFileSync,writeFileSync} from 'node:fs';
 import {TASKS,SYSTEM} from './tasks.mjs';
-import {validId} from './ratings.mjs';
+import {validId,validate} from './ratings.mjs';
 
-const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,RATINGS,PROVIDER='all',MAX_MODELS='12'}=process.env;
+const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,RATINGS,PROVIDER='all',MAX_MODELS='8'}=process.env;
 const lease=readFileSync(LEASE_FILE,'utf8').trim();
 const expires=JSON.parse(Buffer.from(lease.split('.')[1],'base64url').toString('utf8')).exp;
-const limit=Math.max(1,Math.min(20,Number.parseInt(MAX_MODELS,10)||12));
+// Each model takes one call per task; a lease allows 100 calls.
+const limit=Math.max(1,Math.min(Math.floor(100/TASKS.length),Number.parseInt(MAX_MODELS,10)||8));
 const secondsLeft=()=>expires-Math.floor(Date.now()/1000);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const headers={Authorization:'Bearer '+lease,'Content-Type':'application/json'};
 
 let previous={};
-try {previous=JSON.parse(readFileSync(RATINGS,'utf8')).models||{};} catch {}
+// Ratings from an older set of tasks count as untested.
+try {previous=validate(JSON.parse(readFileSync(RATINGS,'utf8'))).models;} catch {}
 
 const listed=await fetch(gateway+'/v1/models',{headers,signal:AbortSignal.timeout(30000)});
 if(!listed.ok) throw new Error('The gateway did not list the models (HTTP '+listed.status+').');
 const catalog=await listed.json();
 for(const [provider,status] of Object.entries(catalog.providers||{})) console.log(`Provider ${provider}: ${status}`);
-// Untested models first, then those tested longest ago.
-const chosen=(catalog.data||[])
+// Untested models first, then those tested longest ago, taking the providers in turn so that each
+// run rates some of every provider's models.
+const queues=new Map();
+for(const row of (catalog.data||[])
   .filter(row=>validId(row?.id)&&(PROVIDER==='all'||row.provider===PROVIDER))
-  .sort((a,b)=>(previous[a.id]?.testedAt||'').localeCompare(previous[b.id]?.testedAt||'')||a.id.localeCompare(b.id))
-  .slice(0,limit);
+  .sort((a,b)=>(previous[a.id]?.testedAt||'').localeCompare(previous[b.id]?.testedAt||'')||a.id.localeCompare(b.id)))
+  queues.set(row.provider,[...(queues.get(row.provider)||[]),row]);
+const chosen=[];
+while(chosen.length<limit&&[...queues.values()].some(queue=>queue.length))
+  for(const queue of queues.values()) if(queue.length&&chosen.length<limit) chosen.push(queue.shift());
 console.log(`Rating ${chosen.length} model(s): ${chosen.map(row=>row.id).join(', ')}`);
 
 // One answer. The gateway's per-minute limits answer 429 for a while; that is waited out.

@@ -36,9 +36,35 @@ export function codeBlock(text) {
   const match=/```[a-zA-Z]*[^\S\n]*\n([\s\S]*?)```/.exec(visible(text));
   return (match?match[1]:visible(text)).trim();
 }
+// The last non-empty line of the answer, without code fences or backticks.
+const lastLine=answer=>codeBlock(answer).split('\n').map(line=>line.trim().replace(/^`|`$/g,'')).filter(Boolean).at(-1);
 // Model code is run as a plain script, so ES module exports become plain declarations.
 const script=code=>code.replace(/^\s*export\s+(default\s+)?/gm,'');
 
+// Applies SEARCH/REPLACE edits to a file: every SEARCH text must occur exactly once at that point.
+// Null if the answer has no edit, or one does not apply.
+export function applyEdits(file,answer) {
+  const blocks=[...visible(answer).replace(/\r\n/g,'\n').matchAll(/<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n?>>>>>>> REPLACE/g)];
+  if(!blocks.length) return null;
+  let text=file;
+  for(const [,search,replace] of blocks) {
+    if(!search||text.split(search).length!==2) return null;
+    text=text.replace(search,()=>replace);
+  }
+  return {text,count:blocks.length};
+}
+// Code compared as text, ignoring spacing, quote style, trailing commas and digit separators.
+const normal=text=>text.replace(/\s+/g,'').replace(/["`]/g,"'").replace(/,([}\]])/g,'$1').replace(/(\d)_(?=\d)/g,'$1');
+
+const PLANS=`export const limits = {
+  maxUsers: 10,
+  maxProjects: 5,
+};
+
+export function describe(plan) {
+  return \`\${plan.name}: \${plan.users} users\`;
+}
+`;
 const CONFIG=`export const config = {
   retries: 3,
   timeoutMs: 5000,
@@ -112,11 +138,8 @@ Change the timeout to 10000 ms and add the entry region: 'eu-west-1' directly af
 (the new lines)
 >>>>>>> REPLACE`,
     grade:answer=>{
-      const match=/<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n?>>>>>>> REPLACE/.exec(visible(answer).replace(/\r\n/g,'\n'));
-      if(!match||!match[1]||CONFIG.split(match[1]).length!==2) return false;
-      // Compared as text, ignoring spacing, quote style and a trailing comma; nothing is run.
-      const normal=text=>text.replace(/\s+/g,'').replace(/"/g,"'").replace(/,}/g,'}').replace(/(\d)_(?=\d)/g,'$1');
-      return normal(CONFIG.replace(match[1],()=>match[2]))===normal(`export const config = {retries: 3, timeoutMs: 10000, region: 'eu-west-1', verbose: false};`);
+      const edited=applyEdits(CONFIG,answer);
+      return edited?.count===1&&normal(edited.text)===normal(`export const config = {retries: 3, timeoutMs: 10000, region: 'eu-west-1', verbose: false};`);
     }
   },
   {
@@ -146,7 +169,79 @@ console.log(out.map(g => g()).join('') + '|' + xs.join(','));
 \`\`\`
 
 Reply with only the exact output.`,
-    grade:answer=>codeBlock(answer).split('\n').map(line=>line.trim().replace(/^`|`$/g,'')).filter(Boolean).at(-1)==='333|1,10,3'
+    grade:answer=>lastLine(answer)==='333|1,10,3'
+  },
+  // The harder tasks: several bugs at once, a parser full of edge cases, the event loop and an edit
+  // in two places.
+  {
+    id:'bugfix-deep',
+    prompt:`This JavaScript function should compare two values deeply: primitives, plain objects and arrays. NaN equals NaN, null equals only null, an array never equals a non-array, and two objects are equal only with exactly the same keys and deeply equal values. It has several bugs:
+
+\`\`\`js
+function deepEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object') return false;
+  const keys = Object.keys(a);
+  for (const key of keys) if (!deepEqual(a[key], b[key])) return false;
+  return true;
+}
+\`\`\`
+
+Fix every bug. Reply with only the corrected function, named deepEqual, in one \`\`\`js code block.`,
+    grade:answer=>sandbox(script(codeBlock(answer)),[
+      ['deepEqual({a:[1,{b:NaN}],c:"x"},{c:"x",a:[1,{b:NaN}]})',true],['deepEqual(NaN,NaN)',true],['deepEqual(null,null)',true],
+      ['deepEqual([1,[2,3]],[1,[2,3]])',true],['deepEqual(null,{})',false],['deepEqual({},null)',false],['deepEqual({a:1},{a:1,b:2})',false],
+      ['deepEqual([],{})',false],['deepEqual({0:1,length:1},[1])',false],['deepEqual({a:undefined},{b:undefined})',false],
+      ['deepEqual(0,"0")',false],['deepEqual([1,2],[2,1])',false],['deepEqual({x:{y:null}},{x:{y:{}}})',false]])
+  },
+  {
+    id:'implement-csv',
+    prompt:`Write a JavaScript function parseCsvLine(line) that splits one CSV line into an array of strings. Fields are separated by commas. A field may be wrapped in double quotes; inside quotes a comma is part of the field and two double quotes ("") stand for one double quote. A closing quote must be followed by a comma or the end of the line. Unquoted fields are taken as they are, spaces included. An empty line is one empty field. Return null for an unterminated quote, for anything other than a comma or the end after a closing quote, or if the input is not a string.
+
+Examples: 'a,b' gives ["a","b"]; '"x, y",z' gives ["x, y","z"]; 'a,,' gives ["a","",""].
+
+Reply with only the function in one \`\`\`js code block.`,
+    grade:answer=>sandbox(script(codeBlock(answer)),[
+      ['a,b',['a','b']],['"x, y",z',['x, y','z']],['a,,',['a','','']],['',['']],['"he said ""hi""",2',['he said "hi"','2']],
+      ['""',['']],[' a , b ',[' a ',' b ']],['"a,b","c"',['a,b','c']],['x,"",y',['x','','y']],
+      ['"open',null],['"a"b',null],['a,"b',null],[42,null]]
+      .map(([input,expected])=>[`JSON.stringify(parseCsvLine(${JSON.stringify(input)}))`,JSON.stringify(expected)]))
+  },
+  {
+    id:'reading-async',
+    prompt:`What does this JavaScript print when run with Node.js?
+
+\`\`\`js
+const log = [];
+setTimeout(() => log.push('t'), 0);
+Promise.resolve().then(() => log.push('p1')).then(() => log.push('p2'));
+queueMicrotask(() => log.push('m'));
+(async () => { log.push('a'); await null; log.push('b'); })();
+log.push('s');
+setTimeout(() => console.log(log.join(',')), 1);
+\`\`\`
+
+Reply with only the exact output.`,
+    grade:answer=>lastLine(answer)==='a,s,p1,m,b,p2,t'
+  },
+  {
+    id:'edit-multi',
+    prompt:`The file plans.js contains:
+
+\`\`\`js
+${PLANS}\`\`\`
+
+Make two changes: raise maxUsers to 25, and make describe() also mention the projects, so that it returns for example "Team: 4 users, 2 projects". Reply with only SEARCH/REPLACE edits in this format, one block per change, copying the SEARCH lines exactly from the file:
+
+<<<<<<< SEARCH
+(lines copied exactly from the file)
+=======
+(the new lines)
+>>>>>>> REPLACE`,
+    grade:answer=>{
+      const edited=applyEdits(PLANS,answer);
+      return !!edited&&normal(edited.text)===normal(PLANS.replace('maxUsers: 10','maxUsers: 25').replace('${plan.users} users`','${plan.users} users, ${plan.projects} projects`'));
+    }
   }
 ]);
 export const SYSTEM='You are a careful senior software engineer. Answer in exactly the format the task asks for.';
