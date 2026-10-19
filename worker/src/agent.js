@@ -192,9 +192,65 @@ export function displayText(answer) {
   return answer.replace(/\r\n/g,'\n').replace(BLOCK,'').replace(/^PR-TITLE:.*$/m,'').replace(/\n{3,}/g,'\n\n').trim();
 }
 
-// Returns {text, truncated}; truncated is true when the answer hit the output limit.
-export async function callModel(env,messages,{fetchImpl=fetch}={}) {
+const GATEWAY_MODELS=new Set(['alias-code','alias-fast']);
+// The model name the chat shows: the gateway takes only its Blablador aliases.
+export const modelName=env=>env.MODEL_PROVIDER==='ai-gateway'?`Blablador ${GATEWAY_MODELS.has(env.MODEL)?env.MODEL:'alias-code'} (AI gateway)`:env.MODEL||DEFAULT_MODEL;
+
+// Reads an OpenAI-style event stream, passing each piece of answer text to onDelta as it arrives.
+async function readEventStream(body,onDelta) {
+  const reader=body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer='',text='',finish=null,ended=false;
+  const line=raw=>{
+    const data=raw.trim();
+    if(!data.startsWith('data:')) return;
+    const payload=data.slice(5).trim();
+    if(payload==='[DONE]') ended=true;
+    if(!payload||payload==='[DONE]') return;
+    const choice=JSON.parse(payload)?.choices?.[0];
+    const piece=choice?.delta?.content;
+    if(typeof piece==='string'&&piece) {text+=piece;onDelta(piece);}
+    if(choice?.finish_reason) finish=choice.finish_reason;
+  };
+  for(;;) {
+    const {value,done}=await reader.read();
+    if(done) break;
+    buffer+=value;
+    for(let end=buffer.indexOf('\n');end>=0;end=buffer.indexOf('\n')) {line(buffer.slice(0,end));buffer=buffer.slice(end+1);}
+  }
+  line(buffer);
+  // A stream cut off before its finish reason or [DONE] holds a partial answer, which must not be saved.
+  if(!ended&&!finish) throw new PublicError('The model request failed: the answer stream ended early.');
+  return {text,finish};
+}
+
+// Blablador through the Repo Autopilot AI gateway's ChatGateway service binding: this Worker holds no
+// provider key, and the gateway applies its own validation, quota and rate limits. The answer streams.
+async function gatewayModel(env,messages,{max_tokens,onDelta}) {
+  if(!env.AI_GATEWAY) throw new PublicError('The AI gateway service binding is not configured.');
+  if(messages.some(m=>Array.isArray(m.content)&&m.content.some(part=>part.type!=='text'))) throw new PublicError('Blablador reads only text. Send the message without the image.');
+  const model=GATEWAY_MODELS.has(env.MODEL)?env.MODEL:'alias-code';
+  let response;
+  try {
+    response=await env.AI_GATEWAY.fetch('https://ai-gateway/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,messages,max_tokens,temperature:0.2,stream:true}),signal:AbortSignal.timeout(MODEL_TIMEOUT)});
+    if(!response.ok) {
+      let reason='';
+      try {reason=String((await response.json())?.error||'').slice(0,200);} catch {}
+      throw new PublicError(`The model request failed (HTTP ${response.status}${reason?`: ${reason}`:''}).`);
+    }
+    const result=(response.headers.get('Content-Type')||'').includes('event-stream')?await readEventStream(response.body,onDelta):(data=>({text:data?.choices?.[0]?.message?.content,finish:data?.choices?.[0]?.finish_reason}))(await response.json());
+    if(typeof result.text!=='string'||!result.text.trim()) throw new PublicError('The model returned an empty answer.');
+    return {text:result.text,truncated:result.finish==='length'};
+  } catch(error) {
+    if(error instanceof PublicError) throw error;
+    throw new PublicError(error?.name==='TimeoutError'?`The model request failed: timed out after ${MODEL_TIMEOUT/1000} seconds`:'The model request failed: no valid response.');
+  }
+}
+
+// Returns {text, truncated}; truncated is true when the answer hit the output limit. onDelta receives
+// answer text as it streams, where the provider streams.
+export async function callModel(env,messages,{fetchImpl=fetch,onDelta=()=>{}}={}) {
   const model=env.MODEL||DEFAULT_MODEL,max_tokens=Number(env.MAX_OUTPUT_TOKENS)||4096;
+  if(env.MODEL_PROVIDER==='ai-gateway') return gatewayModel(env,messages,{max_tokens,onDelta});
   if((env.MODEL_PROVIDER||'workers-ai')==='workers-ai') {
     if(!env.AI) throw new PublicError('The Workers AI binding is not configured.');
     let result,timer;
@@ -227,8 +283,10 @@ export async function callModel(env,messages,{fetchImpl=fetch}={}) {
 }
 
 // Asks the model, and when its edit blocks cannot be applied, gives it one chance to correct them.
-export async function answer(env,{messages,files,existingPaths,allowed=editablePath,fetchImpl,onStep=()=>{}}) {
-  let result=await callModel(env,messages,{fetchImpl});
+// onDelta(null) means that a new answer starts and the text streamed so far is replaced.
+export async function answer(env,{messages,files,existingPaths,allowed=editablePath,fetchImpl,onStep=()=>{},onDelta=()=>{}}) {
+  const call=list=>{onDelta(null);return callModel(env,list,{fetchImpl,onDelta});};
+  let result=await call(messages);
   for(let attempt=0;;attempt++) {
     const reply=result.truncated?result.text+CUT_OFF:result.text;
     // An answer cut off at the output limit may stop between intended edits, so its edit blocks
@@ -244,7 +302,7 @@ export async function answer(env,{messages,files,existingPaths,allowed=editableP
     } catch(error) {
       if(attempt>0) return {reply,proposal:null,error:error.message};
       onStep(`An edit did not apply (${error.message}) Asking the model to correct it…`);
-      try {result=await callModel(env,[...messages,{role:'assistant',content:reply},{role:'user',content:`Your edit blocks could not be applied: ${error.message} Send your complete answer again with corrected edit blocks. Start every block with the line "<<<<<<< SEARCH path/to/file" naming the file, and copy SEARCH text exactly from the supplied file contents.`}],{fetchImpl});}
+      try {result=await call([...messages,{role:'assistant',content:reply},{role:'user',content:`Your edit blocks could not be applied: ${error.message} Send your complete answer again with corrected edit blocks. Start every block with the line "<<<<<<< SEARCH path/to/file" naming the file, and copy SEARCH text exactly from the supplied file contents.`}]);}
       catch {return {reply,proposal:null,error:error.message};}
     }
   }

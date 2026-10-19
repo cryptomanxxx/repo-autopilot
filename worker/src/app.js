@@ -5,7 +5,7 @@ import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
 import {connector,isConnectorPath,finishConnect,failConnect,logOauth,githubHandoff,sealGithub} from './connector.js';
 import {connectorTools} from './tools.js';
 export {UserError};
-import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,DEFAULT_MODEL} from './agent.js';
+import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,modelName} from './agent.js';
 
 const encoder=new TextEncoder();
 const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
@@ -179,7 +179,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   const sessionId=cookies(request)[sessionCookie];
   const hash=sessionId&&/^[0-9a-f]{64}$/.test(sessionId)?hex(await sha256(sessionId)):null;
   const session=hash?await store.getSession(hash):null;
-  if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:env.MODEL||DEFAULT_MODEL,deployed:deployedVersion(env)}:{login:null,repository:config.repository});
+  if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:modelName(env),deployed:deployedVersion(env)}:{login:null,repository:config.repository});
   if(!session) throw new UserError(401,'Sign in to chat.');
 
   const github=repository=>githubClient({repository,token:session.token,fetchImpl});
@@ -424,7 +424,7 @@ async function chat(body,{env,store,github,config,access,fetchImpl}) {
       try {
         send({type:'step',text:`Read ${repository} · ${head.branch} @ ${head.sha.slice(0,7)} · ${meta.files} files`});
         send({type:'step',text:`Chose ${meta.read} relevant file${meta.read===1?'':'s'}; asking the model…`});
-        const result=await answer(env,{messages,files,existingPaths:[...archive.keys()],allowed:policy.allowed,fetchImpl,onStep:text=>send({type:'step',text})});
+        const result=await answer(env,{messages,files,existingPaths:[...archive.keys()],allowed:policy.allowed,fetchImpl,onStep:text=>send({type:'step',text}),onDelta:text=>send(text===null?{type:'reset'}:{type:'delta',text})});
         const content=result.error?`${result.reply}\n\n⚠ The proposed change could not be applied: ${result.error} Ask the agent to try again.`:result.reply;
         const id=conversation?.id||randomHex(16);
         await store.saveExchange({conversation:id,title:conversation?null:text.replace(/\s+/g,' ').slice(0,80),repository:conversation?null:repository,user:{content:text,hasImage:Boolean(image)},assistant:{content,proposal:result.proposal,meta}});
