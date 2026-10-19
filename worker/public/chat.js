@@ -212,10 +212,14 @@ function fillModels() {
   try {remembered=localStorage.getItem(MODEL_KEY+state.agentId)||'';} catch {}
   state.modelId=models.some(m=>m.id===remembered)?remembered:'';
   const standard=Object.assign(document.createElement('option'),{value:'',textContent:`Standard${agent?.modelName?` (${agent.modelName})`:''}`});
-  const options=models.map(m=>Object.assign(document.createElement('option'),{value:m.id,
+  const option=m=>Object.assign(document.createElement('option'),{value:m.id,
     textContent:`${m.contextLength&&m.contextLength<SMALL_CONTEXT?'⚠ ':''}${m.name}${contextText(m.contextLength)}`,
-    title:m.contextLength&&m.contextLength<SMALL_CONTEXT?'Small context: it may not fit the repository files the chat sends.':''}));
-  $('model').replaceChildren(standard,...options);
+    title:m.contextLength&&m.contextLength<SMALL_CONTEXT?'Small context: it may not fit the repository files the chat sends.':''});
+  // Providers such as Blablador list short, stable alias-* names next to their long model names; the
+  // aliases come first in a group of their own.
+  const aliases=models.filter(m=>/^alias-/i.test(m.name)),others=models.filter(m=>!/^alias-/i.test(m.name));
+  const groups=aliases.length&&others.length?[['Aliases',aliases],['All models',others]].map(([label,list])=>{const g=document.createElement('optgroup');g.label=label;g.append(...list.map(option));return g;}):models.map(option);
+  $('model').replaceChildren(standard,...groups);
   $('model').value=state.modelId;
   $('model-row').hidden=!models.length;
 }
