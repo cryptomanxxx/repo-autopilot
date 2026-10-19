@@ -204,9 +204,33 @@ export function chatAgents(env) {
   }
   const blablador=BLABLADOR_MODELS.has(env.MODEL)?env.MODEL:'alias-code';
   return [
-    {id:'blablador',name:'Blablador',model:blablador,label:`Blablador ${blablador} (AI gateway)`,service:`the Helmholtz Blablador model service (${blablador})`},
-    {id:'hip',name:'HIP',model:'hip-glm',label:'HIP GLM-5.2 (AI gateway)',service:'the hessian.AI HIP model service (GLM-5.2)'}
+    {id:'blablador',name:'Blablador',provider:'blablador',model:blablador,modelName:blablador,label:`Blablador ${blablador} (AI gateway)`,service:'the Helmholtz Blablador model service'},
+    {id:'hip',name:'HIP',provider:'hip',model:'hip-glm',modelName:'GLM-5.2',label:'HIP GLM-5.2 (AI gateway)',service:'the hessian.AI HIP model service'}
   ];
+}
+// A model the owner picked from the agent's provider list, as the gateway names it
+// ("<provider>:<model ID>"). The gateway forwards only models the provider lists.
+export function withModel(agent,model) {
+  if(model===undefined||model===null||model==='') return agent;
+  const prefix=`${agent.provider}:`;
+  if(!agent.provider||typeof model!=='string'||model.length>220||!model.startsWith(prefix)) return null;
+  const id=model.slice(prefix.length);
+  if(!id||id!==id.trim()||/[\u0000-\u001f\u007f]/.test(id)) return null;
+  return {...agent,model,modelName:id,label:`${agent.name} ${id} (AI gateway)`};
+}
+// The chat models the AI gateway lists for each agent, with their context length.
+export async function agentModels(env) {
+  const agents=chatAgents(env).filter(agent=>agent.provider);
+  if(!agents.length||!env.AI_GATEWAY) return {agents:[]};
+  let data;
+  try {
+    const response=await env.AI_GATEWAY.fetch('https://ai-gateway/v1/models',{signal:AbortSignal.timeout(20000)});
+    if(!response.ok) throw new Error('unavailable');
+    data=await response.json();
+  } catch {throw new PublicError('The model list could not be read from the AI gateway.');}
+  const rows=Array.isArray(data?.data)?data.data:[];
+  return {agents:agents.map(agent=>({id:agent.id,status:typeof data?.providers?.[agent.provider]==='string'?data.providers[agent.provider]:'unavailable',
+    models:rows.filter(row=>row?.provider===agent.provider&&withModel(agent,row.id)).map(row=>({id:row.id,name:row.model,contextLength:Number.isSafeInteger(row.context_length)?row.context_length:null}))}))};
 }
 // The agent with this id, the default one when none is given, or null for an unknown id.
 export function findAgent(env,id) {
@@ -217,7 +241,7 @@ export const agentName=env=>chatAgents(env)[0].name;
 export const modelName=env=>chatAgents(env)[0].label;
 // Who the model is told it is, matching the name the chat shows above its answers. Agents outside the
 // gateway keep the unnamed role, since the chat labels them only by their model name.
-export const agentIntro=agent=>agent.service?`You are ${agent.name}, ${ROLE} You run on ${agent.service} through the Repo Autopilot AI gateway.`:`You are ${ROLE}`;
+export const agentIntro=agent=>agent.service?`You are ${agent.name}, ${ROLE} You run on ${agent.service} (${agent.modelName}) through the Repo Autopilot AI gateway.`:`You are ${ROLE}`;
 
 // Reads an OpenAI-style event stream, passing each piece of answer text to onDelta as it arrives.
 async function readEventStream(body,onDelta) {

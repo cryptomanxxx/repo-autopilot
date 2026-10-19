@@ -1,5 +1,5 @@
 import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice} from './dashboard.js';
-const state={agent:'',agents:[],agentId:null,csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
+const state={agent:'',agents:[],agentId:null,models:{},modelId:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
 const status=text=>{$('status').textContent=text;};
 const MAX_SIDE=1600,MAX_DATA_URL=1400000;
@@ -99,7 +99,7 @@ function pullStatusText(pr) {
 
 function renderMessage(message) {
   const item=document.createElement('article');item.className=`message ${message.role}`;
-  const label=document.createElement('strong');label.textContent=message.role==='user'?'You':message.meta?.agent||'Agent';item.append(label);
+  const label=document.createElement('strong');label.textContent=message.role==='user'?'You':[message.meta?.agent||'Agent',message.meta?.agent&&message.meta?.model].filter(Boolean).join(' · ');item.append(label);
   if(message.hasImage) {const note=document.createElement('span');note.className='muted small';note.textContent=' · image attached';item.append(note);}
   if(message.role==='assistant'&&message.meta) item.append(renderMeta(message.meta));
   // An answer's PR-TITLE line is shown with its proposed change instead.
@@ -193,12 +193,42 @@ $('agent').onchange=()=>{
   if(!chosen) return;
   state.agentId=chosen.id;state.agent=chosen.name;
   try {localStorage.setItem(AGENT_KEY,chosen.id);} catch {}
+  fillModels();showAccount();
+};
+// The model picker: the agent's standard model, then every chat model its provider lists, with the
+// context length. Models too small for the files the chat sends are marked. Remembered per agent.
+const MODEL_KEY='autopilot-model:',SMALL_CONTEXT=32768;
+const contextText=length=>length?` · ${length>=1000?`${Math.round(length/1024)}k`:length}`:'';
+async function loadModels() {
+  try {
+    const {agents}=await api('/api/models');
+    state.models=Object.fromEntries((agents||[]).map(a=>[a.id,Array.isArray(a.models)?a.models:[]]));
+  } catch {state.models={};}
+  fillModels();showAccount();
+}
+function fillModels() {
+  const agent=state.agents.find(a=>a.id===state.agentId),models=state.models[state.agentId]||[];
+  let remembered='';
+  try {remembered=localStorage.getItem(MODEL_KEY+state.agentId)||'';} catch {}
+  state.modelId=models.some(m=>m.id===remembered)?remembered:'';
+  const standard=Object.assign(document.createElement('option'),{value:'',textContent:`Standard${agent?.modelName?` (${agent.modelName})`:''}`});
+  const options=models.map(m=>Object.assign(document.createElement('option'),{value:m.id,
+    textContent:`${m.contextLength&&m.contextLength<SMALL_CONTEXT?'⚠ ':''}${m.name}${contextText(m.contextLength)}`,
+    title:m.contextLength&&m.contextLength<SMALL_CONTEXT?'Small context: it may not fit the repository files the chat sends.':''}));
+  $('model').replaceChildren(standard,...options);
+  $('model').value=state.modelId;
+  $('model-row').hidden=!models.length;
+}
+$('model').onchange=()=>{
+  state.modelId=$('model').value;
+  try {state.modelId?localStorage.setItem(MODEL_KEY+state.agentId,state.modelId):localStorage.removeItem(MODEL_KEY+state.agentId);} catch {}
   showAccount();
 };
 // The live version: the commit the deploy workflow shipped, linked to GitHub, and when.
 function showAccount() {
   const account=$('account'),deployed=state.deployed;
-  account.replaceChildren(`${state.login} · model ${state.agents.find(a=>a.id===state.agentId)?.label||state.model} · `);
+  const agent=state.agents.find(a=>a.id===state.agentId);
+  account.replaceChildren(`${state.login} · model ${agent?(state.modelId?`${agent.name} ${state.modelId.slice(state.modelId.indexOf(':')+1)} (AI gateway)`:agent.label):state.model} · `);
   if(!deployed) {account.append('version unknown');return;}
   const link=document.createElement('a');
   link.href=`https://github.com/${state.home}/commit/${deployed.commit}`;link.target='_blank';link.rel='noopener noreferrer';
@@ -232,7 +262,7 @@ function selectRepository(name,{keepConversation=false}={}) {
   if(state.tab==='dashboard') history.replaceState(null,'','#dashboard');
   if(!keepConversation) {status('');openConversation(null);}
 }
-const setBusy=busy=>{state.busy=busy;$('repo-picker').disabled=busy;$('repo-reload').disabled=busy;$('agent').disabled=busy;};
+const setBusy=busy=>{state.busy=busy;$('repo-picker').disabled=busy;$('repo-reload').disabled=busy;$('agent').disabled=busy;$('model').disabled=busy;};
 
 async function loadConversations() {
   const repository=state.repository,request=++state.conversationRequest,list=$('conversations');
@@ -335,7 +365,7 @@ $('composer').onsubmit=async event=>{
   step(`Reading the latest code of ${state.repository}…`);
   // The answer as it streams in. Edit blocks are left out of the preview; the saved answer shows the change.
   const live=document.createElement('article');live.className='message assistant';live.hidden=true;
-  const liveText=document.createElement('p');live.append(Object.assign(document.createElement('strong'),{textContent:state.agent||'Agent'}),liveText);container.append(live);
+  const liveText=document.createElement('p');live.append(Object.assign(document.createElement('strong'),{textContent:[state.agent||'Agent',state.modelId&&state.modelId.slice(state.modelId.indexOf(':')+1)].filter(Boolean).join(' · ')}),liveText);container.append(live);
   let streamed='';
   const delta=piece=>{
     streamed=piece===null?'':streamed+piece;
@@ -345,7 +375,7 @@ $('composer').onsubmit=async event=>{
   };
   status('');
   try {
-    const result=await chatStream({conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image,agent:state.agentId||undefined},step,delta);
+    const result=await chatStream({conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image,agent:state.agentId||undefined,model:state.modelId||undefined},step,delta);
     $('message').value='';clearImage();thinking.remove();live.remove();
     setBusy(false);state.conversation=result.conversation;await openConversation(result.conversation);
   } catch(error) {
@@ -390,6 +420,7 @@ try {
     Object.assign(state,{csrf:session.csrf,home:session.repository,repository:session.repository,login:session.login,model:session.model,agent:session.agent||'',agents:Array.isArray(session.agents)?session.agents:[],deployed:session.deployed||null});
     fillAgents();
     showAccount();
+    if(state.agents.length>1) loadModels();
     // The remembered repository is used when it is still reachable; otherwise the app's own.
     let repositories=[{fullName:session.repository,private:false}],remembered=null;
     try {repositories=await loadRepos();} catch(error) {status(error.message);}

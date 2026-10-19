@@ -37,7 +37,7 @@ textarea{display:block;width:100%;resize:vertical;background:#0b1220;color:inher
 #repo-picker{appearance:none;-webkit-appearance:none;width:min(100%,520px);min-height:52px;padding:12px 48px 12px 16px;font:inherit;font-size:18px;color:#e6edf7;background:#141f31 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='10' viewBox='0 0 16 10'%3E%3Cpath d='M1 1l7 7 7-7' fill='none' stroke='%239fc0ff' stroke-width='2'/%3E%3C/svg%3E") no-repeat right 18px center;border:1px solid #435975;border-radius:10px;cursor:pointer}
 #repo-picker:focus-visible{outline:2px solid #81aaff;outline-offset:2px}#repo-picker:disabled{opacity:.6}
 #repo-reload{min-height:52px;padding:12px 18px}
-.agent-row{display:flex;align-items:center;gap:8px;color:#cfdbec}.agent-row select{min-height:44px;padding:8px 12px;font:inherit;color:#e6edf7;background:#141f31;border:1px solid #435975;border-radius:8px}
+.agent-row{display:flex;align-items:center;gap:8px;color:#cfdbec}.agent-row select{max-width:min(100%,360px);min-height:44px;padding:8px 12px;font:inherit;color:#e6edf7;background:#141f31;border:1px solid #435975;border-radius:8px}
 .title-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 24px}.title-row h1{margin:8px 0}
 #logout{min-height:44px}
 .message .meta{margin:4px 0 0;white-space:normal}.meta .stale{color:#f5c27a}

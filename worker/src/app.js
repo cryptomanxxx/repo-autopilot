@@ -5,7 +5,7 @@ import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
 import {connector,isConnectorPath,finishConnect,failConnect,logOauth,githubHandoff,sealGithub} from './connector.js';
 import {connectorTools} from './tools.js';
 export {UserError};
-import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,modelName,agentName,agentIntro,chatAgents,findAgent} from './agent.js';
+import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,modelName,agentName,agentIntro,chatAgents,findAgent,withModel,agentModels} from './agent.js';
 
 const encoder=new TextEncoder();
 const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
@@ -179,7 +179,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   const sessionId=cookies(request)[sessionCookie];
   const hash=sessionId&&/^[0-9a-f]{64}$/.test(sessionId)?hex(await sha256(sessionId)):null;
   const session=hash?await store.getSession(hash):null;
-  if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:modelName(env),agent:agentName(env),agents:chatAgents(env).map(({id,name,label})=>({id,name,label})),deployed:deployedVersion(env)}:{login:null,repository:config.repository});
+  if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:modelName(env),agent:agentName(env),agents:chatAgents(env).map(({id,name,label,modelName})=>({id,name,label,modelName:modelName||null})),deployed:deployedVersion(env)}:{login:null,repository:config.repository});
   if(!session) throw new UserError(401,'Sign in to chat.');
 
   const github=repository=>githubClient({repository,token:session.token,fetchImpl});
@@ -221,6 +221,8 @@ async function route(request,env,config,url,{fetchImpl,now}) {
     await store.setDashboardCache(key,head,HEAD_CACHE_MS,{repository,...load});
     return json(200,head);
   });
+  // The models each agent's provider offers through the AI gateway.
+  if(request.method==='GET'&&url.pathname==='/api/models') return run(async()=>json(200,await agentModels(env)));
   // Apps connected through the connector, which the owner can revoke.
   if(request.method==='GET'&&url.pathname==='/api/connections') return json(200,{endpoint:`${config.origin}/mcp`,connections:await store.listGrants()});
   if(request.method!=='POST') throw new UserError(405,'Unsupported request.');
@@ -393,8 +395,9 @@ async function chat(body,{env,store,github,config,access,fetchImpl}) {
   const text=typeof body.text==='string'?body.text.trim():'';
   if(!text||text.length>MAX_TEXT) throw new UserError(400,`Write a message between 1 and ${MAX_TEXT} characters.`);
   const image=validateImage(body.image);
-  const agent=findAgent(env,body.agent);
-  if(!agent) throw new UserError(400,'Unknown agent.');
+  const chosen=findAgent(env,body.agent),agent=chosen&&withModel(chosen,body.model);
+  if(!chosen) throw new UserError(400,'Unknown agent.');
+  if(!agent) throw new UserError(400,'Unknown model for this agent.');
   let conversation=null;
   if(body.conversation!==undefined&&body.conversation!==null) {
     if(typeof body.conversation!=='string'||!/^[0-9a-f]{32}$/.test(body.conversation)) throw new UserError(400,'Invalid conversation.');
@@ -418,7 +421,7 @@ async function chat(body,{env,store,github,config,access,fetchImpl}) {
     const history=conversation?.messages||[];
     const query=[...history.filter(m=>m.role==='user').slice(-2).map(m=>m.content),text].join('\n');
     const context=selectContext(files,query,Number(env.CONTEXT_CHARS)||DEFAULT_CONTEXT_CHARS);
-    const meta={repository,branch:head.branch,sha:head.sha,read:context.included.length,files:Object.keys(files).length,agent:agent.name};
+    const meta={repository,branch:head.branch,sha:head.sha,read:context.included.length,files:Object.keys(files).length,agent:agent.name,model:agent.modelName||null};
     const messages=buildMessages({repository,head,context,history,text,image,rule:policy.rule,agent:agentIntro(agent)});
     streaming=true;
     // The answer streams progress steps as lines of JSON, ending with a done or an error line.
