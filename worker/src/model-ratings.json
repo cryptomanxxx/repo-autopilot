@@ -1,1 +1,96 @@
-{"version":1,"tasks":["bugfix","implement","edit","json","reading"],"models":{}}
+{
+  "version": 1,
+  "tasks": [
+    "bugfix",
+    "implement",
+    "edit",
+    "json",
+    "reading"
+  ],
+  "models": {
+    "blablador:00 - Aleph Kolibri": {
+      "stars": 4,
+      "passed": 4,
+      "total": 5,
+      "seconds": 15.2,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:01 - GPT-OSS-120b - an open model released by OpenAI in August 2025": {
+      "stars": 5,
+      "passed": 5,
+      "total": 5,
+      "seconds": 3,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:02 - Qwen3.8-Flash-Next-NVFP4, general purpose large model": {
+      "stars": 5,
+      "passed": 5,
+      "total": 5,
+      "seconds": 3.9,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:07 - Qwen3.8-27B-FP8 - Multimodal model from Aug 2026": {
+      "stars": 4,
+      "passed": 4,
+      "total": 5,
+      "seconds": 8.5,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:15 - DeepSeek-V4.1-Flash on JUWELS Booster": {
+      "stars": 4,
+      "passed": 4,
+      "total": 5,
+      "seconds": 5.9,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:20 - EVE-Instruct - Expert Earth Observation and Earth Science (ES) domains": {
+      "stars": 5,
+      "passed": 5,
+      "total": 5,
+      "seconds": 1.2,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:70 - EVE-Instruct - Expert Earth Observation and Earth Science (ES) domains": {
+      "stars": 5,
+      "passed": 5,
+      "total": 5,
+      "seconds": 2.3,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:80 - MiMo-V2.6-Flash-RL on Juwels Booster": {
+      "stars": 5,
+      "passed": 5,
+      "total": 5,
+      "seconds": 1.4,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:80 - MiMo-V2.6-Pro-RL on Juwels Booster": {
+      "stars": 5,
+      "passed": 5,
+      "total": 5,
+      "seconds": 4.1,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:90 - Glm-5.3-Flash on Juwels Booster": {
+      "stars": 5,
+      "passed": 5,
+      "total": 5,
+      "seconds": 8.9,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:90 - Kimi-K3 1M on Juwels Booster": {
+      "stars": 4,
+      "passed": 5,
+      "total": 5,
+      "seconds": 49.8,
+      "testedAt": "2026-10-19"
+    },
+    "blablador:90 - Qwen 3.8-27B on Juwels Booster": {
+      "stars": 5,
+      "passed": 5,
+      "total": 5,
+      "seconds": 9.1,
+      "testedAt": "2026-10-19"
+    }
+  }
+}
