@@ -19,13 +19,15 @@ References: https://sdlaml.pages.jsc.fz-juelich.de/ai/guides/blablador_opencode/
 ## Security boundary
 
 ```
-GitHub Actions (propose job, id-token: write) ──OIDC JWT──► gateway /v1/session ──► 30-min lease (100 calls)
-OpenCode ──lease──► gateway /v1/chat/completions ──BLABLADOR_API_KEY (Cloudflare secret)──► Blablador
+lease job (id-token: write, ai-agent-production) ──OIDC JWT──► gateway /v1/session ──► 30-min lease (100 calls)
+propose job (no id-token) : OpenCode ──lease──► gateway /v1/chat/completions ──BLABLADOR_API_KEY (Cloudflare secret)──► Blablador
+publish job (contents/pull-requests: write) : validates the patch and opens a PR
 ```
 
 - **Provider key:** exists only in Cloudflare Worker secrets. Neither GitHub nor OpenCode ever sees it.
 - **Identity:** the gateway accepts only a GitHub-signed OIDC token from this repository's `opencode-blablador.yml` on `main`, dispatched by the owner via `workflow_dispatch` in the `ai-agent-production` environment, first run attempt only. Runs from other refs, reruns and other actors get no lease.
-- **Lease:** OpenCode receives a lease that is valid only at the gateway, for 30 minutes and at most 100 model calls, with one in-flight generation. A leaked lease is bounded by these limits. The OIDC request variables are removed from the agent's environment. Do not configure any other cloud trust for this job's OIDC subject.
+- **OIDC isolation:** only the small `lease` job has `id-token: write`, and it runs no repository or agent code. OpenCode, `npm run check` and `npm test` run in the `propose` job, which has neither the OIDC permission nor the environment, so agent-modified scripts cannot mint GitHub OIDC tokens.
+- **Lease:** OpenCode receives a lease that is valid only at the gateway, for 30 minutes and at most 100 model calls, with one in-flight generation. It is handed from the `lease` job to the `propose` job as a one-day artifact, so it never appears in logs. Anyone with read access to this private repository could download that artifact while the lease is valid; on a personal repository without read-only collaborators this is only the owner.
 - **Publishing:** the OpenCode job has read-only repository permissions and **never receives a GitHub write token**. It creates a bounded patch artifact after local project checks. A separate fresh job downloads the patch and checks that it is based on the same default-branch commit. It then independently validates protected paths, file types and sizes, and rejects any staged content shaped like a gateway lease. Only then does it create a pull request with short-lived write credentials. No code from the proposed edits runs in the privileged publishing job, and nothing is merged automatically.
 
 For safety, manual dispatch is restricted to the **personal repository owner**, both by the in-file actor guard and by the gateway's identity check (which cannot be edited from this repository). Organization-owned forks are not supported by this workflow.
