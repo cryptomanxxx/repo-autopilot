@@ -13,15 +13,69 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  propose:
+  lease:
     # This initial backend supports owner-operated personal repositories only.
     # An Actions repository variable is not a safe authorization boundary.
     if: github.event.repository.owner.type == 'User' && github.actor == github.repository_owner
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 5
     # Configure a protected environment with required owner reviewers and
     # deployment branches limited to the default branch before running.
+    # The gateway only issues leases to this environment's OIDC identity.
     environment: ai-agent-production
+    permissions:
+      # Only to prove this run's identity to the AI gateway. No provider key
+      # is ever stored in GitHub; it lives in the gateway's Cloudflare secrets.
+      # This job runs no repository or agent code, so nothing untrusted can
+      # reach the OIDC token request credentials.
+      id-token: write
+    outputs:
+      gateway_url: ${{ steps.exchange.outputs.gateway_url }}
+    steps:
+      - name: Exchange GitHub OIDC for a short-lived gateway lease
+        id: exchange
+        env:
+          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$AI_GATEWAY_URL" =~ ^https://[A-Za-z0-9.-]+$ ]]; then
+            echo "::error::Set the AI_GATEWAY_URL variable on the ai-agent-production environment (https origin, no path)."
+            exit 1
+          fi
+          jwt="$(curl -sSf --max-time 30 \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=repo-autopilot-ai-gateway" | jq -er .value)"
+          echo "::add-mask::$jwt"
+          lease="$(curl -sSf --max-time 30 --proto '=https' -X POST \
+            -H "Authorization: Bearer $jwt" \
+            "$AI_GATEWAY_URL/v1/session" | jq -er .access_token)"
+          if [[ ! "$lease" =~ ^g1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$ ]]; then
+            echo "::error::Gateway returned an unexpected lease format."
+            exit 1
+          fi
+          echo "::add-mask::$lease"
+          # Handed over as a file, never as a job output or env value, which
+          # GitHub would print in the next job's log. Valid 30 min / 100 calls.
+          mkdir -p "$RUNNER_TEMP/lease"
+          umask 077
+          printf '%s' "$lease" > "$RUNNER_TEMP/lease/gateway-lease"
+          echo "gateway_url=$AI_GATEWAY_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Hand the lease to the agent job
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-lease
+          path: ${{ runner.temp }}/lease/gateway-lease
+          if-no-files-found: error
+          retention-days: 1
+
+  propose:
+    needs: lease
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    # No id-token permission and no environment: agent-controlled code
+    # (OpenCode, npm scripts, tests) runs only in this job.
     permissions:
       contents: read
     outputs:
@@ -29,6 +83,19 @@ jobs:
     env:
       TASK: ${{ inputs.task }}
     steps:
+      - name: Receive the gateway lease
+        uses: actions/download-artifact@v4
+        with:
+          name: gateway-lease
+          path: ${{ runner.temp }}
+
+      - name: Mask the gateway lease
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod 600 "$RUNNER_TEMP/gateway-lease"
+          echo "::add-mask::$(cat "$RUNNER_TEMP/gateway-lease")"
+
       - name: Checkout default branch without stored credentials
         uses: actions/checkout@v4
         with:
@@ -48,15 +115,9 @@ jobs:
           node-version: '22'
 
       - name: Check prerequisites
-        env:
-          BLABLADOR_API_KEY: ${{ secrets.BLABLADOR_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "$BLABLADOR_API_KEY" ]]; then
-            echo "::error::Set the BLABLADOR_API_KEY Actions secret before running this workflow."
-            exit 1
-          fi
           if [[ -z "$TASK" || ${#TASK} -gt 4000 ]]; then
             echo "::error::Task must be between 1 and 4000 characters."
             exit 1
@@ -65,13 +126,15 @@ jobs:
       - name: Install pinned OpenCode
         run: npm install --global opencode-ai@1.19.3
 
-      - name: Configure OpenCode for Blablador
+      - name: Configure OpenCode for the AI gateway
+        env:
+          AI_GATEWAY_URL: ${{ needs.lease.outputs.gateway_url }}
         shell: bash
         run: |
           mkdir -p "$HOME/.config/opencode"
-          cat > "$HOME/.config/opencode/opencode.json" <<'JSON'
+          cat > "$HOME/.config/opencode/opencode.json" <<JSON
           {
-            "$schema": "https://opencode.ai/config.json",
+            "\$schema": "https://opencode.ai/config.json",
             "model": "blablador/alias-code",
             "small_model": "blablador/alias-fast",
             "provider": {
@@ -79,17 +142,17 @@ jobs:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Helmholtz Blablador",
                 "options": {
-                  "baseURL": "https://api.blablador.fz-juelich.de/v1",
-                  "apiKey": "{env:BLABLADOR_API_KEY}"
+                  "baseURL": "${AI_GATEWAY_URL}/v1",
+                  "apiKey": "{env:AI_GATEWAY_LEASE}"
                 },
                 "models": {
                   "alias-code": {
                     "name": "Blablador Code",
-                    "limit": {"context": 98304, "output": 32768}
+                    "limit": {"context": 98304, "output": 8192}
                   },
                   "alias-fast": {
                     "name": "Blablador Fast",
-                    "limit": {"context": 98304, "output": 32768}
+                    "limit": {"context": 98304, "output": 8192}
                   }
                 }
               }
@@ -99,15 +162,16 @@ jobs:
           chmod 600 "$HOME/.config/opencode/opencode.json"
 
       - name: Run unprivileged coding agent
-        env:
-          BLABLADOR_API_KEY: ${{ secrets.BLABLADOR_API_KEY }}
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/opencode-task.txt" <<'TXT'
           You are working in Repo Autopilot. Implement the user's coding request in this checked-out repository. Do not create local commits, merge, push, create a pull request, modify GitHub workflow files, touch credentials or alter security-sensitive configuration. Do not run remote scripts. Prefer minimal changes. The enclosing workflow validates, tests and opens a PR for human review.
           TXT
           printf '\nUser request:\n%s\n' "$TASK" >> "$RUNNER_TEMP/opencode-task.txt"
-          opencode run --model blablador/alias-code "$(cat "$RUNNER_TEMP/opencode-task.txt")"
+          # The agent sees only the expiring gateway lease, never a provider key.
+          AI_GATEWAY_LEASE="$(cat "$RUNNER_TEMP/gateway-lease")" \
+            opencode run --model blablador/alias-code "$(cat "$RUNNER_TEMP/opencode-task.txt")"
+          rm -f "$RUNNER_TEMP/gateway-lease"
 
       - name: Test edits and create an untrusted patch
         id: patch
@@ -214,6 +278,13 @@ jobs:
             fi
           done < <(git diff --cached --name-only --no-renames -z)
           git diff --cached --check
+          # Reject anything shaped like a gateway lease (g1.<payload>.<hmac>),
+          # so a leaked credential never reaches repository history.
+          # Scans every staged blob, binary files included, without a pipe.
+          if git grep --cached -a -q -E 'g1\.[A-Za-z0-9_-]{30,400}\.[A-Za-z0-9_-]{43}'; then
+            echo "::error::Proposal contains a gateway lease token."
+            exit 1
+          fi
           total=0
           while IFS= read -r -d '' path; do
             size="$(git cat-file -s ":$path")"
