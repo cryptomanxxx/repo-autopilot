@@ -20,7 +20,7 @@
 <div id="messages" aria-live="polite"><p class="muted empty">Ask about the code or describe a change. The agent reads the repository's current files and can propose edits; you decide whether to open a pull request.</p></div>
 <form id="composer"><label for="message">Message</label><textarea id="message" rows="4" maxlength="8000" required placeholder="Ask a question or describe the change you want. Paste or attach a screenshot if it helps."></textarea>
 <div class="attachments"><label class="file"><input id="image" type="file" accept="image/png,image/jpeg,image/webp">Attach image</label><img id="preview" alt="Attached image preview" hidden><button type="button" id="remove-image" class="secondary" hidden>Remove image</button></div>
-<div class="actions"><button id="send">Send</button><span id="status" role="status" class="muted"></span></div></form>
+<div class="actions"><label id="agent-row" class="agent-row" hidden>Agent <select id="agent"></select></label><button id="send">Send</button><span id="status" role="status" class="muted"></span></div></form>
 <p class="muted small">Conversations are stored privately in your Cloudflare account. Messages, images and the relevant repository files are sent to the configured AI model. Pull requests are opened with your GitHub account; CI runs there and you decide what to merge.</p>
 </section></section>
 </main></body></html>

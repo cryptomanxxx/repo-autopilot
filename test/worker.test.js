@@ -8,7 +8,7 @@ import {join,dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {ChatStoreLogic} from '../worker/src/store.js';
 import {readTar} from '../worker/src/github.js';
-import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy,modelName,agentName,agentIntro} from '../worker/src/agent.js';
+import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy,modelName,agentName,agentIntro,chatAgents,findAgent} from '../worker/src/agent.js';
 import {createHmac,createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -244,8 +244,16 @@ test('the AI gateway provider streams Blablador through the service binding with
   assert.equal(modelName(env),'Blablador alias-fast (AI gateway)');
   assert.equal(modelName({}),'@cf/meta/llama-4-scout-17b-16e-instruct');
   assert.equal(agentName(env),'Blablador');
-  assert.match(agentIntro(env),/^You are Blablador, the coding agent for a GitHub repository/);assert.match(agentIntro(env),/\(alias-fast\)/);
-  assert.match(buildMessages({repository:'o/r',head:{branch:'main',sha:'a'.repeat(40)},context:{included:[],listing:[]},history:[],text:'hi',agent:agentIntro(env)})[0].content,/^You are Blablador, /,'the model is told the name the chat shows');
+  assert.match(agentIntro(findAgent(env)),/^You are Blablador, the coding agent for a GitHub repository/);assert.match(agentIntro(findAgent(env)),/\(alias-fast\)/);
+  assert.match(agentIntro(findAgent(env,'hip')),/^You are HIP, .*hessian\.AI HIP model service \(GLM-5\.2\)/);
+  assert.match(agentIntro(findAgent({},undefined)),/^You are the coding agent/,'other providers keep the unnamed role');
+  assert.deepEqual(chatAgents(env).map(a=>[a.id,a.name,a.model]),[['blablador','Blablador','alias-fast'],['hip','HIP','hip-glm']]);
+  assert.deepEqual(chatAgents({}).map(a=>a.id),['default']);
+  assert.equal(findAgent(env,'nope'),null);assert.equal(findAgent(env,42),null);
+  // The chosen agent's gateway model is the one requested.
+  await callModel(env,[],{agent:findAgent(env,'hip')});assert.equal(JSON.parse(sent.at(-1).options.body).model,'hip-glm');
+  await assert.rejects(callModel(env,[{role:'user',content:[{type:'image_url',image_url:{url:'data:image/png;base64,AA'}}]}],{agent:findAgent(env,'hip')}),/HIP reads only text/);
+  assert.match(buildMessages({repository:'o/r',head:{branch:'main',sha:'a'.repeat(40)},context:{included:[],listing:[]},history:[],text:'hi',agent:agentIntro(findAgent(env))})[0].content,/^You are Blablador, /,'the model is told the name the chat shows');
   assert.match(buildMessages({repository:'o/r',head:{branch:'main',sha:'a'.repeat(40)},context:{included:[],listing:[]},history:[],text:'hi'})[0].content,/^You are the coding agent for a GitHub repository/);assert.equal(agentName({}),'llama-4-scout-17b-16e-instruct');
   env.AI_GATEWAY.fetch=async()=>sse(piece('Long'),piece(null,'length'));
   assert.deepEqual(await callModel(env,[]),{text:'Long',truncated:true});
@@ -423,7 +431,20 @@ test('a gateway answer streams to the browser as it is written',async()=>{
   const thread=await (await handle(request(`/api/conversations/${events.at(-1).conversation}`,{cookie:auth.cookie}),env,{fetchImpl})).json();
   assert.equal(thread.messages[1].content,'Hej där');
   assert.equal(thread.messages[1].meta.agent,'Blablador','the answer is labelled with the agent that wrote it');
-  assert.equal((await (await handle(request('/api/session',{cookie:auth.cookie}),env,{fetchImpl})).json()).agent,'Blablador');
+  const sessionInfo=await (await handle(request('/api/session',{cookie:auth.cookie}),env,{fetchImpl})).json();
+  assert.equal(sessionInfo.agent,'Blablador');
+  assert.deepEqual(sessionInfo.agents.map(a=>a.id),['blablador','hip']);
+  // Choosing HIP sends its gateway model and labels the answer with its name.
+  const bodies=[];
+  env.AI_GATEWAY.fetch=async(url,options)=>{bodies.push(JSON.parse(options.body));return sse(piece('Hallå'),piece(null,'stop'));};
+  const hip=(await handle(post('/api/chat',auth,{text:'Hej',conversation:events.at(-1).conversation,agent:'hip'}),env,{fetchImpl})).text();
+  const hipEvents=(await hip).split('\n').filter(Boolean).map(line=>JSON.parse(line));
+  assert.equal(hipEvents.at(-1).type,'done');
+  assert.equal(bodies[0].model,'hip-glm');
+  assert.match(bodies[0].messages[0].content,/^You are HIP, /);
+  const after=await (await handle(request(`/api/conversations/${events.at(-1).conversation}`,{cookie:auth.cookie}),env,{fetchImpl})).json();
+  assert.deepEqual(after.messages.filter(m=>m.role==='assistant').map(m=>m.meta.agent),['Blablador','HIP'],'each answer keeps the agent that wrote it');
+  assert.equal((await handle(post('/api/chat',auth,{text:'Hej',agent:'other'}),env,{fetchImpl})).status,400);
 });
 
 test('chat answers from repository files and opens a pull request on request',async()=>{

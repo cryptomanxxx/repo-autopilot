@@ -5,7 +5,7 @@ import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
 import {connector,isConnectorPath,finishConnect,failConnect,logOauth,githubHandoff,sealGithub} from './connector.js';
 import {connectorTools} from './tools.js';
 export {UserError};
-import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,modelName,agentName,agentIntro} from './agent.js';
+import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,modelName,agentName,agentIntro,chatAgents,findAgent} from './agent.js';
 
 const encoder=new TextEncoder();
 const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
@@ -179,7 +179,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   const sessionId=cookies(request)[sessionCookie];
   const hash=sessionId&&/^[0-9a-f]{64}$/.test(sessionId)?hex(await sha256(sessionId)):null;
   const session=hash?await store.getSession(hash):null;
-  if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:modelName(env),agent:agentName(env),deployed:deployedVersion(env)}:{login:null,repository:config.repository});
+  if(request.method==='GET'&&url.pathname==='/api/session') return json(200,session?{login:session.login,csrf:session.csrf,repository:config.repository,model:modelName(env),agent:agentName(env),agents:chatAgents(env).map(({id,name,label})=>({id,name,label})),deployed:deployedVersion(env)}:{login:null,repository:config.repository});
   if(!session) throw new UserError(401,'Sign in to chat.');
 
   const github=repository=>githubClient({repository,token:session.token,fetchImpl});
@@ -393,6 +393,8 @@ async function chat(body,{env,store,github,config,access,fetchImpl}) {
   const text=typeof body.text==='string'?body.text.trim():'';
   if(!text||text.length>MAX_TEXT) throw new UserError(400,`Write a message between 1 and ${MAX_TEXT} characters.`);
   const image=validateImage(body.image);
+  const agent=findAgent(env,body.agent);
+  if(!agent) throw new UserError(400,'Unknown agent.');
   let conversation=null;
   if(body.conversation!==undefined&&body.conversation!==null) {
     if(typeof body.conversation!=='string'||!/^[0-9a-f]{32}$/.test(body.conversation)) throw new UserError(400,'Invalid conversation.');
@@ -416,15 +418,15 @@ async function chat(body,{env,store,github,config,access,fetchImpl}) {
     const history=conversation?.messages||[];
     const query=[...history.filter(m=>m.role==='user').slice(-2).map(m=>m.content),text].join('\n');
     const context=selectContext(files,query,Number(env.CONTEXT_CHARS)||DEFAULT_CONTEXT_CHARS);
-    const meta={repository,branch:head.branch,sha:head.sha,read:context.included.length,files:Object.keys(files).length,agent:agentName(env)};
-    const messages=buildMessages({repository,head,context,history,text,image,rule:policy.rule,agent:agentIntro(env)});
+    const meta={repository,branch:head.branch,sha:head.sha,read:context.included.length,files:Object.keys(files).length,agent:agent.name};
+    const messages=buildMessages({repository,head,context,history,text,image,rule:policy.rule,agent:agentIntro(agent)});
     streaming=true;
     // The answer streams progress steps as lines of JSON, ending with a done or an error line.
     return progressStream(async send=>{
       try {
         send({type:'step',text:`Read ${repository} · ${head.branch} @ ${head.sha.slice(0,7)} · ${meta.files} files`});
         send({type:'step',text:`Chose ${meta.read} relevant file${meta.read===1?'':'s'}; asking the model…`});
-        const result=await answer(env,{messages,files,existingPaths:[...archive.keys()],allowed:policy.allowed,fetchImpl,onStep:text=>send({type:'step',text}),onDelta:text=>send(text===null?{type:'reset'}:{type:'delta',text})});
+        const result=await answer(env,{messages,files,existingPaths:[...archive.keys()],allowed:policy.allowed,fetchImpl,onStep:text=>send({type:'step',text}),onDelta:text=>send(text===null?{type:'reset'}:{type:'delta',text}),agent});
         const content=result.error?`${result.reply}\n\n⚠ The proposed change could not be applied: ${result.error} Ask the agent to try again.`:result.reply;
         const id=conversation?.id||randomHex(16);
         await store.saveExchange({conversation:id,title:conversation?null:text.replace(/\s+/g,' ').slice(0,80),repository:conversation?null:repository,user:{content:text,hasImage:Boolean(image)},assistant:{content,proposal:result.proposal,meta}});
