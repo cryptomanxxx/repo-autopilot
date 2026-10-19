@@ -8,7 +8,7 @@ import {join,dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {ChatStoreLogic} from '../worker/src/store.js';
 import {readTar} from '../worker/src/github.js';
-import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy,modelName,agentName,agentIntro,chatAgents,findAgent} from '../worker/src/agent.js';
+import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy,modelName,agentName,agentIntro,chatAgents,findAgent,withModel,agentModels} from '../worker/src/agent.js';
 import {createHmac,createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -250,6 +250,10 @@ test('the AI gateway provider streams Blablador through the service binding with
   assert.deepEqual(chatAgents(env).map(a=>[a.id,a.name,a.model]),[['blablador','Blablador','alias-fast'],['hip','HIP','hip-glm']]);
   assert.deepEqual(chatAgents({}).map(a=>a.id),['default']);
   assert.equal(findAgent(env,'nope'),null);assert.equal(findAgent(env,42),null);
+  assert.deepEqual(withModel(findAgent(env,'hip'),undefined),findAgent(env,'hip'),'no model keeps the standard one');
+  assert.deepEqual([withModel(findAgent(env,'hip'),'hip:X').model,withModel(findAgent(env,'hip'),'hip:X').modelName],['hip:X','X']);
+  assert.equal(withModel(findAgent(env,'hip'),'blablador:X'),null);assert.equal(withModel(findAgent({}),'x:y'),null);
+  assert.deepEqual(await agentModels({}),{agents:[]});
   // The chosen agent's gateway model is the one requested.
   await callModel(env,[],{agent:findAgent(env,'hip')});assert.equal(JSON.parse(sent.at(-1).options.body).model,'hip-glm');
   await assert.rejects(callModel(env,[{role:'user',content:[{type:'image_url',image_url:{url:'data:image/png;base64,AA'}}]}],{agent:findAgent(env,'hip')}),/HIP reads only text/);
@@ -445,6 +449,28 @@ test('a gateway answer streams to the browser as it is written',async()=>{
   const after=await (await handle(request(`/api/conversations/${events.at(-1).conversation}`,{cookie:auth.cookie}),env,{fetchImpl})).json();
   assert.deepEqual(after.messages.filter(m=>m.role==='assistant').map(m=>m.meta.agent),['Blablador','HIP'],'each answer keeps the agent that wrote it');
   assert.equal((await handle(post('/api/chat',auth,{text:'Hej',agent:'other'}),env,{fetchImpl})).status,400);
+  // A model picked from HIP's list is sent as the gateway names it, and the answer names it too.
+  bodies.length=0;
+  const mistral=await (await handle(post('/api/chat',auth,{text:'Hej',conversation:events.at(-1).conversation,agent:'hip',model:'hip:Mistral-Medium-3.5-128B'}),env,{fetchImpl})).text();
+  assert.equal(mistral.trim().split('\n').map(line=>JSON.parse(line)).at(-1).type,'done');
+  assert.equal(bodies[0].model,'hip:Mistral-Medium-3.5-128B');
+  assert.match(bodies[0].messages[0].content,/^You are HIP, .*\(Mistral-Medium-3\.5-128B\)/);
+  const last=(await (await handle(request(`/api/conversations/${events.at(-1).conversation}`,{cookie:auth.cookie}),env,{fetchImpl})).json()).messages.at(-1);
+  assert.deepEqual([last.meta.agent,last.meta.model],['HIP','Mistral-Medium-3.5-128B']);
+  for(const model of ['blablador:alias-code','Mistral',`hip:${'x'.repeat(220)}`,'hip:a\nb',42])
+    assert.equal((await handle(post('/api/chat',auth,{text:'Hej',agent:'hip',model}),env,{fetchImpl})).status,400,String(model));
+  // The models each agent's provider lists, read from the gateway.
+  env.AI_GATEWAY.fetch=async url=>{
+    assert.equal(url,'https://ai-gateway/v1/models');
+    return Response.json({data:[{id:'hip:Mistral-Medium-3.5-128B',provider:'hip',model:'Mistral-Medium-3.5-128B',context_length:131072},
+      {id:'blablador:alias-code',provider:'blablador',model:'alias-code',context_length:null},{id:'other:x',provider:'other',model:'x'}],
+      providers:{blablador:'ok',hip:'ok'}});
+  };
+  assert.deepEqual(await (await handle(request('/api/models',{cookie:auth.cookie}),env,{fetchImpl})).json(),{agents:[
+    {id:'blablador',status:'ok',models:[{id:'blablador:alias-code',name:'alias-code',contextLength:null}]},
+    {id:'hip',status:'ok',models:[{id:'hip:Mistral-Medium-3.5-128B',name:'Mistral-Medium-3.5-128B',contextLength:131072}]}]});
+  env.AI_GATEWAY.fetch=async()=>new Response('down',{status:503});
+  assert.equal((await handle(request('/api/models',{cookie:auth.cookie}),env,{fetchImpl})).status,500);
 });
 
 test('chat answers from repository files and opens a pull request on request',async()=>{
@@ -465,7 +491,7 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.equal(thread.title,'Change the title in public/app.js');
   const reply=thread.messages[1];
   assert.deepEqual(reply.proposal,{title:'New title',paths:['public/app.js']});
-  assert.deepEqual(reply.meta,{repository:'owner/repo',branch:'main',sha:'a'.repeat(40),read:2,files:2,agent:'llama-4-scout-17b-16e-instruct'},'an answer records the code it was based on and the agent that wrote it');
+  assert.deepEqual(reply.meta,{repository:'owner/repo',branch:'main',sha:'a'.repeat(40),read:2,files:2,agent:'llama-4-scout-17b-16e-instruct',model:null},'an answer records the code it was based on and the agent that wrote it');
   assert.equal(thread.messages[0].meta,null);
   calls.length=0;
   const head=await (await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl})).json();
