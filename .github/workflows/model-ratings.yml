@@ -1,0 +1,202 @@
+name: Model ratings
+
+# Rates the AI gateway's chat models on fixed small coding tasks (scripts/model-ratings) and proposes
+# the results as a pull request to worker/src/model-ratings.json. The agent chat sorts its model
+# picker by these ratings. Each run rates the untested models first, then those tested longest ago,
+# within one gateway lease (100 calls in 30 minutes, 5 calls per model); run it again for more.
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Which provider's models to rate"
+        required: true
+        default: all
+        type: choice
+        options: [all, blablador, hip]
+      max_models:
+        description: "Models to rate in this run (1-20)"
+        required: true
+        default: '12'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    # Owner-operated like the OpenCode workflow; the gateway trusts this workflow file on main only.
+    if: github.event.repository.owner.type == 'User' && github.actor == github.repository_owner && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: ai-agent-production
+    permissions:
+      contents: read
+      # Only to prove this run's identity to the AI gateway. No provider key is ever stored in
+      # GitHub. This job runs no model-written code: it only sends the tasks and saves the answers.
+      id-token: write
+    steps:
+      - name: Checkout without stored credentials
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check inputs
+        env:
+          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
+          MAX_MODELS: ${{ inputs.max_models }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$AI_GATEWAY_URL" =~ ^https://[A-Za-z0-9.-]+$ ]]; then
+            echo "::error::Set the AI_GATEWAY_URL variable on the ai-agent-production environment (https origin, no path)."
+            exit 1
+          fi
+          if [[ ! "$MAX_MODELS" =~ ^[0-9]+$ ]] || (( MAX_MODELS < 1 || MAX_MODELS > 20 )); then
+            echo "::error::max_models must be a whole number from 1 to 20."
+            exit 1
+          fi
+
+      - name: Exchange GitHub OIDC for a short-lived gateway lease
+        env:
+          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jwt="$(curl -sSf --max-time 30 \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=repo-autopilot-ai-gateway" | jq -er .value)"
+          echo "::add-mask::$jwt"
+          status="$(curl -sS --max-time 30 --proto '=https' -X POST \
+            -o "$RUNNER_TEMP/session.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $jwt" \
+            "$AI_GATEWAY_URL/v1/session")"
+          if [[ "$status" != 200 ]]; then
+            echo "::error::Gateway refused the session (HTTP $status): $(jq -r '.error // empty' "$RUNNER_TEMP/session.json" 2>/dev/null)"
+            exit 1
+          fi
+          lease="$(jq -er .access_token "$RUNNER_TEMP/session.json")"
+          rm -f "$RUNNER_TEMP/session.json"
+          if [[ ! "$lease" =~ ^g1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$ ]]; then
+            echo "::error::Gateway returned an unexpected lease format."
+            exit 1
+          fi
+          # Masked before anything could print it: this repository's logs are public.
+          echo "::add-mask::$lease"
+          umask 077
+          printf '%s' "$lease" > "$RUNNER_TEMP/gateway-lease"
+
+      - name: Ask each model the coding tasks
+        env:
+          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
+          PROVIDER: ${{ inputs.provider }}
+          MAX_MODELS: ${{ inputs.max_models }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          status=0
+          LEASE_FILE="$RUNNER_TEMP/gateway-lease" OUT="$RUNNER_TEMP/out/answers.json" RATINGS=worker/src/model-ratings.json \
+            node scripts/model-ratings/collect.mjs || status=$?
+          rm -f "$RUNNER_TEMP/gateway-lease"
+          if (( status != 0 )); then exit "$status"; fi
+          # The answers are uploaded as an artifact, which anyone can download from a public
+          # repository. The models never see the lease; check anyway.
+          if grep -Eq 'g1\.[A-Za-z0-9_-]{30,400}\.[A-Za-z0-9_-]{43}' "$RUNNER_TEMP/out/answers.json"; then
+            echo "::error::The answers contain something shaped like a gateway lease."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-answers
+          path: ${{ runner.temp }}/out/answers.json
+          if-no-files-found: error
+          retention-days: 3
+
+  grade:
+    needs: collect
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Runs the code the models wrote, so it holds no lease, no OIDC permission and no write token;
+    # each piece of model code also runs in a sandboxed Node process (scripts/model-ratings/tasks.mjs).
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: model-answers
+          path: ${{ runner.temp }}/answers
+      - name: Grade the answers
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          node scripts/model-ratings/grade.mjs "$RUNNER_TEMP/answers/answers.json" worker/src/model-ratings.json "$RUNNER_TEMP/out/model-ratings.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-ratings
+          path: ${{ runner.temp }}/out/model-ratings.json
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: grade
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Clean checkout without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          name: model-ratings
+          path: ${{ runner.temp }}/ratings
+      - name: Check the ratings file and open a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          next="$RUNNER_TEMP/ratings/model-ratings.json"
+          if [[ ! -s "$next" || $(stat -c %s "$next") -gt 1048576 ]]; then
+            echo "::error::Ratings file missing or oversized."
+            exit 1
+          fi
+          # Strict format check with this checkout's own code; it also writes the PR summary.
+          node scripts/model-ratings/publish.mjs "$next" worker/src/model-ratings.json > "$RUNNER_TEMP/pr-body.md"
+          cat "$RUNNER_TEMP/pr-body.md" >> "$GITHUB_STEP_SUMMARY"
+          cp "$next" worker/src/model-ratings.json
+          if git diff --quiet; then
+            echo "::notice::No rating changed."
+            exit 0
+          fi
+          branch="autopilot/model-ratings-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add worker/src/model-ratings.json
+          git commit -m "chore: update model ratings"
+          gh auth setup-git
+          git push origin "$branch"
+          printf '\n%s\n' 'Created by the Model ratings workflow. Merging deploys the agent chat with these ratings.' >> "$RUNNER_TEMP/pr-body.md"
+          gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" --title "Model ratings: $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/pr-body.md"
