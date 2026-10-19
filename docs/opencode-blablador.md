@@ -49,3 +49,5 @@ If the default branch changes during an agent run, the publisher refuses the sta
 - On a personal repository without collaborators, only the owner can dispatch at all.
 
 The publisher validates that each staged added/modified blob is at most 1 MiB and the total is at most 5 MiB, after applying the patch and before obtaining its GitHub write token.
+
+Tested end to end via the staging AI gateway.
