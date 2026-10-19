@@ -22,16 +22,21 @@ const listed=await fetch(gateway+'/v1/models',{headers,signal:AbortSignal.timeou
 if(!listed.ok) throw new Error('The gateway did not list the models (HTTP '+listed.status+').');
 const catalog=await listed.json();
 for(const [provider,status] of Object.entries(catalog.providers||{})) console.log(`Provider ${provider}: ${status}`);
-// Untested models first, then those tested longest ago, taking the providers in turn so that each
-// run rates some of every provider's models.
-const queues=new Map();
-for(const row of (catalog.data||[])
+// Untested models first, then those tested longest ago. Within each of the two groups the providers
+// take turns, so that each run rates some of every provider's models without rerating one
+// provider's models while another still has untested ones.
+const ordered=(catalog.data||[])
   .filter(row=>validId(row?.id)&&(PROVIDER==='all'||row.provider===PROVIDER))
-  .sort((a,b)=>(previous[a.id]?.testedAt||'').localeCompare(previous[b.id]?.testedAt||'')||a.id.localeCompare(b.id)))
-  queues.set(row.provider,[...(queues.get(row.provider)||[]),row]);
-const chosen=[];
-while(chosen.length<limit&&[...queues.values()].some(queue=>queue.length))
-  for(const queue of queues.values()) if(queue.length&&chosen.length<limit) chosen.push(queue.shift());
+  .sort((a,b)=>(previous[a.id]?.testedAt||'').localeCompare(previous[b.id]?.testedAt||'')||a.id.localeCompare(b.id));
+function inTurn(rows) {
+  const queues=new Map();
+  for(const row of rows) queues.set(row.provider,[...(queues.get(row.provider)||[]),row]);
+  const result=[];
+  while([...queues.values()].some(queue=>queue.length))
+    for(const queue of queues.values()) if(queue.length) result.push(queue.shift());
+  return result;
+}
+const chosen=[...inTurn(ordered.filter(row=>!previous[row.id])),...inTurn(ordered.filter(row=>previous[row.id]))].slice(0,limit);
 console.log(`Rating ${chosen.length} model(s): ${chosen.map(row=>row.id).join(', ')}`);
 
 // One answer. The gateway's per-minute limits answer 429 for a while; that is waited out.

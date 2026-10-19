@@ -39,6 +39,12 @@ test('every task passes its reference answer and fails a wrong one',()=>{
   assert.equal(task('reading-async').grade('a,s,p1,p2,m,b,t'),false);
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('  maxUsers: 10,','  maxUsers: 11,')),false,'a SEARCH that does not match the file');
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].split('\n\n')[0]),false,'only one of the two changes');
+  const PLANS_TEXT='  maxUsers: 10,\n  maxProjects: 5,\n};\n\nexport function describe(plan) {\n  return `${plan.name}: ${plan.users} users`;';
+  assert.equal(task('edit-multi').grade(`<<<<<<< SEARCH\n${PLANS_TEXT}\n=======\n${PLANS_TEXT.replace('10','25').replace('users`','users, ${plan.projects} projects`')}\n>>>>>>> REPLACE`),false,'one block making both changes');
+  assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('return `${plan.name}: ${plan.users} users, ${plan.projects} projects`','return \'${plan.name}: ${plan.users} users, ${plan.projects} projects\'')),false,'a plain string instead of a template literal');
+  assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('users, ${plan.projects} projects`','users,${plan.projects}projects`')),false,'spaces inside a template literal count');
+  assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('  maxUsers: 25,','maxUsers:25 ,')),true,'spacing outside strings does not');
+  assert.equal(task('edit').grade(GOOD.edit.replace("'eu-west-1'",'"eu-west-1"')),true,'either quote style');
 });
 
 test('model code runs without file access, environment or unlimited time',()=>{
@@ -68,6 +74,18 @@ test('the isolated sandbox runs model code with no network as the user nobody',{
   } finally {delete process.env.MODEL_SANDBOX;}
 });
 
+test('a model is rated only when the provider answered most of the tasks',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'ratings-grade-'));
+  try {
+    const answers=(ok,errors)=>TASKS.map((task,index)=>index<ok?{task:task.id,status:'ok',seconds:1,text:GOOD[task.id]}:index<ok+errors?{task:task.id,status:'error',error:'HTTP 502'}:null).filter(Boolean);
+    const half=Math.floor(TASKS.length/2);
+    writeFileSync(join(dir,'answers.json'),JSON.stringify({version:1,models:[{id:'hip:half',answers:answers(half,TASKS.length-half)},{id:'hip:most',answers:answers(half+1,TASKS.length-half-1)}]}));
+    writeFileSync(join(dir,'current.json'),JSON.stringify(empty()));
+    await run(process.execPath,[script('grade.mjs'),join(dir,'answers.json'),join(dir,'current.json'),join(dir,'next.json')]);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir,'next.json'),'utf8')).models),['hip:most']);
+  } finally {rmSync(dir,{recursive:true,force:true});}
+});
+
 test('stars come from the tasks passed, one less for a slow model, never below one',()=>{
   assert.deepEqual([9,8,7,6,5,4,3,0].map(p=>stars(p,10)),[5,4,3,3,2,2,1,1]);
   assert.deepEqual([stars(9,46),stars(1,90),stars(9,null)],[4,1,5]);
@@ -92,7 +110,7 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     if(request.method==='GET'&&request.url==='/v1/models') {
       response.setHeader('Content-Type','application/json');
       return response.end(JSON.stringify({providers:{blablador:'ok',hip:'ok'},data:[
-        {id:'blablador:good',provider:'blablador'},{id:'blablador:later',provider:'blablador'},{id:'hip:bad',provider:'hip'},{id:'hip:down',provider:'hip'},{id:'hip:old',provider:'hip'}]}));
+        {id:'blablador:good',provider:'blablador'},{id:'blablador:later',provider:'blablador'},{id:'blablador:third',provider:'blablador'},{id:'hip:bad',provider:'hip'},{id:'hip:down',provider:'hip'},{id:'hip:old',provider:'hip'}]}));
     }
     let body='';
     request.on('data',chunk=>{body+=chunk;});
@@ -111,18 +129,18 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     const current={...empty(),models:{'hip:old':{stars:2,passed:4,total:9,seconds:3,testedAt:'2026-01-02'},'hip:down':{stars:3,passed:6,total:9,seconds:3,testedAt:'2026-01-01'}}};
     writeFileSync(join(dir,'current.json'),JSON.stringify(current));
     const env={...process.env,AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,LEASE_FILE:join(dir,'lease'),
-      OUT:join(dir,'answers.json'),RATINGS:join(dir,'current.json'),PROVIDER:'all',MAX_MODELS:'4'};
+      OUT:join(dir,'answers.json'),RATINGS:join(dir,'current.json'),PROVIDER:'all',MAX_MODELS:'5'};
     const collected=await run(process.execPath,[script('collect.mjs')],{env});
     assert.doesNotMatch(collected.stdout+collected.stderr,/g1\./,'the lease is never printed');
     const answers=readFileSync(join(dir,'answers.json'),'utf8');
     assert.doesNotMatch(answers,/g1\./);
-    // Untested models first, then the oldest, taking the providers in turn; hip:old (tested most
-    // recently) does not fit in four.
-    assert.deepEqual(JSON.parse(answers).models.map(m=>m.id),['blablador:good','hip:bad','blablador:later','hip:down']);
-    assert.equal(calls.length,4*TASKS.length);
+    // Untested models first (the providers taking turns while both have some), then the oldest
+    // tested; hip:old (tested most recently) does not fit in five.
+    assert.deepEqual(JSON.parse(answers).models.map(m=>m.id),['blablador:good','hip:bad','blablador:later','blablador:third','hip:down']);
+    assert.equal(calls.length,5*TASKS.length);
     await run(process.execPath,[script('grade.mjs'),join(dir,'answers.json'),join(dir,'current.json'),join(dir,'next.json')]);
     const next=validate(JSON.parse(readFileSync(join(dir,'next.json'),'utf8')));
-    assert.deepEqual(Object.keys(next.models),['blablador:good','blablador:later','hip:bad','hip:down','hip:old']);
+    assert.deepEqual(Object.keys(next.models),['blablador:good','blablador:later','blablador:third','hip:bad','hip:down','hip:old']);
     assert.deepEqual([next.models['blablador:good'].stars,next.models['blablador:good'].passed],[5,9]);
     assert.deepEqual([next.models['hip:bad'].stars,next.models['hip:bad'].passed],[1,0]);
     assert.deepEqual(next.models['hip:down'],current.models['hip:down'],'a model the provider could not serve keeps its rating');

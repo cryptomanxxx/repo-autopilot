@@ -16,7 +16,8 @@ for(const model of Array.isArray(collected?.models)?collected.models:[]) {
   if(!validId(model?.id)||!Array.isArray(model.answers)) continue;
   const answers=new Map(model.answers.map(a=>[a?.task,a]));
   const ok=TASKS.map(task=>answers.get(task.id)).filter(a=>a?.status==='ok'&&typeof a.text==='string');
-  if(ok.length<3) {console.log(`${model.id}: not rated (${TASKS.length-ok.length} provider errors)`);continue;}
+  // Rated only when the provider answered most of the tasks.
+  if(ok.length*2<=TASKS.length) {console.log(`${model.id}: not rated (${TASKS.length-ok.length} provider errors)`);continue;}
   const passed=TASKS.filter(task=>{const a=answers.get(task.id);return a?.status==='ok'&&typeof a.text==='string'&&task.grade(a.text);});
   const seconds=median(ok.map(a=>a.seconds).filter(s=>typeof s==='number'&&Number.isFinite(s)&&s>=0&&s<=600));
   ratings.models[model.id]={stars:stars(passed.length,seconds),passed:passed.length,total:TASKS.length,seconds,testedAt};

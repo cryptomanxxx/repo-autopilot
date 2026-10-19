@@ -53,8 +53,26 @@ export function applyEdits(file,answer) {
   }
   return {text,count:blocks.length};
 }
-// Code compared as text, ignoring spacing, quote style, trailing commas and digit separators.
-const normal=text=>text.replace(/\s+/g,'').replace(/["`]/g,"'").replace(/,([}\]])/g,'$1').replace(/(\d)_(?=\d)/g,'$1');
+// Code compared as text: whitespace outside string literals, trailing commas and digit separators
+// are ignored, and '…' and "…" count alike, but the contents of every string and template literal
+// must match exactly.
+function normal(text) {
+  let out='';
+  for(let i=0;i<text.length;) {
+    const quote=text[i];
+    if(quote==="'"||quote==='"'||quote==='`') {
+      let j=i+1;
+      while(j<text.length&&text[j]!==quote) j+=text[j]==='\\'?2:1;
+      const body=text.slice(i+1,j);
+      out+=quote!=='`'&&!/['"\\]/.test(body)?`'${body}'`:quote+body+quote;
+      i=j+1;
+    } else {
+      if(!/\s/.test(quote)) out+=quote;
+      i++;
+    }
+  }
+  return out.replace(/,([}\]])/g,'$1').replace(/(\d)_(?=\d)/g,'$1');
+}
 
 const PLANS=`export const limits = {
   maxUsers: 10,
@@ -239,8 +257,13 @@ Make two changes: raise maxUsers to 25, and make describe() also mention the pro
 (the new lines)
 >>>>>>> REPLACE`,
     grade:answer=>{
+      // Two blocks, each making exactly one of the changes on its own.
+      const blocks=[...visible(answer).replace(/\r\n/g,'\n').matchAll(/<<<<<<< SEARCH\n[\s\S]*?\n>>>>>>> REPLACE/g)].map(m=>m[0]);
+      const users=PLANS.replace('maxUsers: 10','maxUsers: 25'),projects=PLANS.replace('${plan.users} users`','${plan.users} users, ${plan.projects} projects`');
+      const one=(block,expected)=>{const edited=applyEdits(PLANS,block);return !!edited&&normal(edited.text)===normal(expected);};
       const edited=applyEdits(PLANS,answer);
-      return !!edited&&normal(edited.text)===normal(PLANS.replace('maxUsers: 10','maxUsers: 25').replace('${plan.users} users`','${plan.users} users, ${plan.projects} projects`'));
+      return blocks.length===2&&!!edited&&normal(edited.text)===normal(users.replace('${plan.users} users`','${plan.users} users, ${plan.projects} projects`'))&&
+        (one(blocks[0],users)&&one(blocks[1],projects)||one(blocks[0],projects)&&one(blocks[1],users));
     }
   }
 ]);
