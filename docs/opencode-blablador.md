@@ -1,10 +1,11 @@
 # OpenCode with Blablador
 
-Repo Autopilot has an experimental manual GitHub Actions coding workflow in `.github/workflows/opencode-blablador.yml`. It runs OpenCode in a GitHub runner, using Helmholtz Blablador for AI inference. The existing Cloudflare chat and Codex dashboard are unchanged.
+Repo Autopilot has an experimental manual GitHub Actions coding workflow in `.github/workflows/opencode-blablador.yml`. It runs OpenCode in a GitHub runner, using Helmholtz Blablador for AI inference through the private [`repo-autopilot-ai-gateway`](https://github.com/cryptomanxxx/repo-autopilot-ai-gateway) Cloudflare Worker. **No provider API key is stored in GitHub.** The existing Cloudflare chat and Codex dashboard are unchanged.
 
 ## Setup from Android
 
-1. Add `BLABLADOR_API_KEY` directly as an **environment secret** under Settings → Environments → `ai-agent-production`. Do not create a repository-level copy. Configure required owner approval and allow only `main` before enabling the workflow.
+1. Deploy `repo-autopilot-ai-gateway` (see its README) and store `BLABLADOR_API_KEY` and `GATEWAY_LEASE_SIGNING_KEY` **only as Cloudflare Worker secrets**. Delete any `BLABLADOR_API_KEY` secret from GitHub (repository and environment level).
+   Under Settings → Environments → `ai-agent-production`, configure required owner approval, allow only `main`, and add the **environment variable** `AI_GATEWAY_URL` with the gateway's https origin (for example `https://repo-autopilot-ai-gateway.<account>.workers.dev`, no trailing path).
 2. In GitHub repository Settings, enable the Actions option allowing GitHub Actions to create pull requests, if your policies permit it.
 3. Once this PR is merged, open Actions, select `OpenCode coding agent (Blablador)`, choose Run workflow, and enter a short coding task.
 4. Review any resulting PR and follow its CI and Codex feedback in the dashboard. Merge manually.
@@ -15,18 +16,24 @@ GitHub runner usage and Blablador availability still apply. OpenCode can execute
 
 References: https://sdlaml.pages.jsc.fz-juelich.de/ai/guides/blablador_opencode/ and https://opencode.ai/docs/cli/.
 
-## Security boundary (initial version)
+## Security boundary
 
-The OpenCode job has read-only repository permissions and receives the Blablador key, but **never receives a GitHub write token**. It creates a bounded patch artifact after local project checks. A separate fresh GitHub Actions job downloads the patch, checks that it is based on the same default-branch commit, independently validates protected paths and file types, then creates a pull request with short-lived write credentials. No code from the proposed repository edits is executed in the privileged publishing job, and no automatic merge occurs.
+```
+GitHub Actions (propose job, id-token: write) ──OIDC JWT──► gateway /v1/session ──► 30-min lease (100 calls)
+OpenCode ──lease──► gateway /v1/chat/completions ──BLABLADOR_API_KEY (Cloudflare secret)──► Blablador
+```
 
-For safety, manual dispatch of this experimental workflow is currently restricted to the **personal repository owner**. Organization-owned forks are not yet supported by this workflow, even though the dashboard itself supports organization forks. A repository variable such as `AUTOPILOT_TASK_USER` is not an adequate workflow authorization boundary because collaborators with write access may change it. An organization-compatible version must introduce a separately protected approval or authorization policy.
+- **Provider key:** exists only in Cloudflare Worker secrets. Neither GitHub nor OpenCode ever sees it.
+- **Identity:** the gateway accepts only a GitHub-signed OIDC token from this repository's `opencode-blablador.yml` on `main`, dispatched by the owner via `workflow_dispatch` in the `ai-agent-production` environment, first run attempt only. Runs from other refs, reruns and other actors get no lease.
+- **Lease:** OpenCode receives a lease that is valid only at the gateway, for 30 minutes and at most 100 model calls, with one in-flight generation. A leaked lease is bounded by these limits. The OIDC request variables are removed from the agent's environment. Do not configure any other cloud trust for this job's OIDC subject.
+- **Publishing:** the OpenCode job has read-only repository permissions and **never receives a GitHub write token**. It creates a bounded patch artifact after local project checks. A separate fresh job downloads the patch and checks that it is based on the same default-branch commit. It then independently validates protected paths, file types and sizes, and rejects any staged content shaped like a gateway lease. Only then does it create a pull request with short-lived write credentials. No code from the proposed edits runs in the privileged publishing job, and nothing is merged automatically.
 
-If the default branch changes during an agent run, the privileged publisher refuses the stale patch and the workflow must be rerun. OpenCode's installed package version is pinned to `1.19.3`.
+For safety, manual dispatch is restricted to the **personal repository owner**, both by the in-file actor guard and by the gateway's identity check (which cannot be edited from this repository). Organization-owned forks are not supported by this workflow.
+
+If the default branch changes during an agent run, the publisher refuses the stale patch and the workflow must be rerun as a new dispatch: reruns of the same run cannot get a new gateway lease. OpenCode's installed package version is pinned to `1.19.3`.
 
 ## Required protected environment configuration (security-critical)
 
-**Do not run this workflow yet** until the environment is configured. In GitHub **Settings → Environments**, create `ai-agent-production`, restrict deployments to the repository's default branch only, and configure required reviewers to include the trusted repository owner (where the plan supports required reviewers). In Settings → Environments → ai-agent-production → Environment secrets, add `BLABLADOR_API_KEY` there. **Delete the repository-level `BLABLADOR_API_KEY` secret** afterwards; otherwise another write collaborator can dispatch a modified workflow on another ref and read the repository secret without passing the environment gate. A repository-level secret is not protected by declaring an environment on this job. The existing `HIP_API_KEY` is not used by this workflow; restrict it separately if collaborators are not trusted.
-
-If your repository plan does not support protected environment reviewers or branch restrictions, do not treat this as an owner-only security boundary; instead use a separate tightly controlled private execution repository or another trusted access mechanism. The workflow still contains an in-file actor guard, but that alone is not authorization against writers who can change workflow YAML on branches.
+**Do not run this workflow** until the gateway is deployed and the environment is configured. In GitHub **Settings → Environments**, create `ai-agent-production`, restrict deployments to the default branch, configure required reviewers that include the repository owner, and set the `AI_GATEWAY_URL` environment variable. Environment variables can only be changed by repository admins. The existing `HIP_API_KEY` is not used by this workflow; HIP will be added to the gateway later, not to GitHub.
 
 The publisher validates that each staged added/modified blob is at most 1 MiB and the total is at most 5 MiB, after applying the patch and before obtaining its GitHub write token.
