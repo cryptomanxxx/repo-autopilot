@@ -8,7 +8,7 @@ import {join,dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {ChatStoreLogic} from '../worker/src/store.js';
 import {readTar} from '../worker/src/github.js';
-import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy} from '../worker/src/agent.js';
+import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy,modelName} from '../worker/src/agent.js';
 import {createHmac,createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -222,6 +222,48 @@ test('model provider failures and cut-off answers are explained',async()=>{
   assert.deepEqual([prose.proposal,prose.error],[null,null]);assert.match(prose.reply,/cut off/);
 });
 
+const sse=(...chunks)=>new Response(new ReadableStream({start(controller){
+  // Split across reads mid-line, as a network stream may deliver it.
+  const wire=chunks.map(c=>`data: ${JSON.stringify(c)}\n\n`).join('')+'data: [DONE]\n\n';
+  for(let i=0;i<wire.length;i+=7) controller.enqueue(new TextEncoder().encode(wire.slice(i,i+7)));
+  controller.close();
+}}),{headers:{'Content-Type':'text/event-stream'}});
+const piece=(content,finish_reason=null)=>({choices:[{index:0,delta:content===null?{}:{content},finish_reason}]});
+
+test('the AI gateway provider streams Blablador through the service binding without a key',async()=>{
+  const sent=[];
+  const env={MODEL_PROVIDER:'ai-gateway',MODEL:'@cf/meta/llama-4-scout-17b-16e-instruct',AI_GATEWAY:{fetch:async(url,options)=>{sent.push({url,options});return sse(piece('Hel'),piece('lo'),piece(null,'stop'));}}};
+  const deltas=[];
+  assert.deepEqual(await callModel(env,[{role:'user',content:'hi'}],{onDelta:d=>deltas.push(d)}),{text:'Hello',truncated:false});
+  assert.deepEqual(deltas,['Hel','lo']);
+  assert.equal(sent[0].url,'https://ai-gateway/v1/chat/completions');
+  assert.equal(sent[0].options.headers.Authorization,undefined,'no provider key or bearer leaves this Worker');
+  const body=JSON.parse(sent[0].options.body);
+  assert.deepEqual([body.model,body.stream,body.max_tokens],['alias-code',true,4096],'a Workers AI model name falls back to alias-code');
+  env.MODEL='alias-fast';await callModel(env,[]);assert.equal(JSON.parse(sent[1].options.body).model,'alias-fast');
+  assert.equal(modelName(env),'Blablador alias-fast (AI gateway)');
+  assert.equal(modelName({}),'@cf/meta/llama-4-scout-17b-16e-instruct');
+  env.AI_GATEWAY.fetch=async()=>sse(piece('Long'),piece(null,'length'));
+  assert.deepEqual(await callModel(env,[]),{text:'Long',truncated:true});
+  env.AI_GATEWAY.fetch=async()=>Response.json({error:'Too many requests for this lease'},{status:429});
+  await assert.rejects(callModel(env,[]),/HTTP 429: Too many requests for this lease/);
+  env.AI_GATEWAY.fetch=async()=>sse(piece(null,'stop'));
+  await assert.rejects(callModel(env,[]),/empty answer/);
+  env.AI_GATEWAY.fetch=async()=>{throw Object.assign(new Error('x'),{name:'TimeoutError'});};
+  await assert.rejects(callModel(env,[]),/timed out after 150 seconds/);
+  await assert.rejects(callModel(env,[{role:'user',content:[{type:'text',text:'see'},{type:'image_url',image_url:{url:'data:image/png;base64,AA'}}]}]),/only text/);
+  await assert.rejects(callModel({MODEL_PROVIDER:'ai-gateway'},[]),/service binding is not configured/);
+});
+
+test('a correction round restarts the streamed answer',async()=>{
+  let calls=0;const deltas=[];
+  const replies=['Fix.\n<<<<<<< SEARCH public/a.js\nmissing\n=======\nnew\n>>>>>>> REPLACE','Fix.\n<<<<<<< SEARCH public/a.js\nold\n=======\nnew\n>>>>>>> REPLACE'];
+  const env={MODEL_PROVIDER:'ai-gateway',AI_GATEWAY:{fetch:async()=>sse(piece(replies[calls++]),piece(null,'stop'))}};
+  const result=await answer(env,{messages:[],files:{'public/a.js':'old\n'},existingPaths:['public/a.js'],onDelta:d=>deltas.push(d)});
+  assert.ok(result.proposal);
+  assert.deepEqual(deltas,[null,replies[0],null,replies[1]]);
+});
+
 test('images must be small PNG or JPEG data URLs',()=>{
   const png='data:image/png;base64,'+Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0,0,0,0]).toString('base64');
   const jpeg='data:image/jpeg;base64,'+Buffer.from([0xff,0xd8,0xff,0xe0,0,0,0,0,0]).toString('base64');
@@ -361,6 +403,18 @@ test('API rejects missing sessions, foreign origins and missing CSRF tokens',asy
   const logout=await handle(post('/api/logout',auth,{}),env,{fetchImpl});
   assert.match(logout.headers.get('Set-Cookie'),/Max-Age=0/);
   assert.equal((await handle(request('/api/conversations',{cookie:auth.cookie}),env,{fetchImpl})).status,401);
+});
+
+test('a gateway answer streams to the browser as it is written',async()=>{
+  const calls=[],{env}=environment(),fetchImpl=github({calls});
+  Object.assign(env,{MODEL_PROVIDER:'ai-gateway',AI_GATEWAY:{fetch:async()=>sse(piece('Hej '),piece('där'),piece(null,'stop'))}});
+  const auth=await session(env,fetchImpl);
+  const response=await handle(post('/api/chat',auth,{text:'Hej'}),env,{fetchImpl});
+  const events=(await response.text()).split('\n').filter(Boolean).map(line=>JSON.parse(line));
+  assert.deepEqual(events.filter(e=>e.type==='delta'||e.type==='reset').map(e=>e.text??null),[null,'Hej ','där']);
+  assert.equal(events.at(-1).type,'done');
+  const thread=await (await handle(request(`/api/conversations/${events.at(-1).conversation}`,{cookie:auth.cookie}),env,{fetchImpl})).json();
+  assert.equal(thread.messages[1].content,'Hej där');
 });
 
 test('chat answers from repository files and opens a pull request on request',async()=>{

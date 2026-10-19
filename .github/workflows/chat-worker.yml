@@ -68,6 +68,7 @@ jobs:
           MODEL_PROVIDER: ${{ vars.AUTOPILOT_CHAT_MODEL_PROVIDER }}
           MODEL_BASE_URL: ${{ vars.AUTOPILOT_CHAT_MODEL_BASE_URL }}
           CONTEXT_CHARS: ${{ vars.AUTOPILOT_CHAT_CONTEXT_CHARS }}
+          GATEWAY_SERVICE: ${{ vars.AUTOPILOT_CHAT_GATEWAY_SERVICE || 'repo-autopilot-ai-gateway' }}
         # Every setting comes from repository variables: a deploy replaces the Worker's variables, so
         # values typed into the Cloudflare dashboard would be lost. Secrets ship with the same version.
         run: |
@@ -75,8 +76,19 @@ jobs:
             echo "::error::AUTOPILOT_CHAT_MODEL_PROVIDER is set; also set AUTOPILOT_CHAT_MODEL to the provider's model name."
             exit 1
           fi
+          config=worker/wrangler.jsonc
+          # Blablador through the AI gateway: bind its ChatGateway entrypoint (same Cloudflare account) only
+          # when selected, so the chat deploys without the gateway otherwise. No provider key is involved.
+          if [ "$MODEL_PROVIDER" = "ai-gateway" ]; then
+            if ! [[ "$GATEWAY_SERVICE" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]; then
+              echo "::error::AUTOPILOT_CHAT_GATEWAY_SERVICE must be a Worker name such as repo-autopilot-ai-gateway."
+              exit 1
+            fi
+            config=worker/wrangler.gateway.json
+            node -e 'const fs=require("fs");const c=JSON.parse(fs.readFileSync("worker/wrangler.jsonc","utf8").replace(/^\s*\/\/.*$/gm,""));c.services=[{binding:"AI_GATEWAY",service:process.argv[1],entrypoint:"ChatGateway"}];fs.writeFileSync("worker/wrangler.gateway.json",JSON.stringify(c,null,2))' "$GATEWAY_SERVICE"
+          fi
           # The dashboard shows which commit is live and since when.
-          args=(--config worker/wrangler.jsonc --var "DEPLOYED_COMMIT:$GITHUB_SHA" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)" --var "REPOSITORY:$REPOSITORY" --var "AUTOPILOT_USER:$OWNER" --var "GITHUB_CLIENT_ID:$CLIENT_ID")
+          args=(--config "$config" --var "DEPLOYED_COMMIT:$GITHUB_SHA" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)" --var "REPOSITORY:$REPOSITORY" --var "AUTOPILOT_USER:$OWNER" --var "GITHUB_CLIENT_ID:$CLIENT_ID")
           for name in MODEL MODEL_PROVIDER MODEL_BASE_URL CONTEXT_CHARS; do
             if [ -n "${!name}" ]; then args+=(--var "$name:${!name}"); fi
           done

@@ -13,8 +13,9 @@ async function readResponse(response,path) {
 }
 async function api(path,body,timeout=30000) {return readResponse(await request(path,body,timeout),path);}
 
-// The chat answer arrives as lines of JSON: progress steps, then a done or an error line.
-async function chatStream(body,onStep) {
+// The chat answer arrives as lines of JSON: progress steps and, where the model streams, answer text
+// (delta, or reset when a new answer replaces it), then a done or an error line.
+async function chatStream(body,onStep,onDelta=()=>{}) {
   const response=await request('/api/chat',body,430000);
   if(!(response.headers.get('Content-Type')||'').includes('ndjson')) return readResponse(response,'/api/chat');
   const reader=response.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -27,7 +28,10 @@ async function chatStream(body,onStep) {
       const line=buffer.slice(0,end).trim();buffer=buffer.slice(end+1);
       if(!line) continue;
       const event=JSON.parse(line);
-      if(event.type==='step') onStep(event.text);else last=event;
+      if(event.type==='step') onStep(event.text);
+      else if(event.type==='delta') onDelta(event.text);
+      else if(event.type==='reset') onDelta(null);
+      else last=event;
     }
   }
   if(last?.type==='done') return last;
@@ -311,13 +315,23 @@ $('composer').onsubmit=async event=>{
   const thinking=document.createElement('ol');thinking.className='steps muted';container.append(thinking);
   const step=text=>{thinking.lastElementChild?.classList.add('done');const item=document.createElement('li');item.textContent=text;thinking.append(item);item.scrollIntoView({block:'end'});};
   step(`Reading the latest code of ${state.repository}…`);
+  // The answer as it streams in. Edit blocks are left out of the preview; the saved answer shows the change.
+  const live=document.createElement('article');live.className='message assistant';live.hidden=true;
+  const liveText=document.createElement('p');live.append(Object.assign(document.createElement('strong'),{textContent:'Agent'}),liveText);container.append(live);
+  let streamed='';
+  const delta=piece=>{
+    streamed=piece===null?'':streamed+piece;
+    const [prose,...edits]=streamed.split(/^<<<<<<< SEARCH/m);
+    liveText.textContent=prose.trimEnd()+(edits.length?'\n\n…writing the proposed edits':'');
+    live.hidden=!streamed;if(streamed) live.scrollIntoView({block:'end'});
+  };
   status('');
   try {
-    const result=await chatStream({conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image},step);
-    $('message').value='';clearImage();thinking.remove();
+    const result=await chatStream({conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image},step,delta);
+    $('message').value='';clearImage();thinking.remove();live.remove();
     setBusy(false);state.conversation=result.conversation;await openConversation(result.conversation);
   } catch(error) {
-    thinking.remove();container.lastElementChild?.remove();
+    live.remove();thinking.remove();container.lastElementChild?.remove();
     status(error.name==='TimeoutError'?'The agent did not answer in time. Try again.':error.message);
   } finally {setBusy(false);$('send').disabled=false;$('message').disabled=false;$('image').disabled=false;}
 };
