@@ -53,26 +53,12 @@ export function applyEdits(file,answer) {
   }
   return {text,count:blocks.length};
 }
-// Code compared as text: whitespace outside string literals, trailing commas and digit separators
-// are ignored, and '…' and "…" count alike, but the contents of every string and template literal
-// must match exactly.
-function normal(text) {
-  let out='';
-  for(let i=0;i<text.length;) {
-    const quote=text[i];
-    if(quote==="'"||quote==='"'||quote==='`') {
-      let j=i+1;
-      while(j<text.length&&text[j]!==quote) j+=text[j]==='\\'?2:1;
-      const body=text.slice(i+1,j);
-      out+=quote!=='`'&&!/['"\\]/.test(body)?`'${body}'`:quote+body+quote;
-      i=j+1;
-    } else {
-      if(!/\s/.test(quote)) out+=quote;
-      i++;
-    }
-  }
-  return out.replace(/,([}\]])/g,'$1').replace(/(\d)_(?=\d)/g,'$1');
-}
+// The edited file is run in the sandbox and checked by what it does, so formatting is free but every
+// token, string and line break that changes the meaning counts.
+const edits=(file,answer,checks)=>{const edited=applyEdits(file,answer);return !!edited&&sandbox(script(edited.text),checks);};
+// What plans.js must do with only the first change, only the second, or both.
+const planChecks=(users,projects)=>[['JSON.stringify(limits)',JSON.stringify({maxUsers:users?25:10,maxProjects:5})],
+  ['describe({name:"Team",users:4,projects:2})',projects?'Team: 4 users, 2 projects':'Team: 4 users']];
 
 const PLANS=`export const limits = {
   maxUsers: 10,
@@ -157,7 +143,7 @@ Change the timeout to 10000 ms and add the entry region: 'eu-west-1' directly af
 >>>>>>> REPLACE`,
     grade:answer=>{
       const edited=applyEdits(CONFIG,answer);
-      return edited?.count===1&&normal(edited.text)===normal(`export const config = {retries: 3, timeoutMs: 10000, region: 'eu-west-1', verbose: false};`);
+      return edited?.count===1&&edits(CONFIG,answer,[['JSON.stringify(config)',JSON.stringify({retries:3,timeoutMs:10000,region:'eu-west-1',verbose:false})]]);
     }
   },
   {
@@ -207,7 +193,7 @@ function deepEqual(a, b) {
 
 Fix every bug. Reply with only the corrected function, named deepEqual, in one \`\`\`js code block.`,
     grade:answer=>sandbox(script(codeBlock(answer)),[
-      ['deepEqual({a:[1,{b:NaN}],c:"x"},{c:"x",a:[1,{b:NaN}]})',true],['deepEqual(NaN,NaN)',true],['deepEqual(null,null)',true],
+      ['deepEqual({a:[1,{b:NaN}],c:"x"},{c:"x",a:[1,{b:NaN}]})',true],['deepEqual(NaN,NaN)',true],['deepEqual(NaN,1)',false],['deepEqual(1,NaN)',false],['deepEqual(null,null)',true],
       ['deepEqual([1,[2,3]],[1,[2,3]])',true],['deepEqual(null,{})',false],['deepEqual({},null)',false],['deepEqual({a:1},{a:1,b:2})',false],
       ['deepEqual([],{})',false],['deepEqual({0:1,length:1},[1])',false],['deepEqual({a:undefined},{b:undefined})',false],
       ['deepEqual(0,"0")',false],['deepEqual([1,2],[2,1])',false],['deepEqual({x:{y:null}},{x:{y:{}}})',false]])
@@ -221,7 +207,7 @@ Examples: 'a,b' gives ["a","b"]; '"x, y",z' gives ["x, y","z"]; 'a,,' gives ["a"
 Reply with only the function in one \`\`\`js code block.`,
     grade:answer=>sandbox(script(codeBlock(answer)),[
       ['a,b',['a','b']],['"x, y",z',['x, y','z']],['a,,',['a','','']],['',['']],['"he said ""hi""",2',['he said "hi"','2']],
-      ['""',['']],[' a , b ',[' a ',' b ']],['"a,b","c"',['a,b','c']],['x,"",y',['x','','y']],
+      ['""',['']],[' a , b ',[' a ',' b ']],['"a,b","c"',['a,b','c']],['x,"",y',['x','','y']],['"a",',['a','']],
       ['"open',null],['"a"b',null],['a,"b',null],[42,null]]
       .map(([input,expected])=>[`JSON.stringify(parseCsvLine(${JSON.stringify(input)}))`,JSON.stringify(expected)]))
   },
@@ -259,11 +245,9 @@ Make two changes: raise maxUsers to 25, and make describe() also mention the pro
     grade:answer=>{
       // Two blocks, each making exactly one of the changes on its own.
       const blocks=[...visible(answer).replace(/\r\n/g,'\n').matchAll(/<<<<<<< SEARCH\n[\s\S]*?\n>>>>>>> REPLACE/g)].map(m=>m[0]);
-      const users=PLANS.replace('maxUsers: 10','maxUsers: 25'),projects=PLANS.replace('${plan.users} users`','${plan.users} users, ${plan.projects} projects`');
-      const one=(block,expected)=>{const edited=applyEdits(PLANS,block);return !!edited&&normal(edited.text)===normal(expected);};
-      const edited=applyEdits(PLANS,answer);
-      return blocks.length===2&&!!edited&&normal(edited.text)===normal(users.replace('${plan.users} users`','${plan.users} users, ${plan.projects} projects`'))&&
-        (one(blocks[0],users)&&one(blocks[1],projects)||one(blocks[0],projects)&&one(blocks[1],users));
+      return blocks.length===2&&edits(PLANS,answer,planChecks(true,true))&&
+        (edits(PLANS,blocks[0],planChecks(true,false))&&edits(PLANS,blocks[1],planChecks(false,true))||
+         edits(PLANS,blocks[0],planChecks(false,true))&&edits(PLANS,blocks[1],planChecks(true,false)));
     }
   }
 ]);

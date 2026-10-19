@@ -45,6 +45,10 @@ test('every task passes its reference answer and fails a wrong one',()=>{
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('users, ${plan.projects} projects`','users,${plan.projects}projects`')),false,'spaces inside a template literal count');
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('  maxUsers: 25,','maxUsers:25 ,')),true,'spacing outside strings does not');
   assert.equal(task('edit').grade(GOOD.edit.replace("'eu-west-1'",'"eu-west-1"')),true,'either quote style');
+  assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('maxUsers: 25','maxUsers: 2 5')),false,'whitespace that splits a token');
+  assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('  return `${plan.name}: ${plan.users} users, ${plan.projects}','  return\n    `${plan.name}: ${plan.users} users, ${plan.projects}')),false,'a line break after return');
+  assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('if (Number.isNaN(a) && Number.isNaN(b)) return true;','if (Number.isNaN(a)) return true;')),false,'NaN equal to anything');
+  assert.equal(task('implement-csv').grade(GOOD['implement-csv'].replace('      if (i === line.length) return fields;\n      if (line[i] !== ",") return null;\n      i++;','      if (i === line.length) return fields;\n      if (line[i] !== ",") return null;\n      i++;\n      if (i === line.length) return fields;')),false,'a trailing empty field after a quoted one');
 });
 
 test('model code runs without file access, environment or unlimited time',()=>{
