@@ -48,6 +48,8 @@ test('every task passes its reference answer and fails a wrong one',()=>{
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('maxUsers: 25','maxUsers: 2 5')),false,'whitespace that splits a token');
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('  return `${plan.name}: ${plan.users} users, ${plan.projects}','  return\n    `${plan.name}: ${plan.users} users, ${plan.projects}')),false,'a line break after return');
   assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('if (Number.isNaN(a) && Number.isNaN(b)) return true;','if (Number.isNaN(a)) return true;')),false,'NaN equal to anything');
+  assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('  const keys = Object.keys(a);','  if (Array.isArray(a)) return a.every((value, index) => deepEqual(value, b[index]));\n  const keys = Object.keys(a);')),false,'arrays of different lengths');
+  assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('return `${plan.name}: ${plan.users} users, ${plan.projects} projects`;','return "Team: 4 users, 2 projects";')),false,'a describe() that ignores its argument');
   assert.equal(task('implement-csv').grade(GOOD['implement-csv'].replace('      if (i === line.length) return fields;\n      if (line[i] !== ",") return null;\n      i++;','      if (i === line.length) return fields;\n      if (line[i] !== ",") return null;\n      i++;\n      if (i === line.length) return fields;')),false,'a trailing empty field after a quoted one');
 });
 

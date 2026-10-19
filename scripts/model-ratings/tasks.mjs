@@ -58,7 +58,8 @@ export function applyEdits(file,answer) {
 const edits=(file,answer,checks)=>{const edited=applyEdits(file,answer);return !!edited&&sandbox(script(edited.text),checks);};
 // What plans.js must do with only the first change, only the second, or both.
 const planChecks=(users,projects)=>[['JSON.stringify(limits)',JSON.stringify({maxUsers:users?25:10,maxProjects:5})],
-  ['describe({name:"Team",users:4,projects:2})',projects?'Team: 4 users, 2 projects':'Team: 4 users']];
+  ['describe({name:"Team",users:4,projects:2})',projects?'Team: 4 users, 2 projects':'Team: 4 users'],
+  ['describe({name:"Solo",users:1,projects:7})',projects?'Solo: 1 users, 7 projects':'Solo: 1 users']];
 
 const PLANS=`export const limits = {
   maxUsers: 10,
@@ -196,7 +197,8 @@ Fix every bug. Reply with only the corrected function, named deepEqual, in one \
       ['deepEqual({a:[1,{b:NaN}],c:"x"},{c:"x",a:[1,{b:NaN}]})',true],['deepEqual(NaN,NaN)',true],['deepEqual(NaN,1)',false],['deepEqual(1,NaN)',false],['deepEqual(null,null)',true],
       ['deepEqual([1,[2,3]],[1,[2,3]])',true],['deepEqual(null,{})',false],['deepEqual({},null)',false],['deepEqual({a:1},{a:1,b:2})',false],
       ['deepEqual([],{})',false],['deepEqual({0:1,length:1},[1])',false],['deepEqual({a:undefined},{b:undefined})',false],
-      ['deepEqual(0,"0")',false],['deepEqual([1,2],[2,1])',false],['deepEqual({x:{y:null}},{x:{y:{}}})',false]])
+      ['deepEqual(0,"0")',false],['deepEqual([1,2],[2,1])',false],['deepEqual([1],[1,2])',false],['deepEqual([1,2],[1])',false],['deepEqual({a:1},{b:1})',false],
+      ['deepEqual({a:[1,{b:2}]},{a:[1,{b:2,c:3}]})',false],['deepEqual({x:{y:null}},{x:{y:{}}})',false]])
   },
   {
     id:'implement-csv',
