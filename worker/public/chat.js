@@ -195,8 +195,10 @@ $('agent').onchange=()=>{
   try {localStorage.setItem(AGENT_KEY,chosen.id);} catch {}
   fillModels();showAccount();
 };
-// The model picker: the agent's standard model, then every chat model its provider lists, with the
-// context length. Models too small for the files the chat sends are marked. Remembered per agent.
+// The model picker: the agent's standard model, then every chat model its provider lists, best rated
+// first, with its rating from the Model ratings workflow and its context length. Models too small for
+// the files the chat sends are marked. Remembered per agent; with no choice made yet, the best rated
+// model is preselected.
 const MODEL_KEY='autopilot-model:',SMALL_CONTEXT=32768;
 const contextText=length=>length?` · ${length>=1000?`${Math.round(length/1024)}k`:length}`:'';
 async function loadModels() {
@@ -208,13 +210,15 @@ async function loadModels() {
 }
 function fillModels() {
   const agent=state.agents.find(a=>a.id===state.agentId),models=state.models[state.agentId]||[];
-  let remembered='';
-  try {remembered=localStorage.getItem(MODEL_KEY+state.agentId)||'';} catch {}
-  state.modelId=models.some(m=>m.id===remembered)?remembered:'';
+  let remembered=null;
+  try {remembered=localStorage.getItem(MODEL_KEY+state.agentId);} catch {}
+  state.modelId=remembered===null?(models.find(m=>m.rating)?.id||''):models.some(m=>m.id===remembered)?remembered:'';
   const standard=Object.assign(document.createElement('option'),{value:'',textContent:`Standard${agent?.modelName?` (${agent.modelName})`:''}`});
+  const small=m=>m.contextLength&&m.contextLength<SMALL_CONTEXT;
   const option=m=>Object.assign(document.createElement('option'),{value:m.id,
-    textContent:`${m.contextLength&&m.contextLength<SMALL_CONTEXT?'⚠ ':''}${m.name}${contextText(m.contextLength)}`,
-    title:m.contextLength&&m.contextLength<SMALL_CONTEXT?'Small context: it may not fit the repository files the chat sends.':''});
+    textContent:`${small(m)?'⚠ ':''}${m.rating?`${'⭐'.repeat(m.rating.stars)} `:''}${m.name}${contextText(m.contextLength)}${m.rating?'':' · not tested'}`,
+    title:[m.rating?`Coding rating: passed ${m.rating.passed} of ${m.rating.total} tasks${m.rating.seconds!==null?`, median ${m.rating.seconds} s per answer`:''}, tested ${m.rating.testedAt}.`:'Not tested by the Model ratings workflow yet.',
+      small(m)?'Small context: it may not fit the repository files the chat sends.':''].filter(Boolean).join(' ')});
   // Providers such as Blablador list short, stable alias-* names next to their long model names; the
   // aliases come first in a group of their own.
   const aliases=models.filter(m=>/^alias-/i.test(m.name)),others=models.filter(m=>!/^alias-/i.test(m.name));
@@ -225,7 +229,8 @@ function fillModels() {
 }
 $('model').onchange=()=>{
   state.modelId=$('model').value;
-  try {state.modelId?localStorage.setItem(MODEL_KEY+state.agentId,state.modelId):localStorage.removeItem(MODEL_KEY+state.agentId);} catch {}
+  // Standard is remembered too (as ""), so it is not replaced by the best rated model next time.
+  try {localStorage.setItem(MODEL_KEY+state.agentId,state.modelId);} catch {}
   showAccount();
 };
 // The live version: the commit the deploy workflow shipped, linked to GitHub, and when.

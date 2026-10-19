@@ -1,5 +1,7 @@
 import {allowedAgentPath} from '../../src/agent.js';
 import {PublicError} from './errors.js';
+// Coding ratings from the Model ratings workflow (scripts/model-ratings), by "<provider>:<model ID>".
+import MODEL_RATINGS from './model-ratings.json' with {type:'json'};
 
 export const DEFAULT_MODEL='@cf/meta/llama-4-scout-17b-16e-instruct';
 export const DEFAULT_CONTEXT_CHARS=60000,MODEL_TIMEOUT=150000;
@@ -219,7 +221,15 @@ export function withModel(agent,model) {
   return {...agent,model,modelName:id,label:`${agent.name} ${id} (AI gateway)`};
 }
 // The chat models the AI gateway lists for each agent, with their context length.
-export async function agentModels(env) {
+// A model's rating, or null for one the rating run has not tested.
+const ratingOf=(ratings,id)=>{
+  const entry=Object.hasOwn(ratings?.models||{},id)?ratings.models[id]:null;
+  return entry?{stars:entry.stars,passed:entry.passed,total:entry.total,seconds:entry.seconds,testedAt:entry.testedAt}:null;
+};
+// Best rated first (stars, then tasks passed, then speed), untested models last, each by name.
+const byRating=(a,b)=>(!a.rating-!b.rating)||((b.rating?.stars||0)-(a.rating?.stars||0))||((b.rating?.passed||0)-(a.rating?.passed||0))||
+  ((a.rating?.seconds??Infinity)-(b.rating?.seconds??Infinity))||a.name.localeCompare(b.name);
+export async function agentModels(env,ratings=MODEL_RATINGS) {
   const agents=chatAgents(env).filter(agent=>agent.provider);
   if(!agents.length||!env.AI_GATEWAY) return {agents:[]};
   let data;
@@ -230,7 +240,7 @@ export async function agentModels(env) {
   } catch {throw new PublicError('The model list could not be read from the AI gateway.');}
   const rows=Array.isArray(data?.data)?data.data:[];
   return {agents:agents.map(agent=>({id:agent.id,status:typeof data?.providers?.[agent.provider]==='string'?data.providers[agent.provider]:'unavailable',
-    models:rows.filter(row=>row?.provider===agent.provider&&withModel(agent,row.id)).map(row=>({id:row.id,name:row.model,contextLength:Number.isSafeInteger(row.context_length)?row.context_length:null}))}))};
+    models:rows.filter(row=>row?.provider===agent.provider&&withModel(agent,row.id)).map(row=>({id:row.id,name:row.model,contextLength:Number.isSafeInteger(row.context_length)?row.context_length:null,rating:ratingOf(ratings,row.id)})).sort(byRating)}))};
 }
 // The agent with this id, the default one when none is given, or null for an unknown id.
 export function findAgent(env,id) {
