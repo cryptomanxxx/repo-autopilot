@@ -84,9 +84,20 @@ jobs:
             -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=repo-autopilot-ai-gateway" | jq -er .value)"
           echo "::add-mask::$jwt"
-          lease="$(curl -sSf --max-time 30 --proto '=https' -X POST \
+          status="$(curl -sS --max-time 30 --proto '=https' -X POST \
+            -o "$RUNNER_TEMP/session.json" -w '%{http_code}' \
             -H "Authorization: Bearer $jwt" \
-            "$AI_GATEWAY_URL/v1/session" | jq -er .access_token)"
+            "$AI_GATEWAY_URL/v1/session")"
+          if [[ "$status" != 200 ]]; then
+            echo "::error::Gateway refused the session (HTTP $status): $(jq -r '.error // empty' "$RUNNER_TEMP/session.json" 2>/dev/null)"
+            # Public workflow metadata from the OIDC token, never the token or
+            # its signature, to compare with what the gateway expects.
+            jq -R 'split(".")[1] | gsub("-";"+") | gsub("_";"/") | @base64d | fromjson
+              | {iss,aud,sub,repository,repository_id,repository_owner_id,actor_id,ref,event_name,environment,workflow_ref,run_attempt,iat,exp}' <<< "$jwt" || true
+            exit 1
+          fi
+          lease="$(jq -er .access_token "$RUNNER_TEMP/session.json")"
+          rm -f "$RUNNER_TEMP/session.json"
           if [[ ! "$lease" =~ ^g1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$ ]]; then
             echo "::error::Gateway returned an unexpected lease format."
             exit 1
