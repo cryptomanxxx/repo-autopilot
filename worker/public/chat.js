@@ -1,5 +1,5 @@
 import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice} from './dashboard.js';
-const state={csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
+const state={agent:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
 const status=text=>{$('status').textContent=text;};
 const MAX_SIDE=1600,MAX_DATA_URL=1400000;
@@ -99,7 +99,7 @@ function pullStatusText(pr) {
 
 function renderMessage(message) {
   const item=document.createElement('article');item.className=`message ${message.role}`;
-  const label=document.createElement('strong');label.textContent=message.role==='user'?'You':'Agent';item.append(label);
+  const label=document.createElement('strong');label.textContent=message.role==='user'?'You':message.meta?.agent||'Agent';item.append(label);
   if(message.hasImage) {const note=document.createElement('span');note.className='muted small';note.textContent=' · image attached';item.append(note);}
   if(message.role==='assistant'&&message.meta) item.append(renderMeta(message.meta));
   // An answer's PR-TITLE line is shown with its proposed change instead.
@@ -317,7 +317,7 @@ $('composer').onsubmit=async event=>{
   step(`Reading the latest code of ${state.repository}…`);
   // The answer as it streams in. Edit blocks are left out of the preview; the saved answer shows the change.
   const live=document.createElement('article');live.className='message assistant';live.hidden=true;
-  const liveText=document.createElement('p');live.append(Object.assign(document.createElement('strong'),{textContent:'Agent'}),liveText);container.append(live);
+  const liveText=document.createElement('p');live.append(Object.assign(document.createElement('strong'),{textContent:state.agent||'Agent'}),liveText);container.append(live);
   let streamed='';
   const delta=piece=>{
     streamed=piece===null?'':streamed+piece;
@@ -369,7 +369,7 @@ try {
         if(linked.hash) history.replaceState(null,'',location.pathname+linked.hash);
       }
     } catch {}
-    Object.assign(state,{csrf:session.csrf,home:session.repository,repository:session.repository,login:session.login,model:session.model,deployed:session.deployed||null});
+    Object.assign(state,{csrf:session.csrf,home:session.repository,repository:session.repository,login:session.login,model:session.model,agent:session.agent||'',deployed:session.deployed||null});
     showAccount();
     // The remembered repository is used when it is still reachable; otherwise the app's own.
     let repositories=[{fullName:session.repository,private:false}],remembered=null;

@@ -193,6 +193,9 @@ export function displayText(answer) {
 }
 
 const GATEWAY_MODELS=new Set(['alias-code','alias-fast']);
+// The name the chat shows for the agent that answers, saved with each answer so that earlier answers
+// keep the name of the agent that wrote them: Blablador for the gateway, else the model's short name.
+export const agentName=env=>env.MODEL_PROVIDER==='ai-gateway'?'Blablador':(env.MODEL||DEFAULT_MODEL).split('/').pop();
 // The model name the chat shows: the gateway takes only its Blablador aliases.
 export const modelName=env=>env.MODEL_PROVIDER==='ai-gateway'?`Blablador ${GATEWAY_MODELS.has(env.MODEL)?env.MODEL:'alias-code'} (AI gateway)`:env.MODEL||DEFAULT_MODEL;
 
