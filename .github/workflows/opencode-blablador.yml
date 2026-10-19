@@ -194,12 +194,20 @@ jobs:
             exit 1
           fi
           # The patch artifact is downloadable by anyone in a public repository.
-          # Catch an accidentally included lease before upload; the publisher
-          # repeats this check on the applied blobs and paths.
-          if grep -aqE 'g1\.[A-Za-z0-9_-]{30,400}\.[A-Za-z0-9_-]{43}' "$RUNNER_TEMP/opencode.patch"; then
+          # Catch an accidentally included lease before upload by scanning the
+          # staged blobs (binary files are compressed inside the patch) and
+          # the staged paths. The publisher repeats both checks.
+          lease_pattern='g1\.[A-Za-z0-9_-]{30,400}\.[A-Za-z0-9_-]{43}'
+          if git grep --cached -a -q -E "$lease_pattern"; then
             echo "::error::Proposal contains a gateway lease token."
             exit 1
           fi
+          while IFS= read -r -d '' path; do
+            if [[ "$path" =~ $lease_pattern || "${path//\//.}" =~ $lease_pattern ]]; then
+              echo "::error::Proposal path contains a gateway lease token."
+              exit 1
+            fi
+          done < <(git diff --cached --name-only --no-renames -z "$OPENCODE_BASE_SHA")
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Upload untrusted patch for isolated publisher
