@@ -207,6 +207,8 @@ jobs:
           git push origin "$branch"
           printf '\n%s\n' 'Created by the Model ratings workflow. Merging deploys the agent chat with these ratings.' >> "$RUNNER_TEMP/pr-body.md"
           gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" --title "Model ratings: $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/pr-body.md"
-          # A pull request opened with GITHUB_TOKEN starts no pull_request workflows, so CI is
-          # started here; its check on the branch's commit is the one the pull request needs.
+          # A pull request opened with GITHUB_TOKEN starts no pull_request workflows, so CI and the
+          # Worker build are started here; their checks on the branch's commit are the ones the pull
+          # request needs. The Worker workflow deploys only from the default branch.
           gh workflow run ci.yml --ref "$branch"
+          gh workflow run chat-worker.yml --ref "$branch"

@@ -22,9 +22,9 @@ const listed=await fetch(gateway+'/v1/models',{headers,signal:AbortSignal.timeou
 if(!listed.ok) throw new Error('The gateway did not list the models (HTTP '+listed.status+').');
 const catalog=await listed.json();
 for(const [provider,status] of Object.entries(catalog.providers||{})) console.log(`Provider ${provider}: ${status}`);
-// Untested models first, then those tested longest ago. Within each of the two groups the providers
-// take turns, so that each run rates some of every provider's models without rerating one
-// provider's models while another still has untested ones.
+// Untested models first, the providers taking turns, then those tested longest ago, so that each
+// run rates some of every provider's models without rerating one provider's models while another
+// still has untested ones.
 const ordered=(catalog.data||[])
   .filter(row=>validId(row?.id)&&(PROVIDER==='all'||row.provider===PROVIDER))
   .sort((a,b)=>(previous[a.id]?.testedAt||'').localeCompare(previous[b.id]?.testedAt||'')||a.id.localeCompare(b.id));
@@ -39,7 +39,9 @@ function inTurn(rows) {
     for(const queue of queues.values()) if(queue.length) result.push(queue.shift());
   return result;
 }
-const chosen=[...inTurn(ordered.filter(row=>!previous[row.id])),...inTurn(ordered.filter(row=>previous[row.id]))].slice(0,limit);
+// Rated models are simply taken oldest rating first: rerating moves a model to the back, so the
+// providers keep taking turns there too.
+const chosen=[...inTurn(ordered.filter(row=>!previous[row.id])),...ordered.filter(row=>previous[row.id])].slice(0,limit);
 console.log(`Rating ${chosen.length} model(s): ${chosen.map(row=>row.id).join(', ')}`);
 
 // One answer. The gateway's per-minute limits answer 429 for a while; that is waited out.

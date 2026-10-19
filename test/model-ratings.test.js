@@ -150,6 +150,11 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     writeFileSync(join(dir,'one.json'),JSON.stringify({...empty(),models:{'blablador:good':current.models['hip:old']}}));
     await run(process.execPath,[script('collect.mjs')],{env:{...env,RATINGS:join(dir,'one.json'),OUT:join(dir,'one-answers.json'),MAX_MODELS:'1'}});
     assert.deepEqual(JSON.parse(readFileSync(join(dir,'one-answers.json'),'utf8')).models.map(m=>m.id),['hip:bad']);
+    // Once everything is rated, the oldest rating goes first, whichever provider it belongs to.
+    const all=Object.fromEntries(['blablador:good','blablador:later','blablador:third','hip:bad','hip:down','hip:old'].map((id,i)=>[id,{...current.models['hip:old'],testedAt:`2026-0${i<3?5:4}-0${i+1}`}]));
+    writeFileSync(join(dir,'all.json'),JSON.stringify({...empty(),models:all}));
+    await run(process.execPath,[script('collect.mjs')],{env:{...env,RATINGS:join(dir,'all.json'),OUT:join(dir,'all-answers.json'),MAX_MODELS:'1'}});
+    assert.deepEqual(JSON.parse(readFileSync(join(dir,'all-answers.json'),'utf8')).models.map(m=>m.id),['hip:bad']);
     await run(process.execPath,[script('grade.mjs'),join(dir,'answers.json'),join(dir,'current.json'),join(dir,'next.json')]);
     const next=validate(JSON.parse(readFileSync(join(dir,'next.json'),'utf8')));
     assert.deepEqual(Object.keys(next.models),['blablador:good','blablador:later','blablador:third','hip:bad','hip:down','hip:old']);
