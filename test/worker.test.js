@@ -8,7 +8,7 @@ import {join,dirname} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {ChatStoreLogic} from '../worker/src/store.js';
 import {readTar} from '../worker/src/github.js';
-import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy,modelName} from '../worker/src/agent.js';
+import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFiles,displayText,readableFile,WORKER_SOURCES,callModel,generalEditablePath,editPolicy,modelName,agentName} from '../worker/src/agent.js';
 import {createHmac,createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
@@ -243,6 +243,7 @@ test('the AI gateway provider streams Blablador through the service binding with
   env.MODEL='alias-fast';await callModel(env,[]);assert.equal(JSON.parse(sent[1].options.body).model,'alias-fast');
   assert.equal(modelName(env),'Blablador alias-fast (AI gateway)');
   assert.equal(modelName({}),'@cf/meta/llama-4-scout-17b-16e-instruct');
+  assert.equal(agentName(env),'Blablador');assert.equal(agentName({}),'llama-4-scout-17b-16e-instruct');
   env.AI_GATEWAY.fetch=async()=>sse(piece('Long'),piece(null,'length'));
   assert.deepEqual(await callModel(env,[]),{text:'Long',truncated:true});
   env.AI_GATEWAY.fetch=async()=>Response.json({error:'Too many requests for this lease'},{status:429});
@@ -418,6 +419,8 @@ test('a gateway answer streams to the browser as it is written',async()=>{
   assert.equal(events.at(-1).type,'done');
   const thread=await (await handle(request(`/api/conversations/${events.at(-1).conversation}`,{cookie:auth.cookie}),env,{fetchImpl})).json();
   assert.equal(thread.messages[1].content,'Hej där');
+  assert.equal(thread.messages[1].meta.agent,'Blablador','the answer is labelled with the agent that wrote it');
+  assert.equal((await (await handle(request('/api/session',{cookie:auth.cookie}),env,{fetchImpl})).json()).agent,'Blablador');
 });
 
 test('chat answers from repository files and opens a pull request on request',async()=>{
@@ -438,7 +441,7 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.equal(thread.title,'Change the title in public/app.js');
   const reply=thread.messages[1];
   assert.deepEqual(reply.proposal,{title:'New title',paths:['public/app.js']});
-  assert.deepEqual(reply.meta,{repository:'owner/repo',branch:'main',sha:'a'.repeat(40),read:2,files:2},'an answer records the code it was based on');
+  assert.deepEqual(reply.meta,{repository:'owner/repo',branch:'main',sha:'a'.repeat(40),read:2,files:2,agent:'llama-4-scout-17b-16e-instruct'},'an answer records the code it was based on and the agent that wrote it');
   assert.equal(thread.messages[0].meta,null);
   calls.length=0;
   const head=await (await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl})).json();
