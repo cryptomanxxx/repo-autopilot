@@ -249,6 +249,9 @@ test('the AI gateway provider streams Blablador through the service binding with
   await assert.rejects(callModel(env,[]),/HTTP 429: Too many requests for this lease/);
   env.AI_GATEWAY.fetch=async()=>sse(piece(null,'stop'));
   await assert.rejects(callModel(env,[]),/empty answer/);
+  // A connection that closes mid-answer, before a finish reason or [DONE], is not a complete answer.
+  env.AI_GATEWAY.fetch=async()=>new Response(`data: ${JSON.stringify(piece('Half an ans'))}\n\n`,{headers:{'Content-Type':'text/event-stream'}});
+  await assert.rejects(callModel(env,[]),/stream ended early/);
   env.AI_GATEWAY.fetch=async()=>{throw Object.assign(new Error('x'),{name:'TimeoutError'});};
   await assert.rejects(callModel(env,[]),/timed out after 150 seconds/);
   await assert.rejects(callModel(env,[{role:'user',content:[{type:'text',text:'see'},{type:'image_url',image_url:{url:'data:image/png;base64,AA'}}]}]),/only text/);

@@ -199,11 +199,12 @@ export const modelName=env=>env.MODEL_PROVIDER==='ai-gateway'?`Blablador ${GATEW
 // Reads an OpenAI-style event stream, passing each piece of answer text to onDelta as it arrives.
 async function readEventStream(body,onDelta) {
   const reader=body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer='',text='',finish=null;
+  let buffer='',text='',finish=null,ended=false;
   const line=raw=>{
     const data=raw.trim();
     if(!data.startsWith('data:')) return;
     const payload=data.slice(5).trim();
+    if(payload==='[DONE]') ended=true;
     if(!payload||payload==='[DONE]') return;
     const choice=JSON.parse(payload)?.choices?.[0];
     const piece=choice?.delta?.content;
@@ -217,6 +218,8 @@ async function readEventStream(body,onDelta) {
     for(let end=buffer.indexOf('\n');end>=0;end=buffer.indexOf('\n')) {line(buffer.slice(0,end));buffer=buffer.slice(end+1);}
   }
   line(buffer);
+  // A stream cut off before its finish reason or [DONE] holds a partial answer, which must not be saved.
+  if(!ended&&!finish) throw new PublicError('The model request failed: the answer stream ended early.');
   return {text,finish};
 }
 
