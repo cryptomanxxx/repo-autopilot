@@ -34,6 +34,26 @@ test('model code runs without file access, environment or unlimited time',()=>{
   assert.equal(median.grade('```js\nfunction median() { require("fs").readFileSync("/etc/hostname"); return 2; }\n```'),false);
   assert.equal(median.grade('```js\nfunction median() { if (process.env.HOME !== undefined) throw 1; return 2; }\n```'),false);
   assert.equal(median.grade('```js\nwhile (true) {}\n```'),false);
+  assert.equal(median.grade('```js\nfunction median() { return 2; }\nfor (;;) {}\n```'),false);
+});
+
+test('model code cannot rewrite the harness that reports the result',()=>{
+  const median=TASKS.find(task=>task.id==='bugfix');
+  for(const attack of [
+    "console.log = x => process.stdout.write(String(x).replace(':false', ':true') + '\\n');",
+    "Array.prototype.every = () => true;",
+    "globalThis.process && process.exit(0);",
+    "this.constructor.constructor('return process')().stdout.write('x:true\\n');"
+  ]) assert.equal(median.grade('```js\nfunction median() { return 0; }\n'+attack+'\n```'),false,attack);
+  assert.equal(median.grade('```js\nfunction median(v) { return { valueOf: () => 2 }; }\n```'),false,'only primitive results pass');
+});
+
+test('the isolated sandbox runs model code with no network as the user nobody',{skip:process.getuid?.()!==0&&'needs root or sudo for a network namespace'},()=>{
+  process.env.MODEL_SANDBOX='isolated';
+  try {
+    assert.equal(TASKS[0].grade(GOOD.bugfix),true);
+    assert.equal(TASKS[0].grade('```js\nfunction median() { return 2; }\n```'),false);
+  } finally {delete process.env.MODEL_SANDBOX;}
 });
 
 test('stars come from the tasks passed, one less for a slow model, never below one',()=>{

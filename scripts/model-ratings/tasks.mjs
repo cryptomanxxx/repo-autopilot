@@ -4,13 +4,27 @@
 import {spawnSync} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 
-// Runs a model's code with the tests in a separate Node process: no environment variables, no file
-// or child-process access (Node's permission model) and a time limit. True only if the tests ran to
-// the end and passed.
-export function sandbox(code,tests) {
+// With MODEL_SANDBOX=isolated (the workflow sets it) each run is also put behind an OS boundary: its
+// own network namespace with no network, as the unprivileged user nobody, so it can neither reach
+// anything nor write the checkout or the ratings being graded.
+const ISOLATED=['/usr/bin/unshare','--net','--','/usr/bin/setpriv','--reuid=65534','--regid=65534','--clear-groups','--no-new-privs'];
+const isolation=()=>process.env.MODEL_SANDBOX!=='isolated'?[]:process.getuid?.()===0?ISOLATED:['/usr/bin/sudo','-n',...ISOLATED];
+
+// Runs a model's code in a separate Node process (no environment variables, no file or child-process
+// access, a time limit) and inside it in a fresh JavaScript realm that has no process, require or
+// stdout. Each check is an expression evaluated in that realm, and only a primitive result equal to
+// the expected value passes, so model code cannot reach or rewrite the harness that reports.
+export function sandbox(code,checks) {
   const nonce=randomBytes(12).toString('hex');
-  const script=`${code}\n;(async()=>{const ok=await (async()=>{${tests}})();console.log(${JSON.stringify(nonce)}+':'+(ok===true));})().catch(()=>{});\n`;
-  const result=spawnSync(process.execPath,['--permission','-'],{input:script,env:{},timeout:10000,maxBuffer:1<<20,encoding:'utf8'});
+  const script=`const vm=require('node:vm'),{writeSync}=require('node:fs');
+const ctx=vm.createContext(Object.create(null)),run=source=>vm.runInContext(source,ctx,{timeout:3000});
+let ok=false;
+try {run(${JSON.stringify(code)});ok=${JSON.stringify(checks)}.every(([check,expected])=>run(check)===expected);} catch {}
+writeSync(1,${JSON.stringify(nonce)}+':'+ok+'\\n');
+process.exit(0);
+`;
+  const [command,...args]=[...isolation(),process.execPath,'--permission','-'];
+  const result=spawnSync(command,args,{input:script,env:{},timeout:15000,maxBuffer:1<<20,encoding:'utf8'});
   if(result.status!==0||typeof result.stdout!=='string') return false;
   return result.stdout.trim().split('\n').at(-1)===nonce+':true';
 }
@@ -70,20 +84,18 @@ function median(values) {
 \`\`\`
 
 Fix every bug. Reply with only the corrected function, named median, in one \`\`\`js code block.`,
-    grade:answer=>sandbox(script(codeBlock(answer)),`
-      const input=[10,2,1,4];
-      return median([3,1,2])===2 && median(input)===3 && input.join()==='10,2,1,4' &&
-        median([-5,10,1])===1 && median([1.5])===1.5 && median([100,20,3,4])===12;`)
+    grade:answer=>sandbox(script(codeBlock(answer)),[['median([3,1,2])',2],['median([10,2,1,4])',3],['median([-5,10,1])',1],
+      ['median([1.5])',1.5],['median([100,20,3,4])',12],
+      ['(()=>{const a=[10,2,1,4];median(a);return a.length===4&&a[0]===10&&a[1]===2&&a[2]===1&&a[3]===4;})()',true]])
   },
   {
     id:'implement',
     prompt:`Write a JavaScript function parseDuration(text) that converts a duration such as "1h30m", "45s" or "2h5m10s" to a number of seconds. The units h, m and s may each appear at most once, in that order, each with a whole number; at least one must be present. For anything else (for example "", "90", "1x", "1m1h", "1h 30m" or a non-string) it returns null.
 
 Reply with only the function in one \`\`\`js code block.`,
-    grade:answer=>sandbox(script(codeBlock(answer)),`
-      const cases=[['1h30m',5400],['45s',45],['2h5m10s',7510],['0m',0],['10m5s',605],
-        ['',null],['90',null],['1x',null],['1m1h',null],['1h 30m',null],['h',null],['1h1h',null],[null,null],[42,null]];
-      return cases.every(([input,expected])=>parseDuration(input)===expected);`)
+    grade:answer=>sandbox(script(codeBlock(answer)),[['1h30m',5400],['45s',45],['2h5m10s',7510],['0m',0],['10m5s',605],
+      ['',null],['90',null],['1x',null],['1m1h',null],['1h 30m',null],['h',null],['1h1h',null],[null,null],[42,null]]
+      .map(([input,expected])=>[`parseDuration(${JSON.stringify(input)})`,expected]))
   },
   {
     id:'edit',
@@ -102,8 +114,9 @@ Change the timeout to 10000 ms and add the entry region: 'eu-west-1' directly af
     grade:answer=>{
       const match=/<<<<<<< SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n?>>>>>>> REPLACE/.exec(visible(answer).replace(/\r\n/g,'\n'));
       if(!match||!match[1]||CONFIG.split(match[1]).length!==2) return false;
-      const edited=CONFIG.replace(match[1],()=>match[2]);
-      return sandbox(script(edited),`return JSON.stringify(config)===JSON.stringify({retries:3,timeoutMs:10000,region:'eu-west-1',verbose:false});`);
+      // Compared as text, ignoring spacing, quote style and a trailing comma; nothing is run.
+      const normal=text=>text.replace(/\s+/g,'').replace(/"/g,"'").replace(/,}/g,'}').replace(/(\d)_(?=\d)/g,'$1');
+      return normal(CONFIG.replace(match[1],()=>match[2]))===normal(`export const config = {retries: 3, timeoutMs: 10000, region: 'eu-west-1', verbose: false};`);
     }
   },
   {

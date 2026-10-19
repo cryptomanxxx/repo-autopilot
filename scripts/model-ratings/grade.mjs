@@ -2,10 +2,12 @@
 //   node grade.mjs <answers.json> <current ratings.json> <output ratings.json>
 // A model that could not answer most tasks (provider errors) keeps its previous rating.
 import {readFileSync,writeFileSync} from 'node:fs';
-import {TASKS} from './tasks.mjs';
+import {TASKS,sandbox} from './tasks.mjs';
 import {validate,validId,stars,median,empty} from './ratings.mjs';
 
 const [answersPath,currentPath,outPath]=process.argv.slice(2);
+// A sandbox that cannot start would fail every answer and rate every model one star.
+if(!sandbox('const one=1;',[['one',1]])) throw new Error('The model code sandbox does not run; nothing was graded.');
 const collected=JSON.parse(readFileSync(answersPath,'utf8'));
 let ratings;
 try {ratings=validate(JSON.parse(readFileSync(currentPath,'utf8')));} catch {ratings=empty();}
