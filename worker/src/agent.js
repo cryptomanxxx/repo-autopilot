@@ -193,15 +193,31 @@ export function displayText(answer) {
   return answer.replace(/\r\n/g,'\n').replace(BLOCK,'').replace(/^PR-TITLE:.*$/m,'').replace(/\n{3,}/g,'\n\n').trim();
 }
 
-const GATEWAY_MODELS=new Set(['alias-code','alias-fast']);
-// The name the chat shows for the agent that answers, saved with each answer so that earlier answers
-// keep the name of the agent that wrote them: Blablador for the gateway, else the model's short name.
-export const agentName=env=>env.MODEL_PROVIDER==='ai-gateway'?'Blablador':(env.MODEL||DEFAULT_MODEL).split('/').pop();
-// Who the model is told it is, matching the name the chat shows above its answers. Other providers
-// keep the unnamed role, since the chat labels them only by their model name.
-export const agentIntro=env=>env.MODEL_PROVIDER==='ai-gateway'?`You are Blablador, ${ROLE} You run on the Helmholtz Blablador model service (${GATEWAY_MODELS.has(env.MODEL)?env.MODEL:'alias-code'}) through the Repo Autopilot AI gateway.`:`You are ${ROLE}`;
-// The model name the chat shows: the gateway takes only its Blablador aliases.
-export const modelName=env=>env.MODEL_PROVIDER==='ai-gateway'?`Blablador ${GATEWAY_MODELS.has(env.MODEL)?env.MODEL:'alias-code'} (AI gateway)`:env.MODEL||DEFAULT_MODEL;
+const BLABLADOR_MODELS=new Set(['alias-code','alias-fast']);
+// The agents the chat offers. Through the AI gateway: Blablador, and hessian.AI HIP (GLM-5.2), which
+// the gateway refuses until its HIP key is set. Otherwise the one configured model. Each answer saves
+// its agent's name, so earlier answers keep the name of the agent that wrote them.
+export function chatAgents(env) {
+  if(env.MODEL_PROVIDER!=='ai-gateway') {
+    const model=env.MODEL||DEFAULT_MODEL;
+    return [{id:'default',name:model.split('/').pop(),model,label:model}];
+  }
+  const blablador=BLABLADOR_MODELS.has(env.MODEL)?env.MODEL:'alias-code';
+  return [
+    {id:'blablador',name:'Blablador',model:blablador,label:`Blablador ${blablador} (AI gateway)`,service:`the Helmholtz Blablador model service (${blablador})`},
+    {id:'hip',name:'HIP',model:'hip-glm',label:'HIP GLM-5.2 (AI gateway)',service:'the hessian.AI HIP model service (GLM-5.2)'}
+  ];
+}
+// The agent with this id, the default one when none is given, or null for an unknown id.
+export function findAgent(env,id) {
+  const list=chatAgents(env);
+  return id===undefined||id===null?list[0]:list.find(agent=>agent.id===id)||null;
+}
+export const agentName=env=>chatAgents(env)[0].name;
+export const modelName=env=>chatAgents(env)[0].label;
+// Who the model is told it is, matching the name the chat shows above its answers. Agents outside the
+// gateway keep the unnamed role, since the chat labels them only by their model name.
+export const agentIntro=agent=>agent.service?`You are ${agent.name}, ${ROLE} You run on ${agent.service} through the Repo Autopilot AI gateway.`:`You are ${ROLE}`;
 
 // Reads an OpenAI-style event stream, passing each piece of answer text to onDelta as it arrives.
 async function readEventStream(body,onDelta) {
@@ -230,12 +246,12 @@ async function readEventStream(body,onDelta) {
   return {text,finish};
 }
 
-// Blablador through the Repo Autopilot AI gateway's ChatGateway service binding: this Worker holds no
-// provider key, and the gateway applies its own validation, quota and rate limits. The answer streams.
-async function gatewayModel(env,messages,{max_tokens,onDelta}) {
+// A gateway model through the Repo Autopilot AI gateway's ChatGateway service binding: this Worker holds
+// no provider key, and the gateway applies its own validation, quota and rate limits. The answer streams.
+async function gatewayModel(env,messages,{max_tokens,onDelta,agent}) {
   if(!env.AI_GATEWAY) throw new PublicError('The AI gateway service binding is not configured.');
-  if(messages.some(m=>Array.isArray(m.content)&&m.content.some(part=>part.type!=='text'))) throw new PublicError('Blablador reads only text. Send the message without the image.');
-  const model=GATEWAY_MODELS.has(env.MODEL)?env.MODEL:'alias-code';
+  if(messages.some(m=>Array.isArray(m.content)&&m.content.some(part=>part.type!=='text'))) throw new PublicError(`${agent.name} reads only text. Send the message without the image.`);
+  const model=agent.model;
   let response;
   try {
     response=await env.AI_GATEWAY.fetch('https://ai-gateway/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,messages,max_tokens,temperature:0.2,stream:true}),signal:AbortSignal.timeout(MODEL_TIMEOUT)});
@@ -255,9 +271,9 @@ async function gatewayModel(env,messages,{max_tokens,onDelta}) {
 
 // Returns {text, truncated}; truncated is true when the answer hit the output limit. onDelta receives
 // answer text as it streams, where the provider streams.
-export async function callModel(env,messages,{fetchImpl=fetch,onDelta=()=>{}}={}) {
+export async function callModel(env,messages,{fetchImpl=fetch,onDelta=()=>{},agent=findAgent(env)}={}) {
   const model=env.MODEL||DEFAULT_MODEL,max_tokens=Number(env.MAX_OUTPUT_TOKENS)||4096;
-  if(env.MODEL_PROVIDER==='ai-gateway') return gatewayModel(env,messages,{max_tokens,onDelta});
+  if(env.MODEL_PROVIDER==='ai-gateway') return gatewayModel(env,messages,{max_tokens,onDelta,agent});
   if((env.MODEL_PROVIDER||'workers-ai')==='workers-ai') {
     if(!env.AI) throw new PublicError('The Workers AI binding is not configured.');
     let result,timer;
@@ -291,8 +307,8 @@ export async function callModel(env,messages,{fetchImpl=fetch,onDelta=()=>{}}={}
 
 // Asks the model, and when its edit blocks cannot be applied, gives it one chance to correct them.
 // onDelta(null) means that a new answer starts and the text streamed so far is replaced.
-export async function answer(env,{messages,files,existingPaths,allowed=editablePath,fetchImpl,onStep=()=>{},onDelta=()=>{}}) {
-  const call=list=>{onDelta(null);return callModel(env,list,{fetchImpl,onDelta});};
+export async function answer(env,{messages,files,existingPaths,allowed=editablePath,fetchImpl,onStep=()=>{},onDelta=()=>{},agent=findAgent(env)}) {
+  const call=list=>{onDelta(null);return callModel(env,list,{fetchImpl,onDelta,agent});};
   let result=await call(messages);
   for(let attempt=0;;attempt++) {
     const reply=result.truncated?result.text+CUT_OFF:result.text;

@@ -1,5 +1,5 @@
 import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice} from './dashboard.js';
-const state={agent:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
+const state={agent:'',agents:[],agentId:null,csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
 const status=text=>{$('status').textContent=text;};
 const MAX_SIDE=1600,MAX_DATA_URL=1400000;
@@ -177,10 +177,28 @@ function repoLabel(name) {
   const [owner,repo]=name.split('/');
   return sameRepo(owner,state.home.split('/')[0])?repo:name;
 }
+// The agent picker, shown when there is more than one agent. The choice is remembered on this device.
+const AGENT_KEY='autopilot-agent';
+function fillAgents() {
+  let remembered=null;
+  try {remembered=localStorage.getItem(AGENT_KEY);} catch {}
+  const chosen=state.agents.find(a=>a.id===remembered)||state.agents[0];
+  state.agentId=chosen?.id||null;
+  if(chosen) state.agent=chosen.name;
+  $('agent').replaceChildren(...state.agents.map(a=>Object.assign(document.createElement('option'),{value:a.id,textContent:a.name,selected:a.id===state.agentId})));
+  $('agent-row').hidden=state.agents.length<2;
+}
+$('agent').onchange=()=>{
+  const chosen=state.agents.find(a=>a.id===$('agent').value);
+  if(!chosen) return;
+  state.agentId=chosen.id;state.agent=chosen.name;
+  try {localStorage.setItem(AGENT_KEY,chosen.id);} catch {}
+  showAccount();
+};
 // The live version: the commit the deploy workflow shipped, linked to GitHub, and when.
 function showAccount() {
   const account=$('account'),deployed=state.deployed;
-  account.replaceChildren(`${state.login} · model ${state.model} · `);
+  account.replaceChildren(`${state.login} · model ${state.agents.find(a=>a.id===state.agentId)?.label||state.model} · `);
   if(!deployed) {account.append('version unknown');return;}
   const link=document.createElement('a');
   link.href=`https://github.com/${state.home}/commit/${deployed.commit}`;link.target='_blank';link.rel='noopener noreferrer';
@@ -214,7 +232,7 @@ function selectRepository(name,{keepConversation=false}={}) {
   if(state.tab==='dashboard') history.replaceState(null,'','#dashboard');
   if(!keepConversation) {status('');openConversation(null);}
 }
-const setBusy=busy=>{state.busy=busy;$('repo-picker').disabled=busy;$('repo-reload').disabled=busy;};
+const setBusy=busy=>{state.busy=busy;$('repo-picker').disabled=busy;$('repo-reload').disabled=busy;$('agent').disabled=busy;};
 
 async function loadConversations() {
   const repository=state.repository,request=++state.conversationRequest,list=$('conversations');
@@ -327,7 +345,7 @@ $('composer').onsubmit=async event=>{
   };
   status('');
   try {
-    const result=await chatStream({conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image},step,delta);
+    const result=await chatStream({conversation:state.conversation,repo:state.conversation?undefined:state.repository,text,image:state.image,agent:state.agentId||undefined},step,delta);
     $('message').value='';clearImage();thinking.remove();live.remove();
     setBusy(false);state.conversation=result.conversation;await openConversation(result.conversation);
   } catch(error) {
@@ -369,7 +387,8 @@ try {
         if(linked.hash) history.replaceState(null,'',location.pathname+linked.hash);
       }
     } catch {}
-    Object.assign(state,{csrf:session.csrf,home:session.repository,repository:session.repository,login:session.login,model:session.model,agent:session.agent||'',deployed:session.deployed||null});
+    Object.assign(state,{csrf:session.csrf,home:session.repository,repository:session.repository,login:session.login,model:session.model,agent:session.agent||'',agents:Array.isArray(session.agents)?session.agents:[],deployed:session.deployed||null});
+    fillAgents();
     showAccount();
     // The remembered repository is used when it is still reachable; otherwise the app's own.
     let repositories=[{fullName:session.repository,private:false}],remembered=null;
