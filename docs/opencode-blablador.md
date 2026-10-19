@@ -5,7 +5,7 @@ Repo Autopilot has an experimental manual GitHub Actions coding workflow in `.gi
 ## Setup from Android
 
 1. Deploy `repo-autopilot-ai-gateway` (see its README) and store `BLABLADOR_API_KEY` and `GATEWAY_LEASE_SIGNING_KEY` **only as Cloudflare Worker secrets**. Delete any `BLABLADOR_API_KEY` secret from GitHub (repository and environment level).
-   Under Settings → Environments → `ai-agent-production`, configure required owner approval, allow only `main`, and add the **environment variable** `AI_GATEWAY_URL` with the gateway's https origin (for example `https://repo-autopilot-ai-gateway.<account>.workers.dev`, no trailing path).
+   Under Settings → Environments → `ai-agent-production`, allow only `main` (and add the owner as a required reviewer if your plan supports it; see *Plan constraints* below), and add the **environment variable** `AI_GATEWAY_URL` with the gateway's https origin (for example `https://repo-autopilot-ai-gateway.<account>.workers.dev`, no trailing path).
 2. In GitHub repository Settings, enable the Actions option allowing GitHub Actions to create pull requests, if your policies permit it.
 3. Once this PR is merged, open Actions, select `OpenCode coding agent (Blablador)`, choose Run workflow, and enter a short coding task.
 4. Review any resulting PR and follow its CI and Codex feedback in the dashboard. Merge manually.
@@ -34,8 +34,14 @@ For safety, manual dispatch is restricted to the **personal repository owner**, 
 
 If the default branch changes during an agent run, the publisher refuses the stale patch and the workflow must be rerun as a new dispatch: reruns of the same run cannot get a new gateway lease. OpenCode's installed package version is pinned to `1.19.3`.
 
-## Required protected environment configuration (security-critical)
+## Required environment configuration (security-critical)
 
-**Do not run this workflow** until the gateway is deployed and the environment is configured. In GitHub **Settings → Environments**, create `ai-agent-production`, restrict deployments to the default branch, configure required reviewers that include the repository owner, and set the `AI_GATEWAY_URL` environment variable. Environment variables can only be changed by repository admins. The existing `HIP_API_KEY` is not used by this workflow; HIP will be added to the gateway later, not to GitHub.
+**Do not run this workflow** until the gateway is deployed and the environment is configured. In GitHub **Settings → Environments**, create `ai-agent-production`, set **Deployment branches and tags** to the default branch only, and add the `AI_GATEWAY_URL` environment variable. Environment variables can only be changed by repository admins. The existing `HIP_API_KEY` is not used by this workflow; HIP will be added to the gateway later, not to GitHub.
+
+**Plan constraints.** For private repositories, environments and deployment-branch restrictions need GitHub Pro, Team or Enterprise. *Required reviewers* need GitHub Enterprise; on Free, Pro and Team they are available only for public repositories. Add the owner as a required reviewer where your plan offers it, but the workflow does not rely on it:
+
+- **Who can use the model** is decided by the gateway, not by GitHub settings. It issues a lease only when GitHub's signed OIDC token shows the owner's account ID as the dispatching actor, `workflow_dispatch`, `refs/heads/main`, this exact workflow file on `main`, the `ai-agent-production` environment and the first run attempt. A collaborator who dispatches, or who edits the workflow on another branch, gets no lease. These checks live in the gateway's code and cannot be changed from this repository.
+- **What reaches `main`** stays protected by the publisher job, which only opens a pull request. Protect `main` with a branch rule that requires a pull request, so that changes to this workflow are also reviewed before they run.
+- On a personal repository without collaborators, only the owner can dispatch at all.
 
 The publisher validates that each staged added/modified blob is at most 1 MiB and the total is at most 5 MiB, after applying the patch and before obtaining its GitHub write token.

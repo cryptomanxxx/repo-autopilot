@@ -8,9 +8,9 @@ on:
         required: true
         type: string
 
-concurrency:
-  group: opencode-${{ github.repository }}
-  cancel-in-progress: false
+# No shared concurrency group: GitHub keeps only one pending run per group
+# and silently cancels older pending ones. Each run gets its own branch and
+# lease; the gateway enforces provider-wide concurrency and rate limits.
 
 jobs:
   lease:
@@ -168,9 +168,23 @@ jobs:
           You are working in Repo Autopilot. Implement the user's coding request in this checked-out repository. Do not create local commits, merge, push, create a pull request, modify GitHub workflow files, touch credentials or alter security-sensitive configuration. Do not run remote scripts. Prefer minimal changes. The enclosing workflow validates, tests and opens a PR for human review.
           TXT
           printf '\nUser request:\n%s\n' "$TASK" >> "$RUNNER_TEMP/opencode-task.txt"
+          # The lease was minted by the previous job; queueing eats into its
+          # 30 minutes. Refuse to start with too little left, and stop the
+          # agent a minute before the gateway would start rejecting it.
+          remaining="$(node -e 'const t=require("fs").readFileSync(process.argv[1],"utf8").split(".")[1];console.log(JSON.parse(Buffer.from(t,"base64url")).exp-Math.floor(Date.now()/1000))' "$RUNNER_TEMP/gateway-lease")"
+          if (( remaining < 600 )); then
+            echo "::error::Gateway lease has only ${remaining}s left (runner queue delay). Dispatch the workflow again."
+            exit 1
+          fi
           # The agent sees only the expiring gateway lease, never a provider key.
+          status=0
           AI_GATEWAY_LEASE="$(cat "$RUNNER_TEMP/gateway-lease")" \
-            opencode run --model blablador/alias-code "$(cat "$RUNNER_TEMP/opencode-task.txt")"
+            timeout --signal=TERM --kill-after=30 "$((remaining - 60))" \
+            opencode run --model blablador/alias-code "$(cat "$RUNNER_TEMP/opencode-task.txt")" || status=$?
+          if (( status == 124 )); then
+            echo "::error::OpenCode stopped because the gateway lease is about to expire."
+          fi
+          if (( status != 0 )); then exit "$status"; fi
           rm -f "$RUNNER_TEMP/gateway-lease"
 
       - name: Test edits and create an untrusted patch
@@ -264,11 +278,17 @@ jobs:
           git apply --index "$patch"
           # Never trust path checks or tests from the unprivileged job alone.
           # --no-renames exposes both the source and destination of a rename.
+          lease_pattern='g1\.[A-Za-z0-9_-]{30,400}\.[A-Za-z0-9_-]{43}'
           while IFS= read -r -d '' path; do
             if [[ "$path" == .* || "$path" == */.* ||
                   "$path" == *secret* || "$path" == *credential* ||
                   "$path" == *private.key* ]]; then
               echo "::error::Protected path changed: $path"
+              exit 1
+            fi
+            # A lease could also be smuggled out as a file or directory name.
+            if [[ "$path" =~ $lease_pattern || "${path//\//.}" =~ $lease_pattern ]]; then
+              echo "::error::Proposal path contains a gateway lease token."
               exit 1
             fi
             mode="$(git ls-files --stage -- "$path" | cut -d' ' -f1)"
@@ -281,7 +301,7 @@ jobs:
           # Reject anything shaped like a gateway lease (g1.<payload>.<hmac>),
           # so a leaked credential never reaches repository history.
           # Scans every staged blob, binary files included, without a pipe.
-          if git grep --cached -a -q -E 'g1\.[A-Za-z0-9_-]{30,400}\.[A-Za-z0-9_-]{43}'; then
+          if git grep --cached -a -q -E "$lease_pattern"; then
             echo "::error::Proposal contains a gateway lease token."
             exit 1
           fi
