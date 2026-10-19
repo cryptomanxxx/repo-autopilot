@@ -14,17 +14,36 @@ const isolation=()=>process.env.MODEL_SANDBOX!=='isolated'?[]:process.getuid?.()
 // Runs a model's code in a separate Node process (no environment variables, no file or child-process
 // access, a time limit) and inside it in a fresh JavaScript realm that has no process, require or
 // stdout. Each check is an expression evaluated in that realm, and only a primitive result equal to
-// the expected value passes, so model code cannot reach or rewrite the harness that reports.
-export function sandbox(code,checks) {
+// the expected value passes, so model code cannot reach or rewrite the harness that reports. With
+// exports given, the code runs as an ES module that must export exactly those names (read from the
+// module's own namespace), which the checks can then use.
+export function sandbox(code,checks,{exports}={}) {
   const nonce=randomBytes(12).toString('hex');
   const script=`const vm=require('node:vm'),{writeSync}=require('node:fs');
 const ctx=vm.createContext(Object.create(null)),run=source=>vm.runInContext(source,ctx,{timeout:3000});
-let ok=false;
-try {run(${JSON.stringify(code)});ok=${JSON.stringify(checks)}.every(([check,expected])=>run(check)===expected);} catch {}
-writeSync(1,${JSON.stringify(nonce)}+':'+ok+'\\n');
-process.exit(0);
+const code=${JSON.stringify(code)},checks=${JSON.stringify(checks)},exports=${JSON.stringify(exports??null)};
+(async()=>{
+  let ok=false;
+  try {
+    if(exports) {
+      const module=new vm.SourceTextModule(code,{context:ctx});
+      await module.link(()=>{throw new Error('No imports');});
+      await module.evaluate({timeout:3000});
+      const names=Object.keys(module.namespace).sort();
+      if(names.join()===[...exports].sort().join()) {
+        for(const name of names) ctx[name]=module.namespace[name];
+        ok=checks.every(([check,expected])=>run(check)===expected);
+      }
+    } else {
+      run(code);
+      ok=checks.every(([check,expected])=>run(check)===expected);
+    }
+  } catch {}
+  writeSync(1,${JSON.stringify(nonce)}+':'+ok+'\\n');
+  process.exit(0);
+})();
 `;
-  const [command,...args]=[...isolation(),process.execPath,'--permission','-'];
+  const [command,...args]=[...isolation(),process.execPath,'--permission','--experimental-vm-modules','--no-warnings','-'];
   const result=spawnSync(command,args,{input:script,env:{},timeout:15000,maxBuffer:1<<20,encoding:'utf8'});
   if(result.status!==0||typeof result.stdout!=='string') return false;
   return result.stdout.trim().split('\n').at(-1)===nonce+':true';
@@ -63,10 +82,10 @@ export function applyEdits(file,edits) {
 }
 // The edited file is run in the sandbox and checked by what it does, so formatting is free but every
 // token, string and line break that changes the meaning counts.
-// The file must still export what the original exports; script() then turns exports into declarations.
-const exportsOf=text=>[...text.matchAll(/^\s*export\s+(?:const|let|var|function)\s+([A-Za-z_$][\w$]*)/gm)].map(m=>m[1]).sort().join();
-const edits=(file,list,checks)=>{const edited=applyEdits(file,list);return edited!==null&&exportsOf(edited)===exportsOf(file)&&sandbox(script(edited),checks);};
+// The edited file runs as a module that must still export exactly what the original exports.
+const edits=(file,list,checks,exports)=>{const edited=applyEdits(file,list);return edited!==null&&sandbox(edited,checks,{exports});};
 // What plans.js must do with only the first change, only the second, or both.
+const PLAN_EXPORTS=['describe','limits'];
 const planChecks=(users,projects)=>[['JSON.stringify(limits)',JSON.stringify({maxUsers:users?25:10,maxProjects:5})],
   ['describe({name:"Team",users:4,projects:2})',projects?'Team: 4 users, 2 projects':'Team: 4 users'],
   ['describe({name:"Solo",users:1,projects:7})',projects?'Solo: 1 users, 7 projects':'Solo: 1 users']];
@@ -154,7 +173,7 @@ Change the timeout to 10000 ms and add the entry region: 'eu-west-1' directly af
 >>>>>>> REPLACE`,
     grade:answer=>{
       const list=readEdits(answer,'config.js');
-      return list?.length===1&&edits(CONFIG,list,[['JSON.stringify(config)',JSON.stringify({retries:3,timeoutMs:10000,region:'eu-west-1',verbose:false})]]);
+      return list?.length===1&&edits(CONFIG,list,[['JSON.stringify(config)',JSON.stringify({retries:3,timeoutMs:10000,region:'eu-west-1',verbose:false})]],['config']);
     }
   },
   {
@@ -190,7 +209,7 @@ Reply with only the exact output.`,
   // in two places.
   {
     id:'bugfix-deep',
-    prompt:`This JavaScript function should compare two values deeply: primitives, plain objects and arrays. NaN equals NaN, null equals only null, an array never equals a non-array, and two objects are equal only with exactly the same keys and deeply equal values. It has several bugs:
+    prompt:`This JavaScript function should compare two values deeply: primitives, plain objects and arrays. NaN equals NaN, null equals only null, an array never equals a non-array, two arrays are equal only with the same length and deeply equal elements, and two objects are equal only with exactly the same keys and deeply equal values. It has several bugs:
 
 \`\`\`js
 function deepEqual(a, b) {
@@ -207,7 +226,7 @@ Fix every bug. Reply with only the corrected function, named deepEqual, in one \
       ['deepEqual({a:[1,{b:NaN}],c:"x"},{c:"x",a:[1,{b:NaN}]})',true],['deepEqual(NaN,NaN)',true],['deepEqual(NaN,1)',false],['deepEqual(1,NaN)',false],['deepEqual(null,null)',true],
       ['deepEqual([1,[2,3]],[1,[2,3]])',true],['deepEqual(null,{})',false],['deepEqual({},null)',false],['deepEqual({a:1},{a:1,b:2})',false],
       ['deepEqual([],{})',false],['deepEqual({},[])',false],['deepEqual({0:1},[1])',false],['deepEqual([1],{0:1})',false],['deepEqual({0:1,length:1},[1])',false],['deepEqual({a:undefined},{b:undefined})',false],
-      ['deepEqual(0,"0")',false],['deepEqual([1,2],[2,1])',false],['deepEqual([1],[1,2])',false],['deepEqual([1,2],[1])',false],['deepEqual({a:1},{b:1})',false],['(()=>{const x=[1];x.extra=2;return deepEqual([1],x);})()',false],['(()=>{const x=[1];x.extra=2;return deepEqual(x,[1]);})()',false],
+      ['deepEqual(0,"0")',false],['deepEqual([1,2],[2,1])',false],['deepEqual([1],[1,2])',false],['deepEqual([],Array(1))',false],['deepEqual(Array(1),Array(2))',false],['deepEqual(Array(2),[])',false],['deepEqual([1,2],[1])',false],['deepEqual({a:1},{b:1})',false],['(()=>{const x=[1];x.extra=2;return deepEqual([1],x);})()',false],['(()=>{const x=[1];x.extra=2;return deepEqual(x,[1]);})()',false],
       ['deepEqual({a:[1,{b:2}]},{a:[1,{b:2,c:3}]})',false],['deepEqual({x:{y:null}},{x:{y:{}}})',false]])
   },
   {
@@ -257,9 +276,9 @@ Make two changes: raise maxUsers to 25, and make describe() also mention the pro
     grade:answer=>{
       // Two blocks, each making exactly one of the changes on its own.
       const list=readEdits(answer,'plans.js');
-      return list?.length===2&&edits(PLANS,list,planChecks(true,true))&&
-        (edits(PLANS,[list[0]],planChecks(true,false))&&edits(PLANS,[list[1]],planChecks(false,true))||
-         edits(PLANS,[list[0]],planChecks(false,true))&&edits(PLANS,[list[1]],planChecks(true,false)));
+      return list?.length===2&&edits(PLANS,list,planChecks(true,true),PLAN_EXPORTS)&&
+        (edits(PLANS,[list[0]],planChecks(true,false),PLAN_EXPORTS)&&edits(PLANS,[list[1]],planChecks(false,true),PLAN_EXPORTS)||
+         edits(PLANS,[list[0]],planChecks(false,true),PLAN_EXPORTS)&&edits(PLANS,[list[1]],planChecks(true,false),PLAN_EXPORTS));
     }
   }
 ]);
