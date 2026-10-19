@@ -50,6 +50,8 @@ test('every task passes its reference answer and fails a wrong one',()=>{
   assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('if (Number.isNaN(a) && Number.isNaN(b)) return true;','if (Number.isNaN(a)) return true;')),false,'NaN equal to anything');
   assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('  const keys = Object.keys(a);','  if (Array.isArray(a)) return a.every((value, index) => deepEqual(value, b[index]));\n  const keys = Object.keys(a);')),false,'arrays of different lengths');
   assert.equal(task('edit-multi').grade(GOOD['edit-multi'].replace('return `${plan.name}: ${plan.users} users, ${plan.projects} projects`;','return "Team: 4 users, 2 projects";')),false,'a describe() that ignores its argument');
+  assert.equal(task('bugfix-deep').grade(GOOD['bugfix-deep'].replace('if (Array.isArray(a) !== Array.isArray(b)) return false;','if (Array.isArray(a) && !Array.isArray(b)) return false;')),false,'an object equal to an array');
+  assert.equal(task('edit').grade("<<<<<<< SEARCH\nexport const config = {\n  retries: 3,\n  timeoutMs: 5000,\n=======\nconst config = {\n  retries: 3,\n  timeoutMs: 10000,\n  region: 'eu-west-1',\n>>>>>>> REPLACE"),false,'an edit that drops the export');
   assert.equal(task('implement-csv').grade(GOOD['implement-csv'].replace('      if (i === line.length) return fields;\n      if (line[i] !== ",") return null;\n      i++;','      if (i === line.length) return fields;\n      if (line[i] !== ",") return null;\n      i++;\n      if (i === line.length) return fields;')),false,'a trailing empty field after a quoted one');
 });
 
@@ -144,6 +146,10 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     // tested; hip:old (tested most recently) does not fit in five.
     assert.deepEqual(JSON.parse(answers).models.map(m=>m.id),['blablador:good','hip:bad','blablador:later','blablador:third','hip:down']);
     assert.equal(calls.length,5*TASKS.length);
+    // A one-model run starts with the provider that has fewer rated models, so small runs alternate.
+    writeFileSync(join(dir,'one.json'),JSON.stringify({...empty(),models:{'blablador:good':current.models['hip:old']}}));
+    await run(process.execPath,[script('collect.mjs')],{env:{...env,RATINGS:join(dir,'one.json'),OUT:join(dir,'one-answers.json'),MAX_MODELS:'1'}});
+    assert.deepEqual(JSON.parse(readFileSync(join(dir,'one-answers.json'),'utf8')).models.map(m=>m.id),['hip:bad']);
     await run(process.execPath,[script('grade.mjs'),join(dir,'answers.json'),join(dir,'current.json'),join(dir,'next.json')]);
     const next=validate(JSON.parse(readFileSync(join(dir,'next.json'),'utf8')));
     assert.deepEqual(Object.keys(next.models),['blablador:good','blablador:later','blablador:third','hip:bad','hip:down','hip:old']);

@@ -28,9 +28,12 @@ for(const [provider,status] of Object.entries(catalog.providers||{})) console.lo
 const ordered=(catalog.data||[])
   .filter(row=>validId(row?.id)&&(PROVIDER==='all'||row.provider===PROVIDER))
   .sort((a,b)=>(previous[a.id]?.testedAt||'').localeCompare(previous[b.id]?.testedAt||'')||a.id.localeCompare(b.id));
+// The provider with the fewest rated models goes first, so that even runs of one model alternate.
+const ratedCount=provider=>Object.keys(previous).filter(id=>id.startsWith(provider+':')).length;
+const providers=[...new Set(ordered.map(row=>row.provider))].sort((a,b)=>ratedCount(a)-ratedCount(b)||a.localeCompare(b));
 function inTurn(rows) {
-  const queues=new Map();
-  for(const row of rows) queues.set(row.provider,[...(queues.get(row.provider)||[]),row]);
+  const queues=new Map(providers.map(provider=>[provider,[]]));
+  for(const row of rows) queues.get(row.provider).push(row);
   const result=[];
   while([...queues.values()].some(queue=>queue.length))
     for(const queue of queues.values()) if(queue.length) result.push(queue.shift());
