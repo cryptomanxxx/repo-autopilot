@@ -205,8 +205,8 @@ test('a run starts a model only while its tasks and a few retries fit in the lea
   try {
     writeFileSync(join(dir,'lease'),lease);
     await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
-      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),RATINGS:join(dir,'none.json'),PROVIDER:'all',MAX_MODELS:'11'}});
-    // Ten models of nine tasks leave fewer than nine tasks and two retries for an eleventh.
+      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),RATINGS:join(dir,'none.json'),PROVIDER:'all',MAX_MODELS:'10'}});
+    // The largest accepted run, ten models, fits with its retry reserve.
     assert.equal(JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models.length,Math.floor((100-2)/TASKS.length));
     assert.ok(calls<=100);
   } finally {

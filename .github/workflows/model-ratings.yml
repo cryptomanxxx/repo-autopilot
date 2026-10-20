@@ -4,7 +4,7 @@ name: Model ratings
 # the results as a pull request to worker/src/model-ratings.json. The agent chat sorts its model
 # picker by these ratings. Each run rates the untested models first, then those tested longest ago,
 # taking the providers in turn, within one gateway lease (100 calls in 30 minutes, 9 calls per
-# model); run it again for more.
+# model and a few for retries); run it again for more.
 on:
   workflow_dispatch:
     inputs:
@@ -15,7 +15,7 @@ on:
         type: choice
         options: [all, blablador, hip]
       max_models:
-        description: "Models to rate in this run (1-11)"
+        description: "Models to rate in this run (1-10)"
         required: true
         default: '8'
         type: string
@@ -57,8 +57,8 @@ jobs:
             echo "::error::Set the AI_GATEWAY_URL variable on the ai-agent-production environment (https origin, no path)."
             exit 1
           fi
-          if [[ ! "$MAX_MODELS" =~ ^[0-9]+$ ]] || (( MAX_MODELS < 1 || MAX_MODELS > 11 )); then
-            echo "::error::max_models must be a whole number from 1 to 11."
+          if [[ ! "$MAX_MODELS" =~ ^[0-9]+$ ]] || (( MAX_MODELS < 1 || MAX_MODELS > 10 )); then
+            echo "::error::max_models must be a whole number from 1 to 10."
             exit 1
           fi
 

@@ -9,7 +9,10 @@ const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,RATINGS,PROVIDER='all',MAX_MODELS='
 const lease=readFileSync(LEASE_FILE,'utf8').trim();
 const expires=JSON.parse(Buffer.from(lease.split('.')[1],'base64url').toString('utf8')).exp;
 // Each model takes one call per task; a lease allows 100 calls.
-const limit=Math.max(1,Math.min(Math.floor(100/TASKS.length),Number.parseInt(MAX_MODELS,10)||8));
+// The lease allows 100 calls. A model is started only while its tasks and a few retries still fit,
+// so at most ten models (of nine tasks) fit in one run.
+const LEASE_CALLS=100,RETRY_RESERVE=2;
+const limit=Math.max(1,Math.min(Math.floor((LEASE_CALLS-RETRY_RESERVE)/TASKS.length),Number.parseInt(MAX_MODELS,10)||8));
 const secondsLeft=()=>expires-Math.floor(Date.now()/1000);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const headers={Authorization:'Bearer '+lease,'Content-Type':'application/json'};
@@ -47,8 +50,6 @@ function inTurn(rows) {
 const chosen=[...inTurn(ordered.filter(row=>!previous[row.id])),...ordered.filter(row=>previous[row.id])].slice(0,limit);
 console.log(`Rating ${chosen.length} model(s): ${chosen.map(row=>row.id).join(', ')}`);
 
-// The lease allows 100 calls. A model is started only while its tasks and a few retries still fit.
-const LEASE_CALLS=100,RETRY_RESERVE=2;
 let spent=0;
 // One answer. The gateway's per-minute limits answer 429 for a while; that is waited out.
 async function ask(model,task) {
