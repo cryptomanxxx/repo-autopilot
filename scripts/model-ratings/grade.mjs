@@ -1,17 +1,16 @@
-// Grades the collected answers and merges the results into the ratings file:
-//   node grade.mjs <answers.json> <current ratings.json> <output ratings.json>
-// A model the provider could not answer every task for (provider errors) keeps its previous rating;
-// a task that timed out counts as failed.
+// Grades the collected answers into the ratings of this run's models:
+//   node grade.mjs <answers.json> <output ratings.json>
+// The gateway merges them into the stored ratings. A model the provider could not answer every task
+// for (provider errors) is left out, so it keeps its stored rating; a task that timed out counts as failed.
 import {readFileSync,writeFileSync} from 'node:fs';
 import {TASKS,sandbox} from './tasks.mjs';
 import {validate,validId,stars,median,empty} from './ratings.mjs';
 
-const [answersPath,currentPath,outPath]=process.argv.slice(2);
+const [answersPath,outPath]=process.argv.slice(2);
 // A sandbox that cannot start would fail every answer and rate every model one star.
 if(!sandbox('const one=1;',[['one',1]])) throw new Error('The model code sandbox does not run; nothing was graded.');
 const collected=JSON.parse(readFileSync(answersPath,'utf8'));
-let ratings;
-try {ratings=validate(JSON.parse(readFileSync(currentPath,'utf8')));} catch {ratings=empty();}
+const ratings=empty();
 // To the second, so that a rerated model moves behind models rated earlier the same day.
 const testedAt=new Date().toISOString().slice(0,19)+'Z';
 for(const model of Array.isArray(collected?.models)?collected.models:[]) {
