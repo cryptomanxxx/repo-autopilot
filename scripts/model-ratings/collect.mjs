@@ -5,7 +5,7 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import {TASKS,SYSTEM} from './tasks.mjs';
 import {validId,validate} from './ratings.mjs';
 
-const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,RATINGS,PROVIDER='all',MAX_MODELS='8',TIMEOUT_SECONDS='110'}=process.env;
+const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,PROVIDER='all',MAX_MODELS='8',TIMEOUT_SECONDS='110'}=process.env;
 // The gateway gives up on a generation after 120 seconds (and answers 502). A call that fails after
 // this long is a model too slow for the task, not a provider error: it counts as a failed task.
 const timeoutSeconds=Number(TIMEOUT_SECONDS)>0?Number(TIMEOUT_SECONDS):110;
@@ -21,9 +21,14 @@ const secondsLeft=()=>expires-Math.floor(Date.now()/1000);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const headers={Authorization:'Bearer '+lease,'Content-Type':'application/json'};
 
-let previous={};
+// The ratings stored in the gateway, to rate untested models first and then the oldest ones.
 // Ratings from an older set of tasks count as untested.
-try {previous=validate(JSON.parse(readFileSync(RATINGS,'utf8'))).models;} catch {}
+let previous={};
+try {
+  const stored=await fetch(gateway+'/v1/ratings',{headers,signal:AbortSignal.timeout(30000)});
+  if(stored.ok) previous=validate(await stored.json()).models;
+} catch {}
+console.log(`Stored ratings: ${Object.keys(previous).length}`);
 
 const listed=await fetch(gateway+'/v1/models',{headers,signal:AbortSignal.timeout(30000)});
 if(!listed.ok) throw new Error('The gateway did not list the models (HTTP '+listed.status+').');

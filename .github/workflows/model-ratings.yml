@@ -1,8 +1,8 @@
 name: Model ratings
 
-# Rates the AI gateway's chat models on fixed small coding tasks (scripts/model-ratings) and proposes
-# the results as a pull request to worker/src/model-ratings.json. The agent chat sorts its model
-# picker by these ratings. Each run rates the untested models first, then those tested longest ago,
+# Rates the AI gateway's chat models on fixed small coding tasks (scripts/model-ratings) and stores
+# the results in the AI gateway, from where the agent chat reads them at once to sort its model
+# picker. No commit or pull request is made. Each run rates the untested models first, then those tested longest ago,
 # taking the providers in turn, within one gateway lease (100 calls in 30 minutes, 9 calls per
 # model and a few for retries); run it again for more.
 on:
@@ -101,7 +101,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/out"
           status=0
-          LEASE_FILE="$RUNNER_TEMP/gateway-lease" OUT="$RUNNER_TEMP/out/answers.json" RATINGS=worker/src/model-ratings.json \
+          LEASE_FILE="$RUNNER_TEMP/gateway-lease" OUT="$RUNNER_TEMP/out/answers.json" \
             node scripts/model-ratings/collect.mjs || status=$?
           rm -f "$RUNNER_TEMP/gateway-lease"
           if (( status != 0 )); then exit "$status"; fi
@@ -148,7 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/out"
-          node scripts/model-ratings/grade.mjs "$RUNNER_TEMP/answers/answers.json" worker/src/model-ratings.json "$RUNNER_TEMP/out/model-ratings.json"
+          node scripts/model-ratings/grade.mjs "$RUNNER_TEMP/answers/answers.json" "$RUNNER_TEMP/out/model-ratings.json"
       - uses: actions/upload-artifact@v4
         with:
           name: model-ratings
@@ -158,13 +158,15 @@ jobs:
 
   publish:
     needs: grade
+    if: github.event.repository.owner.type == 'User' && github.actor == github.repository_owner && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The gateway stores the ratings only for this workflow's own OIDC identity in this environment.
+    environment: ai-agent-production
     permissions:
-      contents: write
-      pull-requests: write
-      # Only to start CI on the new branch (below).
-      actions: write
+      contents: read
+      # Only to prove this run's identity to the AI gateway when storing the ratings.
+      id-token: write
     steps:
       - name: Clean checkout without persisted credentials
         uses: actions/checkout@v4
@@ -178,9 +180,9 @@ jobs:
         with:
           name: model-ratings
           path: ${{ runner.temp }}/ratings
-      - name: Check the ratings file and open a pull request
+      - name: Check the ratings and store them in the AI gateway
         env:
-          GH_TOKEN: ${{ github.token }}
+          AI_GATEWAY_URL: ${{ vars.AI_GATEWAY_URL }}
         shell: bash
         run: |
           set -euo pipefail
@@ -189,26 +191,23 @@ jobs:
             echo "::error::Ratings file missing or oversized."
             exit 1
           fi
-          # Strict format check with this checkout's own code; it also writes the PR summary.
-          node scripts/model-ratings/publish.mjs "$next" worker/src/model-ratings.json > "$RUNNER_TEMP/pr-body.md"
-          cat "$RUNNER_TEMP/pr-body.md" >> "$GITHUB_STEP_SUMMARY"
-          cp "$next" worker/src/model-ratings.json
-          if git diff --quiet; then
-            echo "::notice::No rating changed."
-            exit 0
+          # Strict format check with this checkout's own code; it also writes the run summary.
+          node scripts/model-ratings/publish.mjs "$next" >> "$GITHUB_STEP_SUMMARY"
+          if [[ ! "$AI_GATEWAY_URL" =~ ^https://[A-Za-z0-9.-]+$ ]]; then
+            echo "::error::Set the AI_GATEWAY_URL variable on the ai-agent-production environment (https origin, no path)."
+            exit 1
           fi
-          branch="autopilot/model-ratings-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git add worker/src/model-ratings.json
-          git commit -m "chore: update model ratings"
-          gh auth setup-git
-          git push origin "$branch"
-          printf '\n%s\n' 'Created by the Model ratings workflow. Merging deploys the agent chat with these ratings.' >> "$RUNNER_TEMP/pr-body.md"
-          gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" --title "Model ratings: $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/pr-body.md"
-          # A pull request opened with GITHUB_TOKEN starts no pull_request workflows, so CI and the
-          # Worker build are started here; their checks on the branch's commit are the ones the pull
-          # request needs. The Worker workflow deploys only from the default branch.
-          gh workflow run ci.yml --ref "$branch"
-          gh workflow run chat-worker.yml --ref "$branch"
+          jwt="$(curl -sSf --max-time 30 \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=repo-autopilot-ai-gateway" | jq -er .value)"
+          echo "::add-mask::$jwt"
+          # The gateway merges these into the stored ratings; the chat shows them at once.
+          status="$(curl -sS --max-time 30 --proto '=https' -X POST \
+            -o "$RUNNER_TEMP/stored.json" -w '%{http_code}' \
+            -H "Authorization: Bearer $jwt" -H 'Content-Type: application/json' \
+            --data-binary "@$next" "$AI_GATEWAY_URL/v1/ratings")"
+          if [[ "$status" != 200 ]]; then
+            echo "::error::The gateway did not store the ratings (HTTP $status): $(jq -r '.error // empty' "$RUNNER_TEMP/stored.json" 2>/dev/null)"
+            exit 1
+          fi
+          echo "::notice::Ratings stored; the gateway now holds ratings for $(jq -r .models "$RUNNER_TEMP/stored.json") models."

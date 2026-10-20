@@ -1,4 +1,4 @@
-// The model ratings file (worker/src/model-ratings.json): its format, how a run's results become
+// The model ratings (stored in the AI gateway, read by the agent chat): their format, how a run's results become
 // stars, and the strict check every file passes before it is committed or deployed.
 export const PROVIDERS=Object.freeze(['blablador','hip']);
 export const TASK_IDS=Object.freeze(['bugfix','implement','edit','json','reading','bugfix-deep','implement-csv','reading-async','edit-multi']);

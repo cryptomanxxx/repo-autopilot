@@ -461,6 +461,8 @@ test('a gateway answer streams to the browser as it is written',async()=>{
     assert.equal((await handle(post('/api/chat',auth,{text:'Hej',agent:'hip',model}),env,{fetchImpl})).status,400,String(model));
   // The models each agent's provider lists, read from the gateway.
   env.AI_GATEWAY.fetch=async url=>{
+    // No ratings stored yet (or the gateway cannot give them): the models are listed unrated.
+    if(url==='https://ai-gateway/v1/ratings') return new Response('down',{status:503});
     assert.equal(url,'https://ai-gateway/v1/models');
     return Response.json({data:[{id:'hip:Mistral-Medium-3.5-128B',provider:'hip',model:'Mistral-Medium-3.5-128B',context_length:131072},
       {id:'blablador:alias-code',provider:'blablador',model:'alias-code',context_length:null},{id:'other:x',provider:'other',model:'x'}],
@@ -469,10 +471,12 @@ test('a gateway answer streams to the browser as it is written',async()=>{
   assert.deepEqual(await (await handle(request('/api/models',{cookie:auth.cookie}),env,{fetchImpl})).json(),{agents:[
     {id:'blablador',status:'ok',models:[{id:'blablador:alias-code',name:'alias-code',contextLength:null,rating:null}]},
     {id:'hip',status:'ok',models:[{id:'hip:Mistral-Medium-3.5-128B',name:'Mistral-Medium-3.5-128B',contextLength:131072,rating:null}]}]});
-  // Rated models come first, best first; untested ones last, by name.
-  env.AI_GATEWAY.fetch=async()=>Response.json({providers:{hip:'ok'},data:['Zeta','Alpha','Fast','Slow','Top'].map(model=>({id:'hip:'+model,provider:'hip',model}))});
+  // Rated models come first, best first; untested ones last, by name. The ratings come from the gateway.
   const rated=(stars,passed,seconds)=>({stars,passed,total:5,seconds,testedAt:'2026-10-19'});
-  const {agents:[,hipModels]}=await agentModels(env,{models:{'hip:Fast':rated(4,4,5),'hip:Slow':rated(4,4,30),'hip:Top':rated(5,5,20),'hip:Zeta':rated(1,0,2),'hip:__proto__':rated(5,5,1)}});
+  const stored={version:2,tasks:['a','b','c','d','e'],models:{'hip:Fast':rated(4,4,5),'hip:Slow':rated(4,4,30),'hip:Top':rated(5,5,20),'hip:Zeta':rated(1,0,2),'hip:__proto__':rated(5,5,1)}};
+  env.AI_GATEWAY.fetch=async url=>url==='https://ai-gateway/v1/ratings'?Response.json(stored):
+    Response.json({providers:{hip:'ok'},data:['Zeta','Alpha','Fast','Slow','Top'].map(model=>({id:'hip:'+model,provider:'hip',model}))});
+  const {agents:[,hipModels]}=await agentModels(env);
   assert.deepEqual(hipModels.models.map(m=>[m.name,m.rating?.stars??null]),[['Top',5],['Fast',4],['Slow',4],['Zeta',1],['Alpha',null]]);
   assert.deepEqual(hipModels.models[0].rating,rated(5,5,20));
   env.AI_GATEWAY.fetch=async()=>new Response('down',{status:503});
