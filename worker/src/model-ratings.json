@@ -1,1 +1,44 @@
-{"version":2,"tasks":["bugfix","implement","edit","json","reading","bugfix-deep","implement-csv","reading-async","edit-multi"],"models":{}}
+{
+  "version": 2,
+  "tasks": [
+    "bugfix",
+    "implement",
+    "edit",
+    "json",
+    "reading",
+    "bugfix-deep",
+    "implement-csv",
+    "reading-async",
+    "edit-multi"
+  ],
+  "models": {
+    "blablador:01 - GPT-OSS-120b - an open model released by OpenAI in August 2025": {
+      "stars": 4,
+      "passed": 8,
+      "total": 9,
+      "seconds": 3.4,
+      "testedAt": "2026-10-20T07:15:09Z"
+    },
+    "blablador:02 - Qwen3.8-Flash-Next-NVFP4, general purpose large model": {
+      "stars": 2,
+      "passed": 5,
+      "total": 9,
+      "seconds": 4.8,
+      "testedAt": "2026-10-20T07:15:09Z"
+    },
+    "blablador:07 - Qwen3.8-27B-FP8 - Multimodal model from Aug 2026": {
+      "stars": 3,
+      "passed": 6,
+      "total": 9,
+      "seconds": 8.7,
+      "testedAt": "2026-10-20T07:15:09Z"
+    },
+    "hip:leo-hessianai-13b-chat": {
+      "stars": 1,
+      "passed": 0,
+      "total": 9,
+      "seconds": 2.4,
+      "testedAt": "2026-10-20T07:15:09Z"
+    }
+  }
+}
