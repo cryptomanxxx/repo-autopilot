@@ -291,7 +291,8 @@ test('a small model gets an output limit that fits its context, and a 400 at the
   const server=createServer((request,response)=>{
     response.setHeader('Content-Type','application/json');
     if(request.method==='GET') return response.end(JSON.stringify({providers:{hip:'ok'},data:[
-      {id:'hip:small',provider:'hip',context_length:4096},{id:'hip:unknown',provider:'hip',context_length:null}]}));
+      {id:'hip:small',provider:'hip',context_length:4096},{id:'hip:unknown',provider:'hip',context_length:null},
+      {id:'hip:tiny',provider:'hip',context_length:300}]}));
     let body='';
     request.on('data',chunk=>body+=chunk);
     request.on('end',()=>{
@@ -307,12 +308,16 @@ test('a small model gets an output limit that fits its context, and a 400 at the
   try {
     writeFileSync(join(dir,'lease'),lease);
     await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
-      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),PROVIDER:'all',MAX_MODELS:'2'}});
+      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),PROVIDER:'all',MAX_MODELS:'3'}});
+    assert.equal(asked['hip:tiny'],undefined,'a task that cannot fit is never sent');
     assert.equal(asked['hip:small'].length,TASKS.length,'no call is refused');
     assert.ok(asked['hip:small'].every(tokens=>tokens>=256&&tokens<4096),'the prompt and the answer fit the context');
     assert.deepEqual(asked['hip:unknown'],[8192,...TASKS.map(()=>3072)],'one refusal, then a limit that leaves room for the prompt');
     const models=JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models;
-    for(const model of models) assert.ok(model.answers.every(answer=>answer.status==='ok'),model.id);
+    for(const model of models.filter(m=>m.id!=='hip:tiny')) assert.ok(model.answers.every(answer=>answer.status==='ok'),model.id);
+    const tiny=models.find(m=>m.id==='hip:tiny').answers;
+    assert.equal(tiny.length,TASKS.length);
+    assert.ok(tiny.every(answer=>answer.status==='timeout'),'it fails its tasks, so it is rated instead of retried every run');
   } finally {
     server.close();
     rmSync(dir,{recursive:true,force:true});

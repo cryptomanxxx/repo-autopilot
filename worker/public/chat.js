@@ -216,7 +216,7 @@ function fillModels() {
   const small=m=>m.contextLength&&m.contextLength<SMALL_CONTEXT;
   // The preselected model is the best rated one known to hold the files the chat sends; only when no
   // rated model has a known context length large enough, the best rated one not known to be small.
-  const preselected=models.find(m=>m.rating&&m.contextLength>=SMALL_CONTEXT)||models.find(m=>m.rating&&!m.contextLength);
+  const preselected=models.find(m=>m.rating&&m.contextLength>=SMALL_CONTEXT)||models.find(m=>m.rating&&!(m.contextLength>0));
   state.modelId=remembered===null?(preselected?.id||''):models.some(m=>m.id===remembered)?remembered:'';
   const standard=Object.assign(document.createElement('option'),{value:'',textContent:`Standard${agent?.modelName?` (${agent.modelName})`:''}`});
   const option=m=>Object.assign(document.createElement('option'),{value:m.id,

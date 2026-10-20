@@ -87,13 +87,16 @@ function outputLimit(row,task) {
   const cap=row.cap??OUTPUT_TOKENS,context=row.context_length;
   if(!knownContext(row)) return cap;
   const room=context-Math.ceil((SYSTEM.length+task.prompt.length)/3)-64;
-  return Math.max(256,Math.min(cap,room));
+  return Math.min(cap,room);
 }
+// Below this the task does not fit the model's context at all; it fails without being asked.
+const MIN_OUTPUT_TOKENS=256;
 // One answer. The gateway's per-minute limits answer 429 for a while; that is waited out.
 async function ask(row,task) {
   const model=row.id;
   for(let attempt=0;attempt<8;attempt++) {
     const maxTokens=outputLimit(row,task);
+    if(maxTokens<MIN_OUTPUT_TOKENS) return {status:'timeout',seconds:null,error:`no room for an answer in its ${row.context_length}-token context`};
     if(secondsLeft()<150) return {status:'stopped'};
     const started=Date.now(),elapsed=()=>Math.round((Date.now()-started)/100)/10;
     const timedOut=()=>({status:'timeout',seconds:elapsed(),error:'no answer within '+timeoutSeconds+' s'});
@@ -146,7 +149,7 @@ for(const row of chosen) {
   if(spent+TASKS.length+reserve>LEASE_CALLS) {console.log(`Stopped before ${row.id}: not enough of the lease's calls left.`);break;}
   const answers=[];
   let errors=0,timeouts=0;
-  const smallest=Math.min(...TASKS.map(task=>outputLimit(row,task)));
+  const smallest=Math.max(0,Math.min(...TASKS.map(task=>outputLimit(row,task))));
   if(smallest<OUTPUT_TOKENS) console.log(`${row.id}: output limit down to ${smallest} tokens for its ${row.context_length}-token context`);
   for(const task of TASKS) {
     if(timeouts>=SLOW_AFTER) {answers.push({task:task.id,status:'timeout',seconds:null,error:'not asked: too slow'});continue;}
