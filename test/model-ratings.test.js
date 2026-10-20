@@ -257,8 +257,9 @@ test('an answer cut off while thinking is a failed task, and an answer without t
       bodies.push(JSON.parse(body));
       // The first task: no text for no stated reason (a provider error), also when asked again; every
       // other task is cut off while thinking.
-      const finish=bodies.at(-1).messages[1].content===TASKS[0].prompt?null:'length';
-      response.end(JSON.stringify({choices:[{finish_reason:finish,message:{role:'assistant',content:null,reasoning_content:'hmm '.repeat(50)}}],usage:{completion_tokens:8192}}));
+      // A cut-off answer may also come as blank text instead of none.
+      const first=bodies.at(-1).messages[1].content===TASKS[0].prompt;
+      response.end(JSON.stringify({choices:[{finish_reason:first?null:'length',message:{role:'assistant',content:first||bodies.length%2?null:'  \n',reasoning_content:'hmm '.repeat(50)}}],usage:{completion_tokens:8192}}));
     });
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
@@ -272,6 +273,9 @@ test('an answer cut off while thinking is a failed task, and an answer without t
     assert.equal(answers[0].error,'no answer text (8192 output tokens, 200 characters of reasoning)');
     assert.equal(answers[1].status,'timeout');
     assert.equal(answers[1].error,'no answer within the output limit (finish length, 8192 output tokens, 200 characters of reasoning)');
+    // answers[1] came as blank text, answers[2] as no text: both cut off at the limit, both failed tasks.
+    assert.equal(answers[2].status,'timeout');
+    assert.match(answers[2].error,/^no answer within the output limit/);
     // Two cut-off answers make the model too slow: its remaining tasks fail unasked.
     assert.equal(answers[3].error,'not asked: too slow');
     assert.equal(answers.length,TASKS.length);
