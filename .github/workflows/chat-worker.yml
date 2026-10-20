@@ -9,7 +9,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: chat-worker-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  # Only runs that can deploy (main, not a pull request) share the deploy group; a build dispatched
+  # on another branch (the Model ratings PR) must never queue behind or cancel a pending deploy.
+  group: chat-worker-${{ github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch && 'deploy' || github.ref }}
   cancel-in-progress: false
 env:
   WRANGLER_VERSION: 4.149.0

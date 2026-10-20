@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Pull requests opened by a workflow with GITHUB_TOKEN (Model ratings) do not trigger
+  # pull_request runs, so that workflow starts this one on its branch instead.
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:

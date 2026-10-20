@@ -3,7 +3,8 @@ name: Model ratings
 # Rates the AI gateway's chat models on fixed small coding tasks (scripts/model-ratings) and proposes
 # the results as a pull request to worker/src/model-ratings.json. The agent chat sorts its model
 # picker by these ratings. Each run rates the untested models first, then those tested longest ago,
-# within one gateway lease (100 calls in 30 minutes, 5 calls per model); run it again for more.
+# taking the providers in turn, within one gateway lease (100 calls in 30 minutes, 9 calls per
+# model); run it again for more.
 on:
   workflow_dispatch:
     inputs:
@@ -14,9 +15,9 @@ on:
         type: choice
         options: [all, blablador, hip]
       max_models:
-        description: "Models to rate in this run (1-20)"
+        description: "Models to rate in this run (1-11)"
         required: true
-        default: '12'
+        default: '8'
         type: string
 
 permissions:
@@ -56,8 +57,8 @@ jobs:
             echo "::error::Set the AI_GATEWAY_URL variable on the ai-agent-production environment (https origin, no path)."
             exit 1
           fi
-          if [[ ! "$MAX_MODELS" =~ ^[0-9]+$ ]] || (( MAX_MODELS < 1 || MAX_MODELS > 20 )); then
-            echo "::error::max_models must be a whole number from 1 to 20."
+          if [[ ! "$MAX_MODELS" =~ ^[0-9]+$ ]] || (( MAX_MODELS < 1 || MAX_MODELS > 11 )); then
+            echo "::error::max_models must be a whole number from 1 to 11."
             exit 1
           fi
 
@@ -162,6 +163,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # Only to start CI on the new branch (below).
+      actions: write
     steps:
       - name: Clean checkout without persisted credentials
         uses: actions/checkout@v4
@@ -204,3 +207,8 @@ jobs:
           git push origin "$branch"
           printf '\n%s\n' 'Created by the Model ratings workflow. Merging deploys the agent chat with these ratings.' >> "$RUNNER_TEMP/pr-body.md"
           gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" --title "Model ratings: $(date -u +%Y-%m-%d)" --body-file "$RUNNER_TEMP/pr-body.md"
+          # A pull request opened with GITHUB_TOKEN starts no pull_request workflows, so CI and the
+          # Worker build are started here; their checks on the branch's commit are the ones the pull
+          # request needs. The Worker workflow deploys only from the default branch.
+          gh workflow run ci.yml --ref "$branch"
+          gh workflow run chat-worker.yml --ref "$branch"

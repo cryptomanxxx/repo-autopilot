@@ -11,12 +11,14 @@ if(!sandbox('const one=1;',[['one',1]])) throw new Error('The model code sandbox
 const collected=JSON.parse(readFileSync(answersPath,'utf8'));
 let ratings;
 try {ratings=validate(JSON.parse(readFileSync(currentPath,'utf8')));} catch {ratings=empty();}
-const testedAt=new Date().toISOString().slice(0,10);
+// To the second, so that a rerated model moves behind models rated earlier the same day.
+const testedAt=new Date().toISOString().slice(0,19)+'Z';
 for(const model of Array.isArray(collected?.models)?collected.models:[]) {
   if(!validId(model?.id)||!Array.isArray(model.answers)) continue;
   const answers=new Map(model.answers.map(a=>[a?.task,a]));
   const ok=TASKS.map(task=>answers.get(task.id)).filter(a=>a?.status==='ok'&&typeof a.text==='string');
-  if(ok.length<3) {console.log(`${model.id}: not rated (${TASKS.length-ok.length} provider errors)`);continue;}
+  // Rated only when the provider answered most of the tasks.
+  if(ok.length*2<=TASKS.length) {console.log(`${model.id}: not rated (${TASKS.length-ok.length} provider errors)`);continue;}
   const passed=TASKS.filter(task=>{const a=answers.get(task.id);return a?.status==='ok'&&typeof a.text==='string'&&task.grade(a.text);});
   const seconds=median(ok.map(a=>a.seconds).filter(s=>typeof s==='number'&&Number.isFinite(s)&&s>=0&&s<=600));
   ratings.models[model.id]={stars:stars(passed.length,seconds),passed:passed.length,total:TASKS.length,seconds,testedAt};

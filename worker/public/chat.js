@@ -217,7 +217,7 @@ function fillModels() {
   const small=m=>m.contextLength&&m.contextLength<SMALL_CONTEXT;
   const option=m=>Object.assign(document.createElement('option'),{value:m.id,
     textContent:`${small(m)?'⚠ ':''}${m.rating?`${'⭐'.repeat(m.rating.stars)} `:''}${m.name}${contextText(m.contextLength)}${m.rating?'':' · not tested'}`,
-    title:[m.rating?`Coding rating: passed ${m.rating.passed} of ${m.rating.total} tasks${m.rating.seconds!==null?`, median ${m.rating.seconds} s per answer`:''}, tested ${m.rating.testedAt}.`:'Not tested by the Model ratings workflow yet.',
+    title:[m.rating?`Coding rating: passed ${m.rating.passed} of ${m.rating.total} tasks${m.rating.seconds!==null?`, median ${m.rating.seconds} s per answer`:''}, tested ${String(m.rating.testedAt).slice(0,10)}.`:'Not tested by the Model ratings workflow yet.',
       small(m)?'Small context: it may not fit the repository files the chat sends.':''].filter(Boolean).join(' ')});
   // Providers such as Blablador list short, stable alias-* names next to their long model names; the
   // aliases come first in a group of their own.
