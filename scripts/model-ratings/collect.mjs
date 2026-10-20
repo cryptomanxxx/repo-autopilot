@@ -82,9 +82,10 @@ function emptyDetails(data) {
 // counted generously at three characters per token. row.cap lowers it further after such a refusal.
 // The fallback leaves room for the prompt (well under 1,000 tokens) even in a 4,096-token context.
 const FALLBACK_TOKENS=3072;
+const knownContext=row=>Number.isSafeInteger(row.context_length)&&row.context_length>0;
 function outputLimit(row,task) {
   const cap=row.cap??OUTPUT_TOKENS,context=row.context_length;
-  if(!Number.isSafeInteger(context)||context<=0) return cap;
+  if(!knownContext(row)) return cap;
   const room=context-Math.ceil((SYSTEM.length+task.prompt.length)/3)-64;
   return Math.max(256,Math.min(cap,room));
 }
@@ -112,7 +113,7 @@ async function ask(row,task) {
       await response.body?.cancel();
       // A model whose context window is unknown and too small for the full limit: asked once more at
       // once with a lower limit, which then holds for its remaining tasks.
-      if(response.status===400&&maxTokens>FALLBACK_TOKENS&&!Number.isSafeInteger(row.context_length)) {
+      if(response.status===400&&maxTokens>FALLBACK_TOKENS&&!knownContext(row)) {
         row.cap=FALLBACK_TOKENS;
         console.log(`${model}: HTTP 400 at ${maxTokens} output tokens; asking with ${FALLBACK_TOKENS}`);
         continue;
@@ -141,7 +142,7 @@ const models=[];
 let stopped=false;
 for(const row of chosen) {
   // A model of unknown context may need one more call, for the lower output limit after a refusal.
-  const reserve=RETRY_RESERVE+(Number.isSafeInteger(row.context_length)&&row.context_length>0?0:1);
+  const reserve=RETRY_RESERVE+(knownContext(row)?0:1);
   if(spent+TASKS.length+reserve>LEASE_CALLS) {console.log(`Stopped before ${row.id}: not enough of the lease's calls left.`);break;}
   const answers=[];
   let errors=0,timeouts=0;
