@@ -1,1 +1,37 @@
-{"version":2,"tasks":["bugfix","implement","edit","json","reading","bugfix-deep","implement-csv","reading-async","edit-multi"],"models":{}}
+{
+  "version": 2,
+  "tasks": [
+    "bugfix",
+    "implement",
+    "edit",
+    "json",
+    "reading",
+    "bugfix-deep",
+    "implement-csv",
+    "reading-async",
+    "edit-multi"
+  ],
+  "models": {
+    "blablador:01 - GPT-OSS-120b - an open model released by OpenAI in August 2025": {
+      "stars": 3,
+      "passed": 7,
+      "total": 9,
+      "seconds": 3,
+      "testedAt": "2026-10-20T08:18:36Z"
+    },
+    "hip:leo-hessianai-13b-chat": {
+      "stars": 1,
+      "passed": 0,
+      "total": 9,
+      "seconds": 2.2,
+      "testedAt": "2026-10-20T08:18:36Z"
+    },
+    "hip:Ministral-3-14B-Instruct-2512": {
+      "stars": 1,
+      "passed": 3,
+      "total": 9,
+      "seconds": 1.9,
+      "testedAt": "2026-10-20T08:18:36Z"
+    }
+  }
+}
