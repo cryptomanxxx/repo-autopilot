@@ -285,6 +285,45 @@ test('an answer cut off while thinking is a failed task, and an answer without t
   }
 });
 
+test('a small model gets an output limit that fits its context, and a 400 at the full limit is asked again lower',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'ratings-context-'));
+  const asked={};
+  const server=createServer((request,response)=>{
+    response.setHeader('Content-Type','application/json');
+    if(request.method==='GET') return response.end(JSON.stringify({providers:{hip:'ok'},data:[
+      {id:'hip:small',provider:'hip',context_length:4096},{id:'hip:unknown',provider:'hip',context_length:null},
+      {id:'hip:tiny',provider:'hip',context_length:300}]}));
+    let body='';
+    request.on('data',chunk=>body+=chunk);
+    request.on('end',()=>{
+      const {model,max_tokens,messages}=JSON.parse(body);
+      (asked[model]??=[]).push(max_tokens);
+      // The provider refuses a request whose prompt (about four characters per token) and output
+      // limit do not fit the model's 4096-token context.
+      if(max_tokens+Math.ceil(messages.map(m=>m.content).join('').length/4)>4096) {response.statusCode=400;return response.end('{"error":"AI provider returned HTTP 400"}');}
+      response.end(JSON.stringify({choices:[{finish_reason:'stop',message:{role:'assistant',content:'no idea'}}]}));
+    });
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    writeFileSync(join(dir,'lease'),lease);
+    await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
+      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),PROVIDER:'all',MAX_MODELS:'3'}});
+    assert.equal(asked['hip:tiny'],undefined,'a task that cannot fit is never sent');
+    assert.equal(asked['hip:small'].length,TASKS.length,'no call is refused');
+    assert.ok(asked['hip:small'].every(tokens=>tokens>=256&&tokens<4096),'the prompt and the answer fit the context');
+    assert.deepEqual(asked['hip:unknown'],[8192,...TASKS.map(()=>3072)],'one refusal, then a limit that leaves room for the prompt');
+    const models=JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models;
+    for(const model of models.filter(m=>m.id!=='hip:tiny')) assert.ok(model.answers.every(answer=>answer.status==='ok'),model.id);
+    const tiny=models.find(m=>m.id==='hip:tiny').answers;
+    assert.equal(tiny.length,TASKS.length);
+    assert.ok(tiny.every(answer=>answer.status==='timeout'),'it fails its tasks, so it is rated instead of retried every run');
+  } finally {
+    server.close();
+    rmSync(dir,{recursive:true,force:true});
+  }
+});
+
 test('a model too slow to answer gets failed tasks and a low rating, not a provider error',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'ratings-slow-'));
   let calls=0;
