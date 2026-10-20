@@ -245,6 +245,28 @@ test('a model whose provider fails more tasks than can be retried is given up wi
   }
 });
 
+test('an answer without text says why: the finish reason, output tokens and reasoning size',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'ratings-empty-'));
+  const server=createServer((request,response)=>{
+    response.setHeader('Content-Type','application/json');
+    if(request.method==='GET') return response.end(JSON.stringify({providers:{hip:'ok'},data:[{id:'hip:thinker',provider:'hip'}]}));
+    request.resume();
+    request.on('end',()=>response.end(JSON.stringify({choices:[{finish_reason:'length',message:{role:'assistant',content:null,reasoning_content:'hmm '.repeat(50)}}],usage:{completion_tokens:4096}})));
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    writeFileSync(join(dir,'lease'),lease);
+    await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
+      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),PROVIDER:'all',MAX_MODELS:'1'}});
+    const [answer]=JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models[0].answers;
+    assert.equal(answer.status,'error');
+    assert.equal(answer.error,'no answer text (finish length, 4096 output tokens, 200 characters of reasoning)');
+  } finally {
+    server.close();
+    rmSync(dir,{recursive:true,force:true});
+  }
+});
+
 test('a model too slow to answer gets failed tasks and a low rating, not a provider error',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'ratings-slow-'));
   let calls=0;

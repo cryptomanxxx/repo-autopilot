@@ -60,6 +60,19 @@ const chosen=[...inTurn(ordered.filter(row=>!previous[row.id])),...ordered.filte
 console.log(`Rating ${chosen.length} model(s): ${chosen.map(row=>row.id).join(', ')}`);
 
 let spent=0;
+// Why an answer had no text: a model that thinks first may spend the whole output limit on its
+// reasoning (finish reason "length") before writing the answer. Only counts and short names are logged.
+function emptyDetails(data) {
+  const choice=data?.choices?.[0],message=choice?.message;
+  const reasoning=message?.reasoning_content??message?.reasoning;
+  const parts=[];
+  if(typeof choice?.finish_reason==='string') parts.push('finish '+choice.finish_reason.replace(/[^a-z_]/gi,'').slice(0,20));
+  if(Number.isSafeInteger(data?.usage?.completion_tokens)) parts.push(data.usage.completion_tokens+' output tokens');
+  if(typeof reasoning==='string') parts.push(reasoning.length+' characters of reasoning');
+  if(Array.isArray(message?.tool_calls)) parts.push(message.tool_calls.length+' tool calls');
+  if(!choice) parts.push('no choices');
+  return parts.length?' ('+parts.join(', ')+')':'';
+}
 // One answer. The gateway's per-minute limits answer 429 for a while; that is waited out.
 async function ask(model,task) {
   for(let attempt=0;attempt<8;attempt++) {
@@ -81,7 +94,7 @@ async function ask(model,task) {
     if(!response.ok) {await response.body?.cancel();return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'HTTP '+response.status};}
     const data=await response.json().catch(()=>null);
     const text=data?.choices?.[0]?.message?.content;
-    if(typeof text!=='string') return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'no answer text'};
+    if(typeof text!=='string') return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'no answer text'+emptyDetails(data)};
     return {status:'ok',seconds:elapsed(),text:text.slice(0,20000)};
   }
   return {status:'error',error:'rate limited'};
