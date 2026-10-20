@@ -241,3 +241,33 @@ test('a model whose provider fails more tasks than can be retried is given up wi
     rmSync(dir,{recursive:true,force:true});
   }
 });
+
+test('a model too slow to answer gets failed tasks and a low rating, not a provider error',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'ratings-slow-'));
+  let calls=0;
+  const server=createServer((request,response)=>{
+    response.setHeader('Content-Type','application/json');
+    if(request.method==='GET') return response.end(JSON.stringify({providers:{hip:'ok'},data:[{id:'hip:slow',provider:'hip'}]}));
+    request.resume();
+    // Like the gateway when a generation outlives its time limit: HTTP 502 after a long wait.
+    request.on('end',()=>{calls++;setTimeout(()=>{response.statusCode=502;response.end('{"error":"AI provider unavailable"}');},1200);});
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    writeFileSync(join(dir,'lease'),lease);
+    const {stdout}=await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',TIMEOUT_SECONDS:'1',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
+      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),RATINGS:join(dir,'none.json'),PROVIDER:'all',MAX_MODELS:'1'}});
+    // Two timeouts, then the rest is failed without asking; the cause is logged.
+    assert.equal(calls,2);
+    assert.match(stdout,/hip:slow: bugfix: no answer within 1 s after 1\.\d s/);
+    const answers=JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models[0].answers;
+    assert.deepEqual([answers.length,answers.every(a=>a.status==='timeout')],[TASKS.length,true]);
+    writeFileSync(join(dir,'current.json'),JSON.stringify(empty()));
+    await run(process.execPath,[script('grade.mjs'),join(dir,'answers.json'),join(dir,'current.json'),join(dir,'next.json')]);
+    const rated=JSON.parse(readFileSync(join(dir,'next.json'),'utf8')).models['hip:slow'];
+    assert.deepEqual([rated.stars,rated.passed],[1,0],'rated, with every task failed');
+  } finally {
+    server.close();
+    rmSync(dir,{recursive:true,force:true});
+  }
+});
