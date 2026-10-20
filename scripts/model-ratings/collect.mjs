@@ -77,16 +77,28 @@ function emptyDetails(data) {
   if(!choice) parts.push('no choices');
   return parts.length?' ('+parts.join(', ')+')':'';
 }
+// The output limit for one task: OUTPUT_TOKENS, or less for a model whose context window would not
+// hold the task and that many tokens (its provider refuses such a request with HTTP 400). The prompt is
+// counted generously at three characters per token. row.cap lowers it further after such a refusal.
+const FALLBACK_TOKENS=4096;
+function outputLimit(row,task) {
+  const cap=row.cap??OUTPUT_TOKENS,context=row.context_length;
+  if(!Number.isSafeInteger(context)||context<=0) return cap;
+  const room=context-Math.ceil((SYSTEM.length+task.prompt.length)/3)-64;
+  return Math.max(256,Math.min(cap,room));
+}
 // One answer. The gateway's per-minute limits answer 429 for a while; that is waited out.
-async function ask(model,task) {
+async function ask(row,task) {
+  const model=row.id;
   for(let attempt=0;attempt<8;attempt++) {
+    const maxTokens=outputLimit(row,task);
     if(secondsLeft()<150) return {status:'stopped'};
     const started=Date.now(),elapsed=()=>Math.round((Date.now()-started)/100)/10;
     const timedOut=()=>({status:'timeout',seconds:elapsed(),error:'no answer within '+timeoutSeconds+' s'});
     let response;
     try {
       response=await fetch(gateway+'/v1/chat/completions',{method:'POST',headers,signal:AbortSignal.timeout((timeoutSeconds+15)*1000),
-        body:JSON.stringify({model,messages:[{role:'system',content:SYSTEM},{role:'user',content:task.prompt}],max_tokens:OUTPUT_TOKENS,temperature:0,stream:false})});
+        body:JSON.stringify({model,messages:[{role:'system',content:SYSTEM},{role:'user',content:task.prompt}],max_tokens:maxTokens,temperature:0,stream:false})});
     } catch {spent++;return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'no response'};}
     if(response.status===429) {
       const reason=(await response.json().catch(()=>({}))).error||'';
@@ -95,7 +107,17 @@ async function ask(model,task) {
     }
     // Every answered request uses one of the lease's calls, a provider error included.
     spent++;
-    if(!response.ok) {await response.body?.cancel();return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'HTTP '+response.status};}
+    if(!response.ok) {
+      await response.body?.cancel();
+      // A model whose context window is unknown and too small for the full limit: asked once more at
+      // once with the chat's former limit, which then holds for its remaining tasks.
+      if(response.status===400&&maxTokens>FALLBACK_TOKENS&&!Number.isSafeInteger(row.context_length)) {
+        row.cap=FALLBACK_TOKENS;
+        console.log(`${model}: HTTP 400 at ${maxTokens} output tokens; asking with ${FALLBACK_TOKENS}`);
+        continue;
+      }
+      return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'HTTP '+response.status};
+    }
     const data=await response.json().catch(()=>null);
     const text=data?.choices?.[0]?.message?.content;
     const blank=typeof text!=='string'||!text.trim();
@@ -120,9 +142,11 @@ for(const row of chosen) {
   if(spent+TASKS.length+RETRY_RESERVE>LEASE_CALLS) {console.log(`Stopped before ${row.id}: not enough of the lease's calls left.`);break;}
   const answers=[];
   let errors=0,timeouts=0;
+  const smallest=Math.min(...TASKS.map(task=>outputLimit(row,task)));
+  if(smallest<OUTPUT_TOKENS) console.log(`${row.id}: output limit down to ${smallest} tokens for its ${row.context_length}-token context`);
   for(const task of TASKS) {
     if(timeouts>=SLOW_AFTER) {answers.push({task:task.id,status:'timeout',seconds:null,error:'not asked: too slow'});continue;}
-    const result=await ask(row.id,task);
+    const result=await ask(row,task);
     if(result.status==='stopped') {stopped=true;break;}
     answers.push({task:task.id,...result});
     if(result.status!=='ok') console.log(`${row.id}: ${task.id}: ${result.error}${result.seconds!==undefined?` after ${result.seconds} s`:''}`);
@@ -137,7 +161,7 @@ for(const row of chosen) {
     // Only a model with every task answered is rated.
     for(const [index,answer] of answers.entries()) {
       if(answer.status!=='error') continue;
-      const result=await ask(row.id,TASKS.find(task=>task.id===answer.task));
+      const result=await ask(row,TASKS.find(task=>task.id===answer.task));
       if(result.status==='stopped') {stopped=true;break;}
       answers[index]={task:answer.task,...result};
       console.log(`${row.id}: ${answer.task} asked again: ${result.status==='ok'?'answered':result.error}`);
