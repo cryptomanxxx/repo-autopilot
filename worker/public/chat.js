@@ -84,7 +84,8 @@ const targetText=(base,branch,moved)=>`Opens a pull request into ${base} from th
 // Which code an answer is based on; marked when the branch has moved on since.
 function renderMeta(meta) {
   const line=document.createElement('p');line.className='meta muted small';
-  line.textContent=`${meta.repository} · ${meta.branch} @ ${shortSha(meta.sha)} · read ${meta.read} of ${meta.files} files`;
+  // The output limit the answer was given (answers saved before it was recorded have none).
+  line.textContent=`${meta.repository} · ${meta.branch} @ ${shortSha(meta.sha)} · read ${meta.read} of ${meta.files} files${Number.isInteger(meta.maxTokens)?` · up to ${meta.maxTokens} output tokens`:''}`;
   line.dataset.sha=meta.sha;line.dataset.branch=meta.branch;
   const stale=document.createElement('span');stale.className='stale';stale.hidden=true;line.append(stale);
   return line;

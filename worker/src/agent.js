@@ -314,12 +314,15 @@ async function gatewayModel(env,messages,{max_tokens,onDelta,agent}) {
   }
 }
 
+// The output limit of one answer: the MAX_OUTPUT_TOKENS setting, else for gateway models the gateway's
+// own cap, as models that think first need room for their reasoning (the model ratings ask with the
+// same limit), else 4096.
+export const outputTokens=env=>Number(env.MAX_OUTPUT_TOKENS)||(env.MODEL_PROVIDER==='ai-gateway'?GATEWAY_OUTPUT_TOKENS:4096);
+
 // Returns {text, truncated}; truncated is true when the answer hit the output limit. onDelta receives
 // answer text as it streams, where the provider streams.
 export async function callModel(env,messages,{fetchImpl=fetch,onDelta=()=>{},agent=findAgent(env)}={}) {
-  // Gateway models get the gateway's own output cap, as models that think first need room for their
-  // reasoning; the model ratings ask with the same limit.
-  const model=env.MODEL||DEFAULT_MODEL,max_tokens=Number(env.MAX_OUTPUT_TOKENS)||(env.MODEL_PROVIDER==='ai-gateway'?GATEWAY_OUTPUT_TOKENS:4096);
+  const model=env.MODEL||DEFAULT_MODEL,max_tokens=outputTokens(env);
   // The Worker log (Cloudflare Workers Logs) shows the output limit each model call uses and where it
   // came from: the MAX_OUTPUT_TOKENS setting or the default.
   console.log(JSON.stringify({modelCall:env.MODEL_PROVIDER||'workers-ai',max_tokens,limit:Number(env.MAX_OUTPUT_TOKENS)?'MAX_OUTPUT_TOKENS':'default'}));

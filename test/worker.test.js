@@ -509,7 +509,7 @@ test('chat answers from repository files and opens a pull request on request',as
   assert.equal(thread.title,'Change the title in public/app.js');
   const reply=thread.messages[1];
   assert.deepEqual(reply.proposal,{title:'New title',paths:['public/app.js']});
-  assert.deepEqual(reply.meta,{repository:'owner/repo',branch:'main',sha:'a'.repeat(40),read:2,files:2,agent:'llama-4-scout-17b-16e-instruct',model:null},'an answer records the code it was based on and the agent that wrote it');
+  assert.deepEqual(reply.meta,{repository:'owner/repo',branch:'main',sha:'a'.repeat(40),read:2,files:2,agent:'llama-4-scout-17b-16e-instruct',model:null,maxTokens:4096},'an answer records the code it was based on and the agent that wrote it');
   assert.equal(thread.messages[0].meta,null);
   calls.length=0;
   const head=await (await handle(request('/api/head?repo=owner/repo',{cookie:auth.cookie}),env,{fetchImpl})).json();

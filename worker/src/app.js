@@ -5,7 +5,7 @@ import {hex,randomHex,base64url,sha256,sealState,openState} from './crypto.js';
 import {connector,isConnectorPath,finishConnect,failConnect,logOauth,githubHandoff,sealGithub} from './connector.js';
 import {connectorTools} from './tools.js';
 export {UserError};
-import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,modelName,agentName,agentIntro,chatAgents,findAgent,withModel,agentModels} from './agent.js';
+import {textFiles,selectContext,buildMessages,answer,applyEdits,displayText,editPolicy,DEFAULT_CONTEXT_CHARS,modelName,agentName,agentIntro,chatAgents,findAgent,withModel,agentModels,outputTokens} from './agent.js';
 
 const encoder=new TextEncoder();
 const HOUR=3600000,MAX_TEXT=8000,MAX_IMAGE_CHARS=1500000,MAX_BODY=1600000;
@@ -421,7 +421,7 @@ async function chat(body,{env,store,github,config,access,fetchImpl}) {
     const history=conversation?.messages||[];
     const query=[...history.filter(m=>m.role==='user').slice(-2).map(m=>m.content),text].join('\n');
     const context=selectContext(files,query,Number(env.CONTEXT_CHARS)||DEFAULT_CONTEXT_CHARS);
-    const meta={repository,branch:head.branch,sha:head.sha,read:context.included.length,files:Object.keys(files).length,agent:agent.name,model:agent.modelName||null};
+    const meta={repository,branch:head.branch,sha:head.sha,read:context.included.length,files:Object.keys(files).length,agent:agent.name,model:agent.modelName||null,maxTokens:outputTokens(env)};
     const messages=buildMessages({repository,head,context,history,text,image,rule:policy.rule,agent:agentIntro(agent)});
     streaming=true;
     // The answer streams progress steps as lines of JSON, ending with a done or an error line.
