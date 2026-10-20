@@ -47,6 +47,9 @@ function inTurn(rows) {
 const chosen=[...inTurn(ordered.filter(row=>!previous[row.id])),...ordered.filter(row=>previous[row.id])].slice(0,limit);
 console.log(`Rating ${chosen.length} model(s): ${chosen.map(row=>row.id).join(', ')}`);
 
+// The lease allows 100 calls. A model is started only while its tasks and a few retries still fit.
+const LEASE_CALLS=100,RETRY_RESERVE=2;
+let spent=0;
 // One answer. The gateway's per-minute limits answer 429 for a while; that is waited out.
 async function ask(model,task) {
   for(let attempt=0;attempt<8;attempt++) {
@@ -56,12 +59,14 @@ async function ask(model,task) {
     try {
       response=await fetch(gateway+'/v1/chat/completions',{method:'POST',headers,signal:AbortSignal.timeout(125000),
         body:JSON.stringify({model,messages:[{role:'system',content:SYSTEM},{role:'user',content:task.prompt}],max_tokens:4096,temperature:0,stream:false})});
-    } catch {return {status:'error',error:'no response'};}
+    } catch {spent++;return {status:'error',error:'no response'};}
     if(response.status===429) {
       const reason=(await response.json().catch(()=>({}))).error||'';
       if(/exhausted/i.test(reason)) return {status:'stopped'};
       await sleep(15000);continue;
     }
+    // Every answered request uses one of the lease's calls, a provider error included.
+    spent++;
     if(!response.ok) {await response.body?.cancel();return {status:'error',error:'HTTP '+response.status};}
     const data=await response.json().catch(()=>null);
     const text=data?.choices?.[0]?.message?.content;
@@ -74,9 +79,10 @@ async function ask(model,task) {
 // A model whose provider fails this many tasks in a row is given up for this run, so that one
 // struggling provider does not use up the lease; it stays untested and comes first next time.
 const GIVE_UP_AFTER=3;
-const models=[],givenUp=new Set();
+const models=[];
 let stopped=false;
 for(const row of chosen) {
+  if(spent+TASKS.length+RETRY_RESERVE>LEASE_CALLS) {console.log(`Stopped before ${row.id}: not enough of the lease's calls left.`);break;}
   const answers=[];
   let failures=0;
   for(const task of TASKS) {
@@ -87,20 +93,21 @@ for(const row of chosen) {
     if(failures>=GIVE_UP_AFTER) break;
   }
   if(stopped) {console.log(`Stopped at ${row.id}: the lease is used up or about to expire.`);break;}
-  if(failures>=GIVE_UP_AFTER) {givenUp.add(row.id);console.log(`${row.id}: given up after ${GIVE_UP_AFTER} provider errors in a row`);}
-  else console.log(`${row.id}: ${answers.filter(a=>a.status==='ok').length}/${TASKS.length} answered`);
-  models.push({id:row.id,answers});
-}
-// A task the provider failed is asked once more at the end, when its first try may have hit a busy
-// moment. Only a model with every task answered is rated.
-retry: for(const model of models) {
-  if(stopped||givenUp.has(model.id)) continue;
-  for(const [index,answer] of model.answers.entries()) {
-    if(answer.status!=='error') continue;
-    const result=await ask(model.id,TASKS.find(task=>task.id===answer.task));
-    if(result.status==='stopped') {stopped=true;break retry;}
-    model.answers[index]={task:answer.task,...result};
-    console.log(`${model.id}: ${answer.task} asked again, ${result.status==='ok'?'answered':'failed again'}`);
+  if(failures>=GIVE_UP_AFTER) {
+    console.log(`${row.id}: given up after ${GIVE_UP_AFTER} provider errors in a row`);
+  } else {
+    // A task the provider failed is asked once more right away, from the calls kept in reserve, as
+    // its first try may have hit a busy moment. Only a model with every task answered is rated.
+    for(const [index,answer] of answers.entries()) {
+      if(answer.status!=='error'||spent>=LEASE_CALLS) continue;
+      const result=await ask(row.id,TASKS.find(task=>task.id===answer.task));
+      if(result.status==='stopped') {stopped=true;break;}
+      answers[index]={task:answer.task,...result};
+      console.log(`${row.id}: ${answer.task} asked again, ${result.status==='ok'?'answered':'failed again'}`);
+    }
+    console.log(`${row.id}: ${answers.filter(a=>a.status==='ok').length}/${TASKS.length} answered`);
   }
+  models.push({id:row.id,answers});
+  if(stopped) break;
 }
 writeFileSync(OUT,JSON.stringify({version:1,collectedAt:new Date().toISOString(),models}));

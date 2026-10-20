@@ -190,3 +190,27 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     rmSync(dir,{recursive:true,force:true});
   }
 });
+
+test('a run starts a model only while its tasks and a few retries fit in the lease',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'ratings-budget-'));
+  let calls=0;
+  const ids=Array.from({length:12},(_,i)=>`hip:m${String(i).padStart(2,'0')}`);
+  const server=createServer((request,response)=>{
+    response.setHeader('Content-Type','application/json');
+    if(request.method==='GET') return response.end(JSON.stringify({providers:{hip:'ok'},data:ids.map(id=>({id,provider:'hip'}))}));
+    request.resume();
+    request.on('end',()=>{calls++;response.end(JSON.stringify({choices:[{message:{role:'assistant',content:'no idea'}}]}));});
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    writeFileSync(join(dir,'lease'),lease);
+    await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
+      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),RATINGS:join(dir,'none.json'),PROVIDER:'all',MAX_MODELS:'11'}});
+    // Ten models of nine tasks leave fewer than nine tasks and two retries for an eleventh.
+    assert.equal(JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models.length,Math.floor((100-2)/TASKS.length));
+    assert.ok(calls<=100);
+  } finally {
+    server.close();
+    rmSync(dir,{recursive:true,force:true});
+  }
+});
