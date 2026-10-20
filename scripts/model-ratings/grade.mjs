@@ -1,6 +1,6 @@
 // Grades the collected answers and merges the results into the ratings file:
 //   node grade.mjs <answers.json> <current ratings.json> <output ratings.json>
-// A model that could not answer most tasks (provider errors) keeps its previous rating.
+// A model the provider could not answer every task for (provider errors) keeps its previous rating.
 import {readFileSync,writeFileSync} from 'node:fs';
 import {TASKS,sandbox} from './tasks.mjs';
 import {validate,validId,stars,median,empty} from './ratings.mjs';
@@ -17,8 +17,8 @@ for(const model of Array.isArray(collected?.models)?collected.models:[]) {
   if(!validId(model?.id)||!Array.isArray(model.answers)) continue;
   const answers=new Map(model.answers.map(a=>[a?.task,a]));
   const ok=TASKS.map(task=>answers.get(task.id)).filter(a=>a?.status==='ok'&&typeof a.text==='string');
-  // Rated only when the provider answered most of the tasks.
-  if(ok.length*2<=TASKS.length) {console.log(`${model.id}: not rated (${TASKS.length-ok.length} provider errors)`);continue;}
+  // Rated only when the provider answered every task, so a provider error never counts as a failed task.
+  if(ok.length<TASKS.length) {console.log(`${model.id}: not rated (${TASKS.length-ok.length} provider errors)`);continue;}
   const passed=TASKS.filter(task=>{const a=answers.get(task.id);return a?.status==='ok'&&typeof a.text==='string'&&task.grade(a.text);});
   const seconds=median(ok.map(a=>a.seconds).filter(s=>typeof s==='number'&&Number.isFinite(s)&&s>=0&&s<=600));
   ratings.models[model.id]={stars:stars(passed.length,seconds),passed:passed.length,total:TASKS.length,seconds,testedAt};

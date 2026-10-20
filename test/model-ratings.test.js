@@ -93,15 +93,15 @@ test('the isolated sandbox runs model code with no network as the user nobody',{
   } finally {delete process.env.MODEL_SANDBOX;}
 });
 
-test('a model is rated only when the provider answered most of the tasks',async()=>{
+test('a model is rated only when the provider answered every task',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'ratings-grade-'));
   try {
     const answers=(ok,errors)=>TASKS.map((task,index)=>index<ok?{task:task.id,status:'ok',seconds:1,text:GOOD[task.id]}:index<ok+errors?{task:task.id,status:'error',error:'HTTP 502'}:null).filter(Boolean);
-    const half=Math.floor(TASKS.length/2);
-    writeFileSync(join(dir,'answers.json'),JSON.stringify({version:1,models:[{id:'hip:half',answers:answers(half,TASKS.length-half)},{id:'hip:most',answers:answers(half+1,TASKS.length-half-1)}]}));
+    // A provider error never counts as a failed task: one missing answer leaves the model unrated.
+    writeFileSync(join(dir,'answers.json'),JSON.stringify({version:1,models:[{id:'hip:almost',answers:answers(TASKS.length-1,1)},{id:'hip:all',answers:answers(TASKS.length,0)}]}));
     writeFileSync(join(dir,'current.json'),JSON.stringify(empty()));
     await run(process.execPath,[script('grade.mjs'),join(dir,'answers.json'),join(dir,'current.json'),join(dir,'next.json')]);
-    assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir,'next.json'),'utf8')).models),['hip:most']);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir,'next.json'),'utf8')).models),['hip:all']);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
 
@@ -124,6 +124,7 @@ test('the ratings file accepts only its exact format',()=>{
 test('the run: collect through the gateway, grade, publish a summary',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'ratings-'));
   const calls=[];
+  let flaked=0;
   const server=createServer((request,response)=>{
     assert.equal(request.headers.authorization,'Bearer '+lease);
     if(request.method==='GET'&&request.url==='/v1/models') {
@@ -136,8 +137,9 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     request.on('end',()=>{
       const {model,messages}=JSON.parse(body);
       calls.push(model);
-      if(model==='hip:down') {response.statusCode=502;return response.end('{"error":"AI provider returned HTTP 502"}');}
       const task=TASKS.find(t=>t.prompt===messages[1].content);
+      // hip:down always fails; blablador:good fails its first json task once, which is asked again.
+      if(model==='hip:down'||model==='blablador:good'&&task.id==='json'&&!flaked++) {response.statusCode=502;return response.end('{"error":"AI provider returned HTTP 502"}');}
       response.setHeader('Content-Type','application/json');
       response.end(JSON.stringify({choices:[{message:{role:'assistant',content:model==='blablador:good'?GOOD[task.id]:'no idea'}}]}));
     });
@@ -156,7 +158,9 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     // Untested models first (the providers taking turns while both have some), then the oldest
     // tested; hip:old (tested most recently) does not fit in five.
     assert.deepEqual(JSON.parse(answers).models.map(m=>m.id),['blablador:good','hip:bad','blablador:later','blablador:third','hip:down']);
-    assert.equal(calls.length,5*TASKS.length);
+    // hip:down is given up at its third error; blablador:good's failed task is asked again.
+    assert.equal(calls.length,4*TASKS.length+1+3);
+    assert.equal(calls.filter(id=>id==='hip:down').length,3);
     // Each run number starts the turns at another provider, then at another model of it, so that
     // one-model runs alternate and an untested model that keeps failing does not block the rest.
     writeFileSync(join(dir,'one.json'),JSON.stringify({...empty(),models:{'blablador:good':current.models['hip:old']}}));
@@ -181,6 +185,57 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     assert.doesNotMatch(summary,/hip:old|hip:down/,'only changed ratings are listed');
     writeFileSync(join(dir,'broken.json'),JSON.stringify({...next,models:{'hip:x':{stars:5,passed:0,total:5,seconds:1,testedAt:'2026-10-19'}}}));
     await assert.rejects(run(process.execPath,[script('publish.mjs'),join(dir,'broken.json'),join(dir,'current.json')]));
+  } finally {
+    server.close();
+    rmSync(dir,{recursive:true,force:true});
+  }
+});
+
+test('a run starts a model only while its tasks and a few retries fit in the lease',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'ratings-budget-'));
+  let calls=0;
+  const ids=Array.from({length:12},(_,i)=>`hip:m${String(i).padStart(2,'0')}`);
+  const server=createServer((request,response)=>{
+    response.setHeader('Content-Type','application/json');
+    if(request.method==='GET') return response.end(JSON.stringify({providers:{hip:'ok'},data:ids.map(id=>({id,provider:'hip'}))}));
+    request.resume();
+    request.on('end',()=>{calls++;response.end(JSON.stringify({choices:[{message:{role:'assistant',content:'no idea'}}]}));});
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    writeFileSync(join(dir,'lease'),lease);
+    await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
+      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),RATINGS:join(dir,'none.json'),PROVIDER:'all',MAX_MODELS:'10'}});
+    // The largest accepted run, ten models, fits with its retry reserve.
+    assert.equal(JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models.length,Math.floor((100-2)/TASKS.length));
+    assert.ok(calls<=100);
+  } finally {
+    server.close();
+    rmSync(dir,{recursive:true,force:true});
+  }
+});
+
+test('a model whose provider fails more tasks than can be retried is given up without retries',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'ratings-giveup-'));
+  let calls=0;
+  const server=createServer((request,response)=>{
+    response.setHeader('Content-Type','application/json');
+    if(request.method==='GET') return response.end(JSON.stringify({providers:{hip:'ok'},data:[{id:'hip:flaky',provider:'hip'}]}));
+    request.resume();
+    // Every second call fails, so the errors are never consecutive.
+    request.on('end',()=>{
+      if(calls++%2) {response.statusCode=502;return response.end('{"error":"AI provider returned HTTP 502"}');}
+      response.end(JSON.stringify({choices:[{message:{role:'assistant',content:'no idea'}}]}));
+    });
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    writeFileSync(join(dir,'lease'),lease);
+    await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
+      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),RATINGS:join(dir,'none.json'),PROVIDER:'all',MAX_MODELS:'1'}});
+    // Given up at its third error (the sixth call), with no retries spent on it.
+    assert.equal(calls,6);
+    assert.equal(JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models[0].answers.length,6);
   } finally {
     server.close();
     rmSync(dir,{recursive:true,force:true});

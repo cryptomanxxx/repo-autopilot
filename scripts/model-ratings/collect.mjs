@@ -9,7 +9,10 @@ const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,RATINGS,PROVIDER='all',MAX_MODELS='
 const lease=readFileSync(LEASE_FILE,'utf8').trim();
 const expires=JSON.parse(Buffer.from(lease.split('.')[1],'base64url').toString('utf8')).exp;
 // Each model takes one call per task; a lease allows 100 calls.
-const limit=Math.max(1,Math.min(Math.floor(100/TASKS.length),Number.parseInt(MAX_MODELS,10)||8));
+// The lease allows 100 calls. A model is started only while its tasks and a few retries still fit,
+// so at most ten models (of nine tasks) fit in one run.
+const LEASE_CALLS=100,RETRY_RESERVE=2;
+const limit=Math.max(1,Math.min(Math.floor((LEASE_CALLS-RETRY_RESERVE)/TASKS.length),Number.parseInt(MAX_MODELS,10)||8));
 const secondsLeft=()=>expires-Math.floor(Date.now()/1000);
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const headers={Authorization:'Bearer '+lease,'Content-Type':'application/json'};
@@ -47,6 +50,7 @@ function inTurn(rows) {
 const chosen=[...inTurn(ordered.filter(row=>!previous[row.id])),...ordered.filter(row=>previous[row.id])].slice(0,limit);
 console.log(`Rating ${chosen.length} model(s): ${chosen.map(row=>row.id).join(', ')}`);
 
+let spent=0;
 // One answer. The gateway's per-minute limits answer 429 for a while; that is waited out.
 async function ask(model,task) {
   for(let attempt=0;attempt<8;attempt++) {
@@ -56,12 +60,14 @@ async function ask(model,task) {
     try {
       response=await fetch(gateway+'/v1/chat/completions',{method:'POST',headers,signal:AbortSignal.timeout(125000),
         body:JSON.stringify({model,messages:[{role:'system',content:SYSTEM},{role:'user',content:task.prompt}],max_tokens:4096,temperature:0,stream:false})});
-    } catch {return {status:'error',error:'no response'};}
+    } catch {spent++;return {status:'error',error:'no response'};}
     if(response.status===429) {
       const reason=(await response.json().catch(()=>({}))).error||'';
       if(/exhausted/i.test(reason)) return {status:'stopped'};
       await sleep(15000);continue;
     }
+    // Every answered request uses one of the lease's calls, a provider error included.
+    spent++;
     if(!response.ok) {await response.body?.cancel();return {status:'error',error:'HTTP '+response.status};}
     const data=await response.json().catch(()=>null);
     const text=data?.choices?.[0]?.message?.content;
@@ -71,15 +77,37 @@ async function ask(model,task) {
   return {status:'error',error:'rate limited'};
 }
 
+// Each model gets one call per task plus at most RETRY_RESERVE retries. A model whose provider fails
+// more tasks than can be retried is given up at once, so a struggling provider cannot use up the
+// lease; it stays untested and comes first next time.
 const models=[];
-outer: for(const row of chosen) {
+let stopped=false;
+for(const row of chosen) {
+  if(spent+TASKS.length+RETRY_RESERVE>LEASE_CALLS) {console.log(`Stopped before ${row.id}: not enough of the lease's calls left.`);break;}
   const answers=[];
+  let errors=0;
   for(const task of TASKS) {
     const result=await ask(row.id,task);
-    if(result.status==='stopped') {console.log(`Stopped before ${row.id}: the lease is used up or about to expire.`);break outer;}
+    if(result.status==='stopped') {stopped=true;break;}
     answers.push({task:task.id,...result});
+    if(result.status!=='ok'&&++errors>RETRY_RESERVE) break;
   }
-  console.log(`${row.id}: ${answers.filter(a=>a.status==='ok').length}/${TASKS.length} answered`);
+  if(stopped) {console.log(`Stopped at ${row.id}: the lease is used up or about to expire.`);break;}
+  if(errors>RETRY_RESERVE) {
+    console.log(`${row.id}: given up after ${errors} provider errors`);
+  } else {
+    // A failed task is asked once more right away, as its first try may have hit a busy moment.
+    // Only a model with every task answered is rated.
+    for(const [index,answer] of answers.entries()) {
+      if(answer.status!=='error') continue;
+      const result=await ask(row.id,TASKS.find(task=>task.id===answer.task));
+      if(result.status==='stopped') {stopped=true;break;}
+      answers[index]={task:answer.task,...result};
+      console.log(`${row.id}: ${answer.task} asked again, ${result.status==='ok'?'answered':'failed again'}`);
+    }
+    console.log(`${row.id}: ${answers.filter(a=>a.status==='ok').length}/${TASKS.length} answered`);
+  }
   models.push({id:row.id,answers});
+  if(stopped) break;
 }
 writeFileSync(OUT,JSON.stringify({version:1,collectedAt:new Date().toISOString(),models}));
