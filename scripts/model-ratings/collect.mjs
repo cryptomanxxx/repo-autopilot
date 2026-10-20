@@ -71,15 +71,36 @@ async function ask(model,task) {
   return {status:'error',error:'rate limited'};
 }
 
-const models=[];
-outer: for(const row of chosen) {
+// A model whose provider fails this many tasks in a row is given up for this run, so that one
+// struggling provider does not use up the lease; it stays untested and comes first next time.
+const GIVE_UP_AFTER=3;
+const models=[],givenUp=new Set();
+let stopped=false;
+for(const row of chosen) {
   const answers=[];
+  let failures=0;
   for(const task of TASKS) {
     const result=await ask(row.id,task);
-    if(result.status==='stopped') {console.log(`Stopped before ${row.id}: the lease is used up or about to expire.`);break outer;}
+    if(result.status==='stopped') {stopped=true;break;}
     answers.push({task:task.id,...result});
+    failures=result.status==='ok'?0:failures+1;
+    if(failures>=GIVE_UP_AFTER) break;
   }
-  console.log(`${row.id}: ${answers.filter(a=>a.status==='ok').length}/${TASKS.length} answered`);
+  if(stopped) {console.log(`Stopped at ${row.id}: the lease is used up or about to expire.`);break;}
+  if(failures>=GIVE_UP_AFTER) {givenUp.add(row.id);console.log(`${row.id}: given up after ${GIVE_UP_AFTER} provider errors in a row`);}
+  else console.log(`${row.id}: ${answers.filter(a=>a.status==='ok').length}/${TASKS.length} answered`);
   models.push({id:row.id,answers});
+}
+// A task the provider failed is asked once more at the end, when its first try may have hit a busy
+// moment. Only a model with every task answered is rated.
+retry: for(const model of models) {
+  if(stopped||givenUp.has(model.id)) continue;
+  for(const [index,answer] of model.answers.entries()) {
+    if(answer.status!=='error') continue;
+    const result=await ask(model.id,TASKS.find(task=>task.id===answer.task));
+    if(result.status==='stopped') {stopped=true;break retry;}
+    model.answers[index]={task:answer.task,...result};
+    console.log(`${model.id}: ${answer.task} asked again, ${result.status==='ok'?'answered':'failed again'}`);
+  }
 }
 writeFileSync(OUT,JSON.stringify({version:1,collectedAt:new Date().toISOString(),models}));

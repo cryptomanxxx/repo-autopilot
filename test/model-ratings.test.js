@@ -93,15 +93,15 @@ test('the isolated sandbox runs model code with no network as the user nobody',{
   } finally {delete process.env.MODEL_SANDBOX;}
 });
 
-test('a model is rated only when the provider answered most of the tasks',async()=>{
+test('a model is rated only when the provider answered every task',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'ratings-grade-'));
   try {
     const answers=(ok,errors)=>TASKS.map((task,index)=>index<ok?{task:task.id,status:'ok',seconds:1,text:GOOD[task.id]}:index<ok+errors?{task:task.id,status:'error',error:'HTTP 502'}:null).filter(Boolean);
-    const half=Math.floor(TASKS.length/2);
-    writeFileSync(join(dir,'answers.json'),JSON.stringify({version:1,models:[{id:'hip:half',answers:answers(half,TASKS.length-half)},{id:'hip:most',answers:answers(half+1,TASKS.length-half-1)}]}));
+    // A provider error never counts as a failed task: one missing answer leaves the model unrated.
+    writeFileSync(join(dir,'answers.json'),JSON.stringify({version:1,models:[{id:'hip:almost',answers:answers(TASKS.length-1,1)},{id:'hip:all',answers:answers(TASKS.length,0)}]}));
     writeFileSync(join(dir,'current.json'),JSON.stringify(empty()));
     await run(process.execPath,[script('grade.mjs'),join(dir,'answers.json'),join(dir,'current.json'),join(dir,'next.json')]);
-    assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir,'next.json'),'utf8')).models),['hip:most']);
+    assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(dir,'next.json'),'utf8')).models),['hip:all']);
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
 
@@ -124,6 +124,7 @@ test('the ratings file accepts only its exact format',()=>{
 test('the run: collect through the gateway, grade, publish a summary',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'ratings-'));
   const calls=[];
+  let flaked=0;
   const server=createServer((request,response)=>{
     assert.equal(request.headers.authorization,'Bearer '+lease);
     if(request.method==='GET'&&request.url==='/v1/models') {
@@ -136,8 +137,9 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     request.on('end',()=>{
       const {model,messages}=JSON.parse(body);
       calls.push(model);
-      if(model==='hip:down') {response.statusCode=502;return response.end('{"error":"AI provider returned HTTP 502"}');}
       const task=TASKS.find(t=>t.prompt===messages[1].content);
+      // hip:down always fails; blablador:good fails its first json task once, which is asked again.
+      if(model==='hip:down'||model==='blablador:good'&&task.id==='json'&&!flaked++) {response.statusCode=502;return response.end('{"error":"AI provider returned HTTP 502"}');}
       response.setHeader('Content-Type','application/json');
       response.end(JSON.stringify({choices:[{message:{role:'assistant',content:model==='blablador:good'?GOOD[task.id]:'no idea'}}]}));
     });
@@ -156,7 +158,9 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     // Untested models first (the providers taking turns while both have some), then the oldest
     // tested; hip:old (tested most recently) does not fit in five.
     assert.deepEqual(JSON.parse(answers).models.map(m=>m.id),['blablador:good','hip:bad','blablador:later','blablador:third','hip:down']);
-    assert.equal(calls.length,5*TASKS.length);
+    // hip:down is given up after three errors in a row; blablador:good's failed task is asked again.
+    assert.equal(calls.length,4*TASKS.length+1+3);
+    assert.equal(calls.filter(id=>id==='hip:down').length,3);
     // Each run number starts the turns at another provider, then at another model of it, so that
     // one-model runs alternate and an untested model that keeps failing does not block the rest.
     writeFileSync(join(dir,'one.json'),JSON.stringify({...empty(),models:{'blablador:good':current.models['hip:old']}}));
