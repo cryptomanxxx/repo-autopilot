@@ -241,6 +241,11 @@ test('the AI gateway provider streams Blablador through the service binding with
   const body=JSON.parse(sent[0].options.body);
   assert.deepEqual([body.model,body.stream,body.max_tokens],['alias-code',true,8192],'a Workers AI model name falls back to alias-code');
   env.MODEL='alias-fast';await callModel(env,[]);assert.equal(JSON.parse(sent[1].options.body).model,'alias-fast');
+  const logged=[],log=console.log;console.log=line=>logged.push(line);
+  try {
+    await callModel(env,[]);await callModel({...env,MAX_OUTPUT_TOKENS:'2048'},[]);
+  } finally {console.log=log;}
+  assert.deepEqual(logged.map(line=>JSON.parse(line)),[{modelCall:'ai-gateway',max_tokens:8192,limit:'default'},{modelCall:'ai-gateway',max_tokens:2048,limit:'MAX_OUTPUT_TOKENS'}],'the Worker log shows the output limit used');
   assert.equal(modelName(env),'Blablador alias-fast (AI gateway)');
   assert.equal(modelName({}),'@cf/meta/llama-4-scout-17b-16e-instruct');
   assert.equal(agentName(env),'Blablador');

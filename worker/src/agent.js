@@ -320,6 +320,9 @@ export async function callModel(env,messages,{fetchImpl=fetch,onDelta=()=>{},age
   // Gateway models get the gateway's own output cap, as models that think first need room for their
   // reasoning; the model ratings ask with the same limit.
   const model=env.MODEL||DEFAULT_MODEL,max_tokens=Number(env.MAX_OUTPUT_TOKENS)||(env.MODEL_PROVIDER==='ai-gateway'?GATEWAY_OUTPUT_TOKENS:4096);
+  // The Worker log (Cloudflare Workers Logs) shows the output limit each model call uses and where it
+  // came from: the MAX_OUTPUT_TOKENS setting or the default.
+  console.log(JSON.stringify({modelCall:env.MODEL_PROVIDER||'workers-ai',max_tokens,limit:Number(env.MAX_OUTPUT_TOKENS)?'MAX_OUTPUT_TOKENS':'default'}));
   if(env.MODEL_PROVIDER==='ai-gateway') return gatewayModel(env,messages,{max_tokens,onDelta,agent});
   if((env.MODEL_PROVIDER||'workers-ai')==='workers-ai') {
     if(!env.AI) throw new PublicError('The Workers AI binding is not configured.');

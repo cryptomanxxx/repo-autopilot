@@ -61,6 +61,7 @@ function inTurn(rows) {
 // providers keep taking turns there too.
 const chosen=[...inTurn(ordered.filter(row=>!previous[row.id])),...ordered.filter(row=>previous[row.id])].slice(0,limit);
 console.log(`Rating ${chosen.length} model(s): ${chosen.map(row=>row.id).join(', ')}`);
+console.log(`Output limit: ${OUTPUT_TOKENS} tokens per answer, ${timeoutSeconds} s per answer`);
 
 let spent=0;
 // Why an answer had no text: a model that thinks first may spend the whole output limit on its
