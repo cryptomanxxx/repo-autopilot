@@ -70,6 +70,7 @@ jobs:
           MODEL_PROVIDER: ${{ vars.AUTOPILOT_CHAT_MODEL_PROVIDER }}
           MODEL_BASE_URL: ${{ vars.AUTOPILOT_CHAT_MODEL_BASE_URL }}
           CONTEXT_CHARS: ${{ vars.AUTOPILOT_CHAT_CONTEXT_CHARS }}
+          MAX_OUTPUT_TOKENS: ${{ vars.AUTOPILOT_CHAT_MAX_OUTPUT_TOKENS }}
           GATEWAY_SERVICE: ${{ vars.AUTOPILOT_CHAT_GATEWAY_SERVICE || 'repo-autopilot-ai-gateway' }}
         # Every setting comes from repository variables: a deploy replaces the Worker's variables, so
         # values typed into the Cloudflare dashboard would be lost. Secrets ship with the same version.
@@ -91,11 +92,32 @@ jobs:
           fi
           # The dashboard shows which commit is live and since when.
           args=(--config "$config" --var "DEPLOYED_COMMIT:$GITHUB_SHA" --var "DEPLOYED_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)" --var "REPOSITORY:$REPOSITORY" --var "AUTOPILOT_USER:$OWNER" --var "GITHUB_CLIENT_ID:$CLIENT_ID")
-          for name in MODEL MODEL_PROVIDER MODEL_BASE_URL CONTEXT_CHARS; do
+          if [ -n "$MAX_OUTPUT_TOKENS" ] && ! [[ "$MAX_OUTPUT_TOKENS" =~ ^[1-9][0-9]{0,5}$ ]]; then
+            echo "::error::AUTOPILOT_CHAT_MAX_OUTPUT_TOKENS must be a whole number of tokens, such as 8192."
+            exit 1
+          fi
+          for name in MODEL MODEL_PROVIDER MODEL_BASE_URL CONTEXT_CHARS MAX_OUTPUT_TOKENS; do
             if [ -n "${!name}" ]; then args+=(--var "$name:${!name}"); fi
           done
+          # The output limit each answer gets, as the Worker computes it (worker/src/agent.js outputTokens).
+          if [ -n "$MAX_OUTPUT_TOKENS" ]; then
+            echo "::notice::Output limit: $MAX_OUTPUT_TOKENS tokens per answer (AUTOPILOT_CHAT_MAX_OUTPUT_TOKENS)."
+          elif [ "$MODEL_PROVIDER" = "ai-gateway" ]; then
+            echo "::notice::Output limit: 8192 tokens per answer (default for AI gateway models)."
+          else
+            echo "::notice::Output limit: 4096 tokens per answer (default)."
+          fi
           umask 077
           secrets="$RUNNER_TEMP/chat-secrets.json"
           node -e 'const s={GITHUB_CLIENT_SECRET:process.env.CLIENT_SECRET};for(const n of ["MODEL_API_KEY","WEBHOOK_SECRET"]) if(process.env[n]) s[n]=process.env[n];require("fs").writeFileSync(process.argv[1],JSON.stringify(s))' "$secrets"
           trap 'rm -f "$secrets"' EXIT
           npx --yes "wrangler@$WRANGLER_VERSION" deploy "${args[@]}" --secrets-file "$secrets"
+          # A MAX_OUTPUT_TOKENS secret added by hand in Cloudflare survives deploys and would override the
+          # limit above. Only secret names are listed, never values.
+          if names="$(npx --yes "wrangler@$WRANGLER_VERSION" secret list --config "$config" --format json 2>/dev/null)"; then
+            if jq -e 'any(.[]; .name=="MAX_OUTPUT_TOKENS")' <<<"$names" >/dev/null; then
+              echo "::warning::The Worker has a MAX_OUTPUT_TOKENS secret set in Cloudflare; it overrides the output limit above. Delete it there, and set AUTOPILOT_CHAT_MAX_OUTPUT_TOKENS instead if needed."
+            fi
+          else
+            echo "::warning::Could not list the Worker's secret names to check for a MAX_OUTPUT_TOKENS override."
+          fi
