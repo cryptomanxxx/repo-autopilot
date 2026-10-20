@@ -3,6 +3,8 @@ import {PublicError} from './errors.js';
 
 export const DEFAULT_MODEL='@cf/meta/llama-4-scout-17b-16e-instruct';
 export const DEFAULT_CONTEXT_CHARS=60000,MODEL_TIMEOUT=150000;
+// The AI gateway's cap on output tokens per answer.
+export const GATEWAY_OUTPUT_TOKENS=8192;
 const CUT_OFF='\n\n[The answer was cut off at the output limit.]';
 const MAX_FILE_CHARS=100000,MAX_HISTORY=10,MAX_HISTORY_CHARS=6000,MAX_EDITS=12,MAX_CHANGED_FILES=8,MAX_RESULT_CHARS=200000;
 // Source code in common languages; SOURCE_FILE is the editable part, TEXT_FILE adds read-only formats.
@@ -303,7 +305,8 @@ async function gatewayModel(env,messages,{max_tokens,onDelta,agent}) {
       throw new PublicError(`The model request failed (HTTP ${response.status}${reason?`: ${reason}`:''}).`);
     }
     const result=(response.headers.get('Content-Type')||'').includes('event-stream')?await readEventStream(response.body,onDelta):(data=>({text:data?.choices?.[0]?.message?.content,finish:data?.choices?.[0]?.finish_reason}))(await response.json());
-    if(typeof result.text!=='string'||!result.text.trim()) throw new PublicError('The model returned an empty answer.');
+    // A model that thinks first can spend the whole output limit on its reasoning and write no answer.
+    if(typeof result.text!=='string'||!result.text.trim()) throw new PublicError(result.finish==='length'?`${agent.name} used its whole output limit thinking and wrote no answer. Ask for a smaller step, or choose another model.`:'The model returned an empty answer.');
     return {text:result.text,truncated:result.finish==='length'};
   } catch(error) {
     if(error instanceof PublicError) throw error;
@@ -314,7 +317,9 @@ async function gatewayModel(env,messages,{max_tokens,onDelta,agent}) {
 // Returns {text, truncated}; truncated is true when the answer hit the output limit. onDelta receives
 // answer text as it streams, where the provider streams.
 export async function callModel(env,messages,{fetchImpl=fetch,onDelta=()=>{},agent=findAgent(env)}={}) {
-  const model=env.MODEL||DEFAULT_MODEL,max_tokens=Number(env.MAX_OUTPUT_TOKENS)||4096;
+  // Gateway models get the gateway's own output cap, as models that think first need room for their
+  // reasoning; the model ratings ask with the same limit.
+  const model=env.MODEL||DEFAULT_MODEL,max_tokens=Number(env.MAX_OUTPUT_TOKENS)||(env.MODEL_PROVIDER==='ai-gateway'?GATEWAY_OUTPUT_TOKENS:4096);
   if(env.MODEL_PROVIDER==='ai-gateway') return gatewayModel(env,messages,{max_tokens,onDelta,agent});
   if((env.MODEL_PROVIDER||'workers-ai')==='workers-ai') {
     if(!env.AI) throw new PublicError('The Workers AI binding is not configured.');

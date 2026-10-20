@@ -245,22 +245,36 @@ test('a model whose provider fails more tasks than can be retried is given up wi
   }
 });
 
-test('an answer without text says why: the finish reason, output tokens and reasoning size',async()=>{
+test('an answer cut off while thinking is a failed task, and an answer without text says why',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'ratings-empty-'));
+  const bodies=[];
   const server=createServer((request,response)=>{
     response.setHeader('Content-Type','application/json');
     if(request.method==='GET') return response.end(JSON.stringify({providers:{hip:'ok'},data:[{id:'hip:thinker',provider:'hip'}]}));
-    request.resume();
-    request.on('end',()=>response.end(JSON.stringify({choices:[{finish_reason:'length',message:{role:'assistant',content:null,reasoning_content:'hmm '.repeat(50)}}],usage:{completion_tokens:4096}})));
+    let body='';
+    request.on('data',chunk=>body+=chunk);
+    request.on('end',()=>{
+      bodies.push(JSON.parse(body));
+      // The first task: no text for no stated reason (a provider error), also when asked again; every
+      // other task is cut off while thinking.
+      const finish=bodies.at(-1).messages[1].content===TASKS[0].prompt?null:'length';
+      response.end(JSON.stringify({choices:[{finish_reason:finish,message:{role:'assistant',content:null,reasoning_content:'hmm '.repeat(50)}}],usage:{completion_tokens:8192}}));
+    });
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try {
     writeFileSync(join(dir,'lease'),lease);
     await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
       LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),PROVIDER:'all',MAX_MODELS:'1'}});
-    const [answer]=JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models[0].answers;
-    assert.equal(answer.status,'error');
-    assert.equal(answer.error,'no answer text (finish length, 4096 output tokens, 200 characters of reasoning)');
+    assert.equal(bodies[0].max_tokens,8192,'the same output limit as the chat');
+    const answers=JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models[0].answers;
+    assert.equal(answers[0].status,'error');
+    assert.equal(answers[0].error,'no answer text (8192 output tokens, 200 characters of reasoning)');
+    assert.equal(answers[1].status,'timeout');
+    assert.equal(answers[1].error,'no answer within the output limit (finish length, 8192 output tokens, 200 characters of reasoning)');
+    // Two cut-off answers make the model too slow: its remaining tasks fail unasked.
+    assert.equal(answers[3].error,'not asked: too slow');
+    assert.equal(answers.length,TASKS.length);
   } finally {
     server.close();
     rmSync(dir,{recursive:true,force:true});

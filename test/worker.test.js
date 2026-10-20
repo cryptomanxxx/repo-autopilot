@@ -239,7 +239,7 @@ test('the AI gateway provider streams Blablador through the service binding with
   assert.equal(sent[0].url,'https://ai-gateway/v1/chat/completions');
   assert.equal(sent[0].options.headers.Authorization,undefined,'no provider key or bearer leaves this Worker');
   const body=JSON.parse(sent[0].options.body);
-  assert.deepEqual([body.model,body.stream,body.max_tokens],['alias-code',true,4096],'a Workers AI model name falls back to alias-code');
+  assert.deepEqual([body.model,body.stream,body.max_tokens],['alias-code',true,8192],'a Workers AI model name falls back to alias-code');
   env.MODEL='alias-fast';await callModel(env,[]);assert.equal(JSON.parse(sent[1].options.body).model,'alias-fast');
   assert.equal(modelName(env),'Blablador alias-fast (AI gateway)');
   assert.equal(modelName({}),'@cf/meta/llama-4-scout-17b-16e-instruct');
@@ -265,6 +265,9 @@ test('the AI gateway provider streams Blablador through the service binding with
   await assert.rejects(callModel(env,[]),/HTTP 429: Too many requests for this lease/);
   env.AI_GATEWAY.fetch=async()=>sse(piece(null,'stop'));
   await assert.rejects(callModel(env,[]),/empty answer/);
+  // A model that thinks first and runs out of output tokens before answering is told apart.
+  env.AI_GATEWAY.fetch=async()=>sse(piece(null,'length'));
+  await assert.rejects(callModel(env,[]),/used its whole output limit thinking/);
   // A connection that closes mid-answer, before a finish reason or [DONE], is not a complete answer.
   env.AI_GATEWAY.fetch=async()=>new Response(`data: ${JSON.stringify(piece('Half an ans'))}\n\n`,{headers:{'Content-Type':'text/event-stream'}});
   await assert.rejects(callModel(env,[]),/stream ended early/);
