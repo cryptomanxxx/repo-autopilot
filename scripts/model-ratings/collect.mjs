@@ -4,6 +4,8 @@
 import {readFileSync,writeFileSync} from 'node:fs';
 import {TASKS,SYSTEM} from './tasks.mjs';
 import {validId,validate} from './ratings.mjs';
+// The same output limit as the agent chat gives gateway models, so a rating measures what the chat gets.
+import {GATEWAY_OUTPUT_TOKENS as OUTPUT_TOKENS} from '../../worker/src/agent.js';
 
 const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,PROVIDER='all',MAX_MODELS='8',TIMEOUT_SECONDS='110'}=process.env;
 // The gateway gives up on a generation after 120 seconds (and answers 502). A call that fails after
@@ -11,6 +13,7 @@ const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,PROVIDER='all',MAX_MODELS='8',TIMEO
 const timeoutSeconds=Number(TIMEOUT_SECONDS)>0?Number(TIMEOUT_SECONDS):110;
 // After this many timeouts a model is clearly too slow; its remaining tasks count as failed unasked.
 const SLOW_AFTER=2;
+const MAX_ANSWER_CHARS=64000;
 const lease=readFileSync(LEASE_FILE,'utf8').trim();
 const expires=JSON.parse(Buffer.from(lease.split('.')[1],'base64url').toString('utf8')).exp;
 // The lease allows 100 calls. A model is started only while its tasks and a few retries still fit,
@@ -82,7 +85,7 @@ async function ask(model,task) {
     let response;
     try {
       response=await fetch(gateway+'/v1/chat/completions',{method:'POST',headers,signal:AbortSignal.timeout((timeoutSeconds+15)*1000),
-        body:JSON.stringify({model,messages:[{role:'system',content:SYSTEM},{role:'user',content:task.prompt}],max_tokens:4096,temperature:0,stream:false})});
+        body:JSON.stringify({model,messages:[{role:'system',content:SYSTEM},{role:'user',content:task.prompt}],max_tokens:OUTPUT_TOKENS,temperature:0,stream:false})});
     } catch {spent++;return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'no response'};}
     if(response.status===429) {
       const reason=(await response.json().catch(()=>({}))).error||'';
@@ -94,8 +97,14 @@ async function ask(model,task) {
     if(!response.ok) {await response.body?.cancel();return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'HTTP '+response.status};}
     const data=await response.json().catch(()=>null);
     const text=data?.choices?.[0]?.message?.content;
-    if(typeof text!=='string') return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'no answer text'+emptyDetails(data)};
-    return {status:'ok',seconds:elapsed(),text:text.slice(0,20000)};
+    const blank=typeof text!=='string'||!text.trim();
+    if(blank&&elapsed()>=timeoutSeconds) return timedOut();
+    // The whole output limit spent thinking (no text, or only blanks) is the model's own failure, as in
+    // the chat: a failed task like a timeout, not a provider error.
+    if(blank&&data?.choices?.[0]?.finish_reason==='length') return {status:'timeout',seconds:elapsed(),error:'no answer within the output limit'+emptyDetails(data)};
+    if(typeof text!=='string') return {status:'error',error:'no answer text'+emptyDetails(data)};
+    // Room for a whole answer at the output limit (8192 tokens are at most some 40,000 characters).
+    return {status:'ok',seconds:elapsed(),text:text.slice(0,MAX_ANSWER_CHARS)};
   }
   return {status:'error',error:'rate limited'};
 }
