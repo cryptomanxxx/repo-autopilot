@@ -80,7 +80,8 @@ function emptyDetails(data) {
 // The output limit for one task: OUTPUT_TOKENS, or less for a model whose context window would not
 // hold the task and that many tokens (its provider refuses such a request with HTTP 400). The prompt is
 // counted generously at three characters per token. row.cap lowers it further after such a refusal.
-const FALLBACK_TOKENS=4096;
+// The fallback leaves room for the prompt (well under 1,000 tokens) even in a 4,096-token context.
+const FALLBACK_TOKENS=3072;
 function outputLimit(row,task) {
   const cap=row.cap??OUTPUT_TOKENS,context=row.context_length;
   if(!Number.isSafeInteger(context)||context<=0) return cap;
@@ -110,7 +111,7 @@ async function ask(row,task) {
     if(!response.ok) {
       await response.body?.cancel();
       // A model whose context window is unknown and too small for the full limit: asked once more at
-      // once with the chat's former limit, which then holds for its remaining tasks.
+      // once with a lower limit, which then holds for its remaining tasks.
       if(response.status===400&&maxTokens>FALLBACK_TOKENS&&!Number.isSafeInteger(row.context_length)) {
         row.cap=FALLBACK_TOKENS;
         console.log(`${model}: HTTP 400 at ${maxTokens} output tokens; asking with ${FALLBACK_TOKENS}`);
@@ -139,7 +140,9 @@ async function ask(row,task) {
 const models=[];
 let stopped=false;
 for(const row of chosen) {
-  if(spent+TASKS.length+RETRY_RESERVE>LEASE_CALLS) {console.log(`Stopped before ${row.id}: not enough of the lease's calls left.`);break;}
+  // A model of unknown context may need one more call, for the lower output limit after a refusal.
+  const reserve=RETRY_RESERVE+(Number.isSafeInteger(row.context_length)&&row.context_length>0?0:1);
+  if(spent+TASKS.length+reserve>LEASE_CALLS) {console.log(`Stopped before ${row.id}: not enough of the lease's calls left.`);break;}
   const answers=[];
   let errors=0,timeouts=0;
   const smallest=Math.min(...TASKS.map(task=>outputLimit(row,task)));

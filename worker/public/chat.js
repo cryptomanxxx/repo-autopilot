@@ -213,9 +213,10 @@ function fillModels() {
   const agent=state.agents.find(a=>a.id===state.agentId),models=state.models[state.agentId]||[];
   let remembered=null;
   try {remembered=localStorage.getItem(MODEL_KEY+state.agentId);} catch {}
-  state.modelId=remembered===null?(models.find(m=>m.rating)?.id||''):models.some(m=>m.id===remembered)?remembered:'';
-  const standard=Object.assign(document.createElement('option'),{value:'',textContent:`Standard${agent?.modelName?` (${agent.modelName})`:''}`});
   const small=m=>m.contextLength&&m.contextLength<SMALL_CONTEXT;
+  // The preselected model is the best rated one that also holds the files the chat sends.
+  state.modelId=remembered===null?(models.find(m=>m.rating&&!small(m))?.id||''):models.some(m=>m.id===remembered)?remembered:'';
+  const standard=Object.assign(document.createElement('option'),{value:'',textContent:`Standard${agent?.modelName?` (${agent.modelName})`:''}`});
   const option=m=>Object.assign(document.createElement('option'),{value:m.id,
     textContent:`${small(m)?'⚠ ':''}${m.rating?`${'⭐'.repeat(m.rating.stars)} `:''}${m.name}${contextText(m.contextLength)}${m.rating?'':' · not tested'}`,
     title:[m.rating?`Coding rating: passed ${m.rating.passed} of ${m.rating.total} tasks${m.rating.seconds!==null?`, median ${m.rating.seconds} s per answer`:''}, tested ${String(m.rating.testedAt).slice(0,10)}.`:'Not tested by the Model ratings workflow yet.',

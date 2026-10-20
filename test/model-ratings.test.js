@@ -295,10 +295,11 @@ test('a small model gets an output limit that fits its context, and a 400 at the
     let body='';
     request.on('data',chunk=>body+=chunk);
     request.on('end',()=>{
-      const {model,max_tokens}=JSON.parse(body);
+      const {model,max_tokens,messages}=JSON.parse(body);
       (asked[model]??=[]).push(max_tokens);
-      // The provider refuses a request that does not fit the model's (here 4096-token) context.
-      if(max_tokens>4096) {response.statusCode=400;return response.end('{"error":"AI provider returned HTTP 400"}');}
+      // The provider refuses a request whose prompt (about four characters per token) and output
+      // limit do not fit the model's 4096-token context.
+      if(max_tokens+Math.ceil(messages.map(m=>m.content).join('').length/4)>4096) {response.statusCode=400;return response.end('{"error":"AI provider returned HTTP 400"}');}
       response.end(JSON.stringify({choices:[{finish_reason:'stop',message:{role:'assistant',content:'no idea'}}]}));
     });
   });
@@ -309,7 +310,7 @@ test('a small model gets an output limit that fits its context, and a 400 at the
       LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),PROVIDER:'all',MAX_MODELS:'2'}});
     assert.equal(asked['hip:small'].length,TASKS.length,'no call is refused');
     assert.ok(asked['hip:small'].every(tokens=>tokens>=256&&tokens<4096),'the prompt and the answer fit the context');
-    assert.deepEqual(asked['hip:unknown'],[8192,...TASKS.map(()=>4096)],'one refusal, then the lower limit for every task');
+    assert.deepEqual(asked['hip:unknown'],[8192,...TASKS.map(()=>3072)],'one refusal, then a limit that leaves room for the prompt');
     const models=JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models;
     for(const model of models) assert.ok(model.answers.every(answer=>answer.status==='ok'),model.id);
   } finally {
