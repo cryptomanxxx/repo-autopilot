@@ -5,10 +5,14 @@ import {readFileSync,writeFileSync} from 'node:fs';
 import {TASKS,SYSTEM} from './tasks.mjs';
 import {validId,validate} from './ratings.mjs';
 
-const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,RATINGS,PROVIDER='all',MAX_MODELS='8'}=process.env;
+const {AI_GATEWAY_URL:gateway,LEASE_FILE,OUT,RATINGS,PROVIDER='all',MAX_MODELS='8',TIMEOUT_SECONDS='110'}=process.env;
+// The gateway gives up on a generation after 120 seconds (and answers 502). A call that fails after
+// this long is a model too slow for the task, not a provider error: it counts as a failed task.
+const timeoutSeconds=Number(TIMEOUT_SECONDS)>0?Number(TIMEOUT_SECONDS):110;
+// After this many timeouts a model is clearly too slow; its remaining tasks count as failed unasked.
+const SLOW_AFTER=2;
 const lease=readFileSync(LEASE_FILE,'utf8').trim();
 const expires=JSON.parse(Buffer.from(lease.split('.')[1],'base64url').toString('utf8')).exp;
-// Each model takes one call per task; a lease allows 100 calls.
 // The lease allows 100 calls. A model is started only while its tasks and a few retries still fit,
 // so at most ten models (of nine tasks) fit in one run.
 const LEASE_CALLS=100,RETRY_RESERVE=2;
@@ -55,12 +59,13 @@ let spent=0;
 async function ask(model,task) {
   for(let attempt=0;attempt<8;attempt++) {
     if(secondsLeft()<150) return {status:'stopped'};
-    const started=Date.now();
+    const started=Date.now(),elapsed=()=>Math.round((Date.now()-started)/100)/10;
+    const timedOut=()=>({status:'timeout',seconds:elapsed(),error:'no answer within '+timeoutSeconds+' s'});
     let response;
     try {
-      response=await fetch(gateway+'/v1/chat/completions',{method:'POST',headers,signal:AbortSignal.timeout(125000),
+      response=await fetch(gateway+'/v1/chat/completions',{method:'POST',headers,signal:AbortSignal.timeout((timeoutSeconds+15)*1000),
         body:JSON.stringify({model,messages:[{role:'system',content:SYSTEM},{role:'user',content:task.prompt}],max_tokens:4096,temperature:0,stream:false})});
-    } catch {spent++;return {status:'error',error:'no response'};}
+    } catch {spent++;return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'no response'};}
     if(response.status===429) {
       const reason=(await response.json().catch(()=>({}))).error||'';
       if(/exhausted/i.test(reason)) return {status:'stopped'};
@@ -68,29 +73,33 @@ async function ask(model,task) {
     }
     // Every answered request uses one of the lease's calls, a provider error included.
     spent++;
-    if(!response.ok) {await response.body?.cancel();return {status:'error',error:'HTTP '+response.status};}
+    if(!response.ok) {await response.body?.cancel();return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'HTTP '+response.status};}
     const data=await response.json().catch(()=>null);
     const text=data?.choices?.[0]?.message?.content;
-    if(typeof text!=='string') return {status:'error',error:'no answer text'};
-    return {status:'ok',seconds:Math.round((Date.now()-started)/100)/10,text:text.slice(0,20000)};
+    if(typeof text!=='string') return elapsed()>=timeoutSeconds?timedOut():{status:'error',error:'no answer text'};
+    return {status:'ok',seconds:elapsed(),text:text.slice(0,20000)};
   }
   return {status:'error',error:'rate limited'};
 }
 
 // Each model gets one call per task plus at most RETRY_RESERVE retries. A model whose provider fails
 // more tasks than can be retried is given up at once, so a struggling provider cannot use up the
-// lease; it stays untested and comes first next time.
+// lease; it stays untested and comes first next time. A timeout is not a provider error: it is a
+// failed task, and after SLOW_AFTER of them the model's remaining tasks are failed without asking.
 const models=[];
 let stopped=false;
 for(const row of chosen) {
   if(spent+TASKS.length+RETRY_RESERVE>LEASE_CALLS) {console.log(`Stopped before ${row.id}: not enough of the lease's calls left.`);break;}
   const answers=[];
-  let errors=0;
+  let errors=0,timeouts=0;
   for(const task of TASKS) {
+    if(timeouts>=SLOW_AFTER) {answers.push({task:task.id,status:'timeout',seconds:null,error:'not asked: too slow'});continue;}
     const result=await ask(row.id,task);
     if(result.status==='stopped') {stopped=true;break;}
     answers.push({task:task.id,...result});
-    if(result.status!=='ok'&&++errors>RETRY_RESERVE) break;
+    if(result.status!=='ok') console.log(`${row.id}: ${task.id}: ${result.error}${result.seconds!==undefined?` after ${result.seconds} s`:''}`);
+    if(result.status==='timeout') timeouts++;
+    if(result.status==='error'&&++errors>RETRY_RESERVE) break;
   }
   if(stopped) {console.log(`Stopped at ${row.id}: the lease is used up or about to expire.`);break;}
   if(errors>RETRY_RESERVE) {
@@ -103,9 +112,9 @@ for(const row of chosen) {
       const result=await ask(row.id,TASKS.find(task=>task.id===answer.task));
       if(result.status==='stopped') {stopped=true;break;}
       answers[index]={task:answer.task,...result};
-      console.log(`${row.id}: ${answer.task} asked again, ${result.status==='ok'?'answered':'failed again'}`);
+      console.log(`${row.id}: ${answer.task} asked again: ${result.status==='ok'?'answered':result.error}`);
     }
-    console.log(`${row.id}: ${answers.filter(a=>a.status==='ok').length}/${TASKS.length} answered`);
+    console.log(`${row.id}: ${answers.filter(a=>a.status==='ok').length}/${TASKS.length} answered${timeouts?`, ${answers.filter(a=>a.status==='timeout').length} too slow`:''}`);
   }
   models.push({id:row.id,answers});
   if(stopped) break;
