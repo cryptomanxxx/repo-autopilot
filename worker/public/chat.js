@@ -200,7 +200,9 @@ $('agent').onchange=()=>{
 // first, with its rating from the Model ratings workflow and its context length. Models too small for
 // the files the chat sends are marked. Remembered per agent; with no choice made yet, the best rated
 // model is preselected.
-const MODEL_KEY='autopilot-model:',SMALL_CONTEXT=32768;
+// Models under SMALL_CONTEXT are marked. Preselection asks for room for the whole bounded request: up
+// to 60,000 characters of files and 10 history messages of 6,000 (some 40k tokens) plus 8,192 output.
+const MODEL_KEY='autopilot-model:',SMALL_CONTEXT=32768,PRESELECT_CONTEXT=65536;
 const contextText=length=>length?` · ${length>=1000?`${Math.round(length/1024)}k`:length}`:'';
 async function loadModels() {
   try {
@@ -214,9 +216,9 @@ function fillModels() {
   let remembered=null;
   try {remembered=localStorage.getItem(MODEL_KEY+state.agentId);} catch {}
   const small=m=>m.contextLength&&m.contextLength<SMALL_CONTEXT;
-  // The preselected model is the best rated one known to hold the files the chat sends; only when no
-  // rated model has a known context length large enough, the best rated one not known to be small.
-  const preselected=models.find(m=>m.rating&&m.contextLength>=SMALL_CONTEXT)||models.find(m=>m.rating&&!(m.contextLength>0));
+  // The preselected model is the best rated one known to hold a full chat request; only when no rated
+  // model has a known context length large enough, the best rated one of unknown context.
+  const preselected=models.find(m=>m.rating&&m.contextLength>=PRESELECT_CONTEXT)||models.find(m=>m.rating&&!(m.contextLength>0));
   state.modelId=remembered===null?(preselected?.id||''):models.some(m=>m.id===remembered)?remembered:'';
   const standard=Object.assign(document.createElement('option'),{value:'',textContent:`Standard${agent?.modelName?` (${agent.modelName})`:''}`});
   const option=m=>Object.assign(document.createElement('option'),{value:m.id,
