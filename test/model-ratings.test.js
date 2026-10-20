@@ -158,7 +158,7 @@ test('the run: collect through the gateway, grade, publish a summary',async()=>{
     // Untested models first (the providers taking turns while both have some), then the oldest
     // tested; hip:old (tested most recently) does not fit in five.
     assert.deepEqual(JSON.parse(answers).models.map(m=>m.id),['blablador:good','hip:bad','blablador:later','blablador:third','hip:down']);
-    // hip:down is given up after three errors in a row; blablador:good's failed task is asked again.
+    // hip:down is given up at its third error; blablador:good's failed task is asked again.
     assert.equal(calls.length,4*TASKS.length+1+3);
     assert.equal(calls.filter(id=>id==='hip:down').length,3);
     // Each run number starts the turns at another provider, then at another model of it, so that
@@ -209,6 +209,33 @@ test('a run starts a model only while its tasks and a few retries fit in the lea
     // The largest accepted run, ten models, fits with its retry reserve.
     assert.equal(JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models.length,Math.floor((100-2)/TASKS.length));
     assert.ok(calls<=100);
+  } finally {
+    server.close();
+    rmSync(dir,{recursive:true,force:true});
+  }
+});
+
+test('a model whose provider fails more tasks than can be retried is given up without retries',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'ratings-giveup-'));
+  let calls=0;
+  const server=createServer((request,response)=>{
+    response.setHeader('Content-Type','application/json');
+    if(request.method==='GET') return response.end(JSON.stringify({providers:{hip:'ok'},data:[{id:'hip:flaky',provider:'hip'}]}));
+    request.resume();
+    // Every second call fails, so the errors are never consecutive.
+    request.on('end',()=>{
+      if(calls++%2) {response.statusCode=502;return response.end('{"error":"AI provider returned HTTP 502"}');}
+      response.end(JSON.stringify({choices:[{message:{role:'assistant',content:'no idea'}}]}));
+    });
+  });
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    writeFileSync(join(dir,'lease'),lease);
+    await run(process.execPath,[script('collect.mjs')],{env:{...process.env,GITHUB_RUN_NUMBER:'0',AI_GATEWAY_URL:'http://127.0.0.1:'+server.address().port,
+      LEASE_FILE:join(dir,'lease'),OUT:join(dir,'answers.json'),RATINGS:join(dir,'none.json'),PROVIDER:'all',MAX_MODELS:'1'}});
+    // Given up at its third error (the sixth call), with no retries spent on it.
+    assert.equal(calls,6);
+    assert.equal(JSON.parse(readFileSync(join(dir,'answers.json'),'utf8')).models[0].answers.length,6);
   } finally {
     server.close();
     rmSync(dir,{recursive:true,force:true});
