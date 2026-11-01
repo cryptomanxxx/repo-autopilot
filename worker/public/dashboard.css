@@ -16,12 +16,12 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .expand-label{position:absolute;right:12px;font-size:11px;color:#a8b7cc}.expand-label:before{content:'▸ '}.pr-row[open] .expand-label:before{content:'▾ '}
 .pr-detail{padding:0 16px 16px;border-top:1px solid #2a3c55;font-size:13px}.pr-detail p{margin:10px 0}.ci-success{color:#9de4c0}.ci-failure{color:#ffb3b3}.ci-pending{color:#9fc0ff}
 .workflow-row{grid-template-columns:minmax(180px,3fr) minmax(100px,1.5fr) 80px minmax(80px,1fr) minmax(120px,1.5fr)}
-/* Tablets in portrait: the title on its own line, then all seven values in one row. */
-@media(max-width:850px){.pr-summary{grid-template-columns:repeat(7,minmax(0,1fr));gap:10px 12px;align-items:start}.expand-label{top:16px}.pr-title{grid-column:1/-1}.workflow-row{grid-template-columns:repeat(4,minmax(0,1fr))}.workflow-title{grid-column:1/-1}}
-/* Phones: status (merge, CI, Codex) in three columns, then the four counts in four. */
+/* Tablets: title on its own line, followed by eight compact status values. */
+@media(max-width:850px){.pr-summary{grid-template-columns:repeat(8,minmax(0,1fr));gap:10px 12px;align-items:start}.expand-label{top:16px}.pr-title{grid-column:1/-1}.workflow-row{grid-template-columns:repeat(4,minmax(0,1fr))}.workflow-title{grid-column:1/-1}}
+/* Phones: four statuses (merge, PR CI, main CI, Codex), then four counts. */
 @media(max-width:600px){
   .pr-summary{grid-template-columns:repeat(12,minmax(0,1fr));padding:14px 12px;gap:10px 8px}
-  .pr-summary>.list-cell:nth-child(-n+4){grid-column:span 4}.pr-summary>.list-cell:nth-child(n+5){grid-column:span 3}.pr-summary>.pr-title.list-cell{grid-column:1/-1;padding-right:56px}
+  .pr-summary>.list-cell:nth-child(-n+5){grid-column:span 3}.pr-summary>.list-cell:nth-child(n+6){grid-column:span 3}.pr-summary>.pr-title.list-cell{grid-column:1/-1;padding-right:56px}
   .expand-label{top:14px}
   .workflow-row{grid-template-columns:repeat(2,minmax(0,1fr));padding:14px 12px}
   .pr-detail{padding:0 12px 14px}
@@ -34,13 +34,13 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 
 @media(min-width:851px){.workflow-row .cell-label{display:none}}
 
-@media(min-width:851px){.pr-summary{grid-template-columns:minmax(160px,3fr) minmax(100px,1.5fr) 75px minmax(110px,1.3fr) 55px 60px 35px 35px;gap:10px}}
+@media(min-width:851px){.pr-summary{grid-template-columns:minmax(160px,3fr) minmax(100px,1.5fr) 75px 85px minmax(110px,1.3fr) 55px 60px 35px 35px;gap:10px}}
 .review-flow .flow-findings:before{background:#ffbf80}
 
 /* Shared minimum widths keep headers and values aligned without collisions. */
 @media(min-width:851px){
   #pulls{overflow-x:auto}
-  .pr-summary{min-width:1000px;grid-template-columns:minmax(160px,1fr) 120px 75px 145px 78px 82px 35px 35px;gap:14px;padding-right:70px}
+  .pr-summary{min-width:1130px;grid-template-columns:minmax(160px,1fr) 120px 75px 94px 145px 70px 74px 35px 35px;gap:12px;padding-right:70px}
   .pr-summary>.list-cell:not(.pr-title){text-align:center;align-items:center}
   .pr-summary.list-head>span:not(:first-child){text-align:center}
   .list-head span{white-space:nowrap}
