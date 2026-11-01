@@ -102,7 +102,8 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
         if(!Array.isArray(checks)||!Array.isArray(statuses)) throw new Error('Malformed merged-commit CI response');
         const complete=checks.length<100 && statuses.length<100 &&
           (mergeChecks.total_count??checks.length)<=checks.length;
-        postMergeCi={state:complete ? ciState(checks,statuses) : 'unknown',sha,complete,available:true};
+        const observedState=ciState(checks,statuses);
+        postMergeCi={state:complete || observedState==='failure' ? observedState : 'unknown',sha,complete,available:true};
       } catch (error) {
         postMergeCi={state:'unknown',sha,complete:false,available:false};
         warnings.push(`PR #${pr.number}: merged-commit CI unavailable; GitHub checks were not verified.`);
