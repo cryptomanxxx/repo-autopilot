@@ -71,3 +71,61 @@ test('Codex findings show whether their review thread was resolved on GitHub',as
  const {item}=await createGitHub({token:'test-token',fetchImpl}).pullDetails('a/b',pr);
  assert.deepEqual(item.progress.findings.items.map(f=>[f.title,f.resolved,f.outdated]),[['Fixed already',true,true],['Still open',false,false],['Not a thread yet',null,null],['Code changed since',false,true]]);
 });
+
+
+test('merged PR keeps historical head CI separate from post-merge main CI',async()=>{
+  const head='a'.repeat(40),merged='b'.repeat(40);
+  const pr={number:14,title:'Reviewed PR',state:'closed',merged_at:'2026-11-01T01:00:00Z',merge_commit_sha:merged,head:{sha:head},base:{ref:'main'}};
+  const paths=[];
+  const fetchImpl=async url=>{
+    paths.push(url);
+    let data=[];
+    if(url.includes('/pulls/14/reviews')||url.includes('/pulls/14/commits')) data=[];
+    else if(url.endsWith(`/commits/${head}/check-runs?per_page=100`)) data={check_runs:[{name:'PR contracts',status:'completed',conclusion:'success'}],total_count:1};
+    else if(url.endsWith(`/commits/${head}/status?per_page=100`)) data={statuses:[]};
+    else if(url.endsWith(`/commits/${merged}/check-runs?per_page=100`)) data={check_runs:[{name:'Main contracts',status:'completed',conclusion:'failure'}],total_count:1};
+    else if(url.endsWith(`/commits/${merged}/status?per_page=100`)) data={statuses:[]};
+    else if(url.includes('/reactions')) data=[];
+    return {ok:true,json:async()=>data};
+  };
+  const {item}=await createGitHub({fetchImpl}).pullDetails('a/b',pr);
+  assert.equal(item.ci,'success','PR head passed before merge');
+  assert.deepEqual(item.postMergeCi,{state:'failure',sha:merged,complete:true,available:true});
+  assert.equal(item.readiness.state,'merged','main CI cannot change historical merge status');
+  assert.ok(paths.some(p=>p.includes(`/commits/${head}/check-runs`)));
+  assert.ok(paths.some(p=>p.includes(`/commits/${merged}/check-runs`)));
+});
+
+test('post-merge checks are fail closed when absent, incomplete, or unavailable',async()=>{
+  const head='c'.repeat(40),merged='d'.repeat(40);
+  const pr={number:15,title:'Merged PR',state:'closed',merged_at:'2026-11-01T01:00:00Z',merge_commit_sha:merged,head:{sha:head}};
+  for(const mode of ['missing','truncated','denied']) {
+    const fetchImpl=async url=>{
+      if(mode==='denied'&&url.includes(`/commits/${merged}/check-runs`)) return {ok:false,status:403};
+      let data=[];
+      if(url.includes('/check-runs')) data={check_runs:mode==='truncated'&&url.includes(merged)?Array.from({length:100},()=>({status:'completed',conclusion:'success'})):[],total_count:mode==='truncated'&&url.includes(merged)?101:0};
+      else if(url.includes('/status?')) data={statuses:[]};
+      return {ok:true,json:async()=>data};
+    };
+    const {item}=await createGitHub({fetchImpl}).pullDetails('a/b',pr);
+    assert.notEqual(item.postMergeCi.state,'success',`${mode} must never be treated as verified green`);
+    if(mode==='truncated') assert.equal(item.postMergeCi.complete,false);
+    if(mode==='denied') assert.equal(item.postMergeCi.available,false);
+    if(mode==='missing') assert.equal(item.postMergeCi.state,'unknown');
+  }
+});
+
+test('open PR has no post-merge CI even if head checks succeed',async()=>{
+  const head='e'.repeat(40);
+  const pr={number:16,title:'Still open',state:'open',head:{sha:head},mergeable:true};
+  const fetchImpl=async url=>{
+    let data=[];
+    if(url.includes('/check-runs')) data={check_runs:[{status:'completed',conclusion:'success'}],total_count:1};
+    else if(url.includes('/status?')) data={statuses:[]};
+    else if(url.endsWith('/pulls/16')) data=pr;
+    return {ok:true,json:async()=>data};
+  };
+  const {item}=await createGitHub({fetchImpl}).pullDetails('a/b',pr);
+  assert.equal(item.ci,'success');
+  assert.deepEqual(item.postMergeCi,{state:'unknown',sha:null,complete:false,available:false});
+});

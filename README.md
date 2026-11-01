@@ -92,6 +92,8 @@ ChatGPT UI integration and background work are separate components: a dashboard 
 
 ## PR progress and merge readiness
 
+The dashboard reports **PR CI** (checks on the pull request head commit) separately from **Main CI** (checks on the merge commit recorded by GitHub, when available). A green PR CI result is not proof that the squash-merged commit passed CI on `main`. For older merges, missing runs, truncated check lists, or inaccessible GitHub results, Main CI stays unknown, incomplete, or unavailable rather than appearing successful. Main CI is informational; its badge reflects checks associated with the merge commit and does not independently prove which workflow event triggered them. Merge readiness for an open PR still uses PR-head checks, never the merged-commit badge.
+
 PR cards show review acknowledgement, completion for the latest code, Codex outcome, completed review rounds, commits after review and merge readiness. Confirmation summaries and raw technical feedback are hidden; use the GitHub history link for details.
 
 Review counts are **lower bounds**: GitHub edits Codex summaries in place, so some older clean rounds cannot be recovered. Review submissions, outcome comments and summaries for the same commit within 10 seconds are deduplicated. Commits after review counts subsequent commits in the PR after the earliest reviewed commit found in its history; it does not prove that feedback was fixed. Missing/truncated histories show unknown update counts.

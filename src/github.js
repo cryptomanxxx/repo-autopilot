@@ -67,6 +67,8 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     let pr=listed;
     let verification={complete:false}, changed=false;
     let details = {ci: 'unknown', reviews: [], codexComments: [], detailError: null, codex: {state:'unknown',label:'Codex: details unavailable'}, progress:{reviewCount:null,updatesAfterReview:null,currentCompleted:false}, checksComplete:false};
+    // Post-merge CI is a separate commit and must never be mixed into PR-head merge readiness.
+    let postMergeCi = {state:'unknown',sha:null,complete:false,available:false};
     // Limit concurrency and API cost; detail errors are visible, never treated as approval.
     try {
       const [reviews, comments, inline, checks, status, reactions, commits] = await Promise.all([get(`${root}/pulls/${pr.number}/reviews?per_page=100`), get(`${root}/issues/${pr.number}/comments?per_page=100`), get(`${root}/pulls/${pr.number}/comments?per_page=100`), get(`${root}/commits/${pr.head.sha}/check-runs?per_page=100`), get(`${root}/commits/${pr.head.sha}/status?per_page=100`), get(`${root}/issues/${pr.number}/reactions?per_page=100`), get(`${root}/pulls/${pr.number}/commits?per_page=100`)]);
@@ -85,13 +87,35 @@ export function createGitHub({token, fetchImpl = fetch, pullLimit = 10, runLimit
     }
     // The listed state decides, so a pull request merged during loading is not verified twice.
     if(listed.state !== 'open') {verification=await mergeVerification(repo,pr.number);if(verification.headSha !== pr.head.sha) verification={complete:false};}
+    // The squash-merge commit can differ from the reviewed PR head. A success on one
+    // cannot substitute for checks on the other. A missing check or failed API read
+    // remains UNKNOWN; it must not turn into a green post-merge badge.
+    if(pr.merged_at && /^[0-9a-f]{40}$/i.test(pr.merge_commit_sha || '')) {
+      const sha=pr.merge_commit_sha;
+      postMergeCi={state:'unknown',sha,complete:false,available:false};
+      try {
+        const [mergeChecks,mergeStatus]=await Promise.all([
+          get(`${root}/commits/${sha}/check-runs?per_page=100`),
+          get(`${root}/commits/${sha}/status?per_page=100`),
+        ]);
+        const checks=mergeChecks.check_runs, statuses=mergeStatus.statuses;
+        if(!Array.isArray(checks)||!Array.isArray(statuses)) throw new Error('Malformed merged-commit CI response');
+        const complete=checks.length<100 && statuses.length<100 &&
+          (mergeChecks.total_count??checks.length)<=checks.length;
+        const observedState=ciState(checks,statuses);
+        postMergeCi={state:complete || observedState==='failure' ? observedState : 'unknown',sha,complete,available:true};
+      } catch (error) {
+        postMergeCi={state:'unknown',sha,complete:false,available:false};
+        warnings.push(`PR #${pr.number}: merged-commit CI unavailable; GitHub checks were not verified.`);
+      }
+    }
     details.unresolvedThreads=verification.complete ? verification.unresolvedThreads : null;
     for(const item of details.progress.findings?.items||[]) {
       const thread=verification.complete?verification.threadsById.get(String(item.id)):undefined;
       item.resolved=thread?thread.resolved:null;item.outdated=thread?thread.outdated===true:null;
     }
     const readiness=mergeReadiness(pr,{ci:details.ci,codex:details.codex,checksComplete:details.checksComplete,verification});
-    return {warnings, changed, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, baseRef:pr.base?.ref, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, ...details}};
+    return {warnings, changed, item:{readiness,number:pr.number, title:pr.title, url:pr.html_url, state:pr.merged_at ? 'merged' : pr.state, draft:pr.draft, headSha:pr.head.sha, baseRef:pr.base?.ref, openedAt:pr.created_at, updatedAt:pr.updated_at, mergedAt:pr.merged_at, postMergeCi, ...details}};
   }
   // The end of a GitHub Actions job's log. GitHub answers with a redirect to a signed download address,
   // which is read without the token and, where the store allows it, only from its last bytes.

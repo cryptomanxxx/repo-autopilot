@@ -84,11 +84,18 @@ export function renderPull(pr,{open=false,onMerge,onCodex,askedCodex=()=>false}=
   const progress=pr.progress;
   const waiting=['running','requested'].includes(pr.codex.state);
   const codexText=pr.codex.state==='clear'?'✅ Reviewed · clear':pr.codex.state==='findings'?'⚠ Findings':waiting?'🔄 Pending':pr.codex.state==='incomplete'?'❔ History incomplete':progress.currentCompleted?'✓ Reviewed · unverified':'❔ Unverified';
-  summary.append(cell('PR',`#${pr.number} ${pr.title}`,'pr-title'),cell('Merge',pr.readiness.label,`readiness-${pr.readiness.state}`),cell('CI',pr.ci==='success'?'✅ Passed':pr.ci==='failure'?'❌ Failed':pr.ci,`ci-${pr.ci}`),cell('Codex',codexText,`codex-${pr.codex.state}`),cell('Reviews',progress.reviewCount===null?'?':`≥${progress.reviewCount}`),cell('Commits',String(progress.updatesAfterReview??'?')),cell('P1',progress.findings?`${progress.findings.incomplete?'≥':''}${progress.findings.p1}`:'?'),cell('P2',progress.findings?`${progress.findings.incomplete?'≥':''}${progress.findings.p2}`:'?'));
+  const mergedCi=pr.postMergeCi || {state:'unknown',complete:false,available:false};
+  const ciText=state=>state==='success'?'✅ Passed':state==='failure'?'❌ Failed':state==='pending'?'🔄 Running':'❔ Unknown';
+  const mergedLabel=pr.state==='merged'?(mergedCi.available===false?'❔ Unavailable':mergedCi.complete===false?'❔ Incomplete':ciText(mergedCi.state)):'—';
+  summary.append(cell('PR',`#${pr.number} ${pr.title}`,'pr-title'),cell('Merge',pr.readiness.label,`readiness-${pr.readiness.state}`),cell('PR CI',ciText(pr.ci),`ci-${pr.ci}`),cell('Main CI',mergedLabel,`ci-${pr.state==='merged'?mergedCi.state:'unknown'}`),cell('Codex',codexText,`codex-${pr.codex.state}`),cell('Reviews',progress.reviewCount===null?'?':`≥${progress.reviewCount}`),cell('Commits',String(progress.updatesAfterReview??'?')),cell('P1',progress.findings?`${progress.findings.incomplete?'≥':''}${progress.findings.p1}`:'?'),cell('P2',progress.findings?`${progress.findings.incomplete?'≥':''}${progress.findings.p2}`:'?'));
   summary.append(el('span','Details','expand-label'));
   node.append(summary);
   const detail=el('div','','pr-detail');
   if(pr.state==='open'&&!pr.detailError&&onMerge) detail.append(mergeBar(pr,{onMerge,onCodex,askedCodex}));
+  if(pr.state==='merged') {
+    detail.append(el('p',`PR-head CI: ${ciText(pr.ci)} (commit ${pr.headSha.slice(0,10)}). This is historical, pre-merge evidence.`));
+    detail.append(el('p',`Post-merge main CI: ${mergedLabel} (merge commit ${mergedCi.sha?.slice(0,10)||'unavailable'}). Checked independently; unknown is not a failure or a pass.`));
+  }
   const findings=findingsSection(progress.findings,{clearedAt:pr.codex?.state==='clear'?pr.codex.clearedAt:null});
   if(findings) detail.append(findings);
   const flow=el('ol','','review-flow');
@@ -114,7 +121,7 @@ export function renderPull(pr,{open=false,onMerge,onCodex,askedCodex=()=>false}=
 export function renderPulls(container,pulls,{onMerge,onCodex,askedCodex=()=>false}={}) {
   const expanded=new Set([...container.querySelectorAll('details[open]')].map(n=>n.dataset.number));
   container.replaceChildren();
-  const headings=el('div','','pr-summary list-head');for(const title of ['PR','Merge','CI','Codex','#Reviews','#Commits','#P1','#P2']) headings.append(el('span',title));headings.setAttribute('aria-hidden','true');container.append(headings);
+  const headings=el('div','','pr-summary list-head');for(const title of ['PR','Merge','PR CI','Main CI','Codex','#Reviews','#Commits','#P1','#P2']) headings.append(el('span',title));headings.setAttribute('aria-hidden','true');container.append(headings);
   for(const pr of pulls) container.append(renderPull(pr,{open:expanded.has(String(pr.number)),onMerge,onCodex,askedCodex:kind=>askedCodex(kind,pr)}));
   if(!pulls.length) container.append(el('p','No pull requests found.'));
 }

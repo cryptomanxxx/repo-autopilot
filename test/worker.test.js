@@ -700,7 +700,7 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
   let time=1000;
   const {env,store}=environment({time:()=>time});
   const calls=[];
-  const pr=(number,state)=>({number,title:`PR ${number}`,html_url:`https://github.com/owner/repo/pull/${number}`,state:state==='merged'?'closed':state,merged_at:state==='merged'?'2026-10-01T00:00:00Z':null,draft:false,head:{sha:String(number).repeat(40).slice(0,40)},created_at:'2026-10-01T00:00:00Z',updated_at:`2026-10-0${number}T00:00:00Z`});
+  const pr=(number,state)=>({number,title:`PR ${number}`,html_url:`https://github.com/owner/repo/pull/${number}`,state:state==='merged'?'closed':state,merged_at:state==='merged'?'2026-10-01T00:00:00Z':null,merge_commit_sha:state==='merged'?'a'.repeat(40):null,draft:false,head:{sha:String(number).repeat(40).slice(0,40)},created_at:'2026-10-01T00:00:00Z',updated_at:`2026-10-0${number}T00:00:00Z`});
   const pulls=[pr(1,'open'),pr(2,'merged')];
   const fetchImpl=async(url,options={})=>{
     calls.push({url,options});
@@ -771,6 +771,14 @@ test('dashboard API serves live GitHub data per pull request and caches it brief
   assert.match(partial.detailError,/503/);assert.equal(partial.unresolvedThreads,0,'verification still succeeds next to a partial failure');
   assert.ok(store.getCache('pull:owner/repo:2:y'),'a partial failure is cached briefly');
   time+=31000;assert.equal(store.getCache('pull:owner/repo:2:y'),null,'and retried after 30 seconds');
+  // A transient post-merge check failure is independent of PR-head details, but must expire quickly.
+  const mergeFlaky=async(url,options)=>url.includes(`/commits/${'a'.repeat(40)}/check-runs`)?new Response('{}',{status:503}):fetchImpl(url,options);
+  const mergePartial=await (await handle(request('/api/dashboard/pulls/2?updated=merge-error',{cookie:auth.cookie}),env,{fetchImpl:mergeFlaky,now:()=>time})).json();
+  assert.equal(mergePartial.detailError,null,'merged CI failures do not rewrite PR-head detail errors');
+  assert.equal(mergePartial.postMergeCi.available,false);
+  assert.ok(store.getCache('pull:owner/repo:2:merge-error'));
+  time+=31000;
+  assert.equal(store.getCache('pull:owner/repo:2:merge-error'),null,'unavailable post-merge CI is retried after 30 seconds');
   const limited=async(url,options)=>url.includes('/actions/runs')||url.endsWith('/repos/owner/repo')?new Response('{}',{status:429}):fetchImpl(url,options);
   assert.equal((await handle(request('/api/dashboard?fresh=1',{cookie:auth.cookie}),env,{fetchImpl:limited,now:()=>time})).status,429,'rate limits keep their status');
   calls.length=0;
@@ -838,6 +846,15 @@ test('store adds the repository column to conversations saved before repository 
   store.setDashboardCache('pull:owner/repo:8:x',{},60000,{repository:'owner/repo',...store.startDashboardLoad('owner/repo'),pull:{number:8,sha:late}});
   assert.deepEqual(store.getCache('pull:owner/repo:8:x'),{},'the reload is cached');
   assert.equal(store.invalidate('owner/repo',{sha:late}),5,'later events for the commit find the pull request');
+  const merged='2'.repeat(40),head='3'.repeat(40);
+  store.setDashboardCache('pull:owner/repo:9:x',{number:9},60000,{repository:'owner/repo',...store.startDashboardLoad('owner/repo'),pull:{number:9,sha:head,mergeSha:merged}});
+  assert.deepEqual(store.getCache('pull:owner/repo:9:x'),{number:9});
+  assert.equal(store.invalidate('owner/repo',{sha:merged}),6,'merged-commit checks invalidate the cached PR, not just its original head');
+  assert.equal(store.getCache('pull:owner/repo:9:x'),null);
+  const beforeMerged=store.startDashboardLoad('owner/repo'),lateMerged='4'.repeat(40);
+  assert.equal(store.invalidate('owner/repo',{sha:lateMerged}),null);
+  store.setDashboardCache('pull:owner/repo:10:x',{},60000,{repository:'owner/repo',...beforeMerged,pull:{number:10,sha:'5'.repeat(40),mergeSha:lateMerged}});
+  assert.equal(store.getCache('pull:owner/repo:10:x'),null,'merged check events arriving during a load cannot leave stale CI cached');
 });
 
 test('the repository list shows where the app is installed and limits every API call to it',async()=>{

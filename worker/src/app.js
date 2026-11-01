@@ -387,7 +387,7 @@ export async function dashboardData({store,token,fetchImpl,repository,number=nul
   }
   // A result with a failed part is cached only briefly, so a transient GitHub error does not stick. A pull
   // request that changed while loading is not cached at all: the next load should read it again.
-  if(!changed) await store.setDashboardCache(key,value,value.detailError?ERROR_CACHE_MS:number&&value.state!=='open'&&value.unresolvedThreads!==null?CLOSED_CACHE_MS:OPEN_CACHE_MS,{repository,...load,pull:number?{number,sha:value.headSha}:null});
+  if(!changed) await store.setDashboardCache(key,value,value.detailError || value.postMergeCi?.sha && !value.postMergeCi.available ? ERROR_CACHE_MS : number&&value.state!=='open'&&value.unresolvedThreads!==null ? CLOSED_CACHE_MS : OPEN_CACHE_MS,{repository,...load,pull:number?{number,sha:value.headSha,mergeSha:value.postMergeCi?.sha||null}:null});
   return value;
 }
 
