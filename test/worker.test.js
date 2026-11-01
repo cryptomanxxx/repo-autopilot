@@ -838,6 +838,15 @@ test('store adds the repository column to conversations saved before repository 
   store.setDashboardCache('pull:owner/repo:8:x',{},60000,{repository:'owner/repo',...store.startDashboardLoad('owner/repo'),pull:{number:8,sha:late}});
   assert.deepEqual(store.getCache('pull:owner/repo:8:x'),{},'the reload is cached');
   assert.equal(store.invalidate('owner/repo',{sha:late}),5,'later events for the commit find the pull request');
+  const merged='2'.repeat(40),head='3'.repeat(40);
+  store.setDashboardCache('pull:owner/repo:9:x',{number:9},60000,{repository:'owner/repo',...store.startDashboardLoad('owner/repo'),pull:{number:9,sha:head,mergeSha:merged}});
+  assert.deepEqual(store.getCache('pull:owner/repo:9:x'),{number:9});
+  assert.equal(store.invalidate('owner/repo',{sha:merged}),6,'merged-commit checks invalidate the cached PR, not just its original head');
+  assert.equal(store.getCache('pull:owner/repo:9:x'),null);
+  const beforeMerged=store.startDashboardLoad('owner/repo'),lateMerged='4'.repeat(40);
+  assert.equal(store.invalidate('owner/repo',{sha:lateMerged}),null);
+  store.setDashboardCache('pull:owner/repo:10:x',{},60000,{repository:'owner/repo',...beforeMerged,pull:{number:10,sha:'5'.repeat(40),mergeSha:lateMerged}});
+  assert.equal(store.getCache('pull:owner/repo:10:x'),null,'merged check events arriving during a load cannot leave stale CI cached');
 });
 
 test('the repository list shows where the app is installed and limits every API call to it',async()=>{
