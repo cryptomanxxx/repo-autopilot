@@ -17,6 +17,7 @@ export class ChatStoreLogic {
     sql.exec(`CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS versions (repository TEXT PRIMARY KEY, version INTEGER NOT NULL)`);
     sql.exec(`CREATE TABLE IF NOT EXISTS heads (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY (repository, number))`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS merged_heads (repository TEXT NOT NULL, number INTEGER NOT NULL, sha TEXT NOT NULL, PRIMARY KEY (repository, number))`);
     sql.exec(`CREATE TABLE IF NOT EXISTS commit_events (repository TEXT NOT NULL, sha TEXT NOT NULL, at INTEGER NOT NULL)`);
     // Codex review requests, one per pull request head commit; kept for good so none is ever posted twice.
     // Asking Codex to fix its findings is no longer offered; its table goes.
@@ -170,9 +171,15 @@ export class ChatStoreLogic {
     if(this.getVersion(repo)!==version) return;
     if(pull&&/^[0-9a-f]{40}$/.test(pull.sha||'')) {
       this.sql.exec('INSERT OR REPLACE INTO heads (repository, number, sha) VALUES (?, ?, ?)',repo,pull.number,pull.sha);
-      // A check or status event for this commit arrived while it was loaded for the first time: the data
-      // may predate it, so it is not cached and open dashboards reload once.
-      if(this.rows('DELETE FROM commit_events WHERE repository = ? AND sha = ? AND at >= ? RETURNING sha',repo,pull.sha,started).length) {this.bump(repo);return;}
+      // Register the merged commit as a second independent webhook invalidation dependency.
+      // Remove stale mappings when the PR has no verified merge SHA.
+      this.sql.exec('DELETE FROM merged_heads WHERE repository = ? AND number = ?',repo,pull.number);
+      if(/^[0-9a-f]{40}$/.test(pull.mergeSha||'')) this.sql.exec('INSERT INTO merged_heads (repository, number, sha) VALUES (?, ?, ?)',repo,pull.number,pull.mergeSha);
+      // Events arriving during the load must invalidate either commit's freshly loaded snapshot.
+      const watched=[pull.sha,...(/^[0-9a-f]{40}$/.test(pull.mergeSha||'')&&pull.mergeSha!==pull.sha?[pull.mergeSha]:[])];
+      for(const sha of watched) {
+        if(this.rows('DELETE FROM commit_events WHERE repository = ? AND sha = ? AND at >= ? RETURNING sha',repo,sha,started).length) {this.bump(repo);return;}
+      }
     }
     this.setCache(key,value,ms);
   }
@@ -186,6 +193,7 @@ export class ChatStoreLogic {
     const repo=repository.toLowerCase(),like=value=>value.replace(/[\\%_]/g,'\\$&');
     const numbers=new Set(pulls);
     if(sha) for(const {number} of this.rows('SELECT number FROM heads WHERE repository = ? AND sha = ?',repo,sha)) numbers.add(number);
+    if(sha) for(const {number} of this.rows('SELECT number FROM merged_heads WHERE repository = ? AND sha = ?',repo,sha)) numbers.add(number);
     if(!overview&&!head&&!numbers.size) {
       // No loaded pull request has this commit yet; one being loaded right now may, see setDashboardCache.
       if(sha) {
