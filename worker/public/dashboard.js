@@ -1,4 +1,4 @@
-import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,link} from './dashboard-view.js';
+import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,link} from './dashboard-view.js?v=codex-retry-94';
 
 const $=id=>document.getElementById(id);
 const REFRESH_MS=180000,VERSION_MS=15000;
