@@ -95,7 +95,13 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
     }
     if(!url.pathname.startsWith('/api/')&&!url.pathname.startsWith('/auth/')) {
       if(!env.ASSETS) return withHeaders(new Response('Not found',{status:404}),secure);
-      return withHeaders(await env.ASSETS.fetch(request),secure);
+      const asset=await env.ASSETS.fetch(request);
+      // The HTML and unbundled ES modules must revalidate together after deployment.
+      // An older dashboard module can otherwise hide actions for new server states.
+      if(url.pathname==='/'||url.pathname.endsWith('.html')||url.pathname.endsWith('.js')||url.pathname.endsWith('.css')) {
+        return withHeaders(asset,{...secure,'Cache-Control':'no-cache, must-revalidate'});
+      }
+      return withHeaders(asset,secure);
     }
     // GitHub signs webhook deliveries, so they need neither the app's settings nor its browser origin.
     if(url.pathname==='/api/webhook') return withHeaders(await webhook(request,env,chatStore(env)),secure);
