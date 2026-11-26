@@ -13,10 +13,10 @@ import {PublicError} from './errors.js';
 export function githubClient({repository,token,fetchImpl=fetch}) {
   if(repositoryName(repository)!==repository) throw new PublicError('Invalid repository configuration.');
   const headers=accept=>({Authorization:`Bearer ${token}`,Accept:accept,'User-Agent':'repo-autopilot-chat','X-GitHub-Api-Version':'2022-11-28'});
-  async function api(path,{method='GET',body}={}) {
+  async function api(path,{method='GET',body,noBody=false}={}) {
     const response=await fetchImpl(`${API}/repos/${repository}${path?'/'+path:''}`,{method,headers:{...headers('application/vnd.github+json'),...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(20000)});
     if(!response.ok) throw new GitHubError(response.status,path);
-    return response.status===204?null:response.json();
+    return noBody||response.status===204?null:response.json();
   }
   return {
     api,
