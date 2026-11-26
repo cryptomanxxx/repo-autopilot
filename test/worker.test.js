@@ -1503,3 +1503,24 @@ test('Run CI uses authenticated PR-head approval and never retries successful jo
   assert.deepEqual(await (await send()).json(),{outcomes:[]});
   assert.equal(approvals,1);assert.equal(retries,1);
 });
+
+test('authenticated explicit retry recovers rejected bot review and deduplicates the observed event',async()=>{
+  const calls=[],{env}=environment(),base=github({calls,codex:'none'});
+  const request={user:{login:'github-actions[bot]'},body:'@codex review',created_at:'2026-10-13T12:00:00Z'};
+  const rejection={user:{login:'chatgpt-codex-connector[bot]'},body:'To use Codex here, [create a Codex account and connect to github](https://chatgpt.com/codex/cloud/settings/connectors).',created_at:'2026-10-13T12:00:03Z'};
+  let comments=[request,rejection];
+  const fetchImpl=(url,options)=>url.endsWith('/issues/7/comments?per_page=100')?Response.json(comments):base(url,options);
+  const auth=await session(env,fetchImpl);
+  const ask=(extra={})=>handle(post('/api/codex-review',auth,{repository:'owner/repo',number:7,sha:'b'.repeat(40),...extra}),env,{fetchImpl});
+  const opts={retry:true,retryAnchor:Date.parse(rejection.created_at)};
+  assert.equal((await ask()).status,409);
+  assert.equal((await ask({...opts,retryAnchor:0})).status,409);
+  assert.deepEqual(await (await ask(opts)).json(),{asked:true});
+  assert.deepEqual(await (await ask(opts)).json(),{asked:true,already:true});
+  const writes=()=>calls.filter(c=>c.method==='POST'&&c.url.endsWith('/issues/7/comments'));
+  assert.equal(writes().length,1);
+  comments=[...comments,{...request,user:{login:'owner'},created_at:'2026-10-13T12:05:00Z'}];
+  assert.equal((await ask(opts)).status,409,'old dashboard event cannot request a new review');
+  assert.deepEqual(await (await ask({retry:true,retryAnchor:Date.parse(comments.at(-1).created_at)})).json(),{asked:true});
+  assert.equal(writes().length,2);
+});
