@@ -6,15 +6,15 @@ test('the dashboard offers merging only after a Codex 👍 and with no known blo
   const pr={codex:{state:'clear'},readiness:{state:'unknown',reasons:['GitHub merge eligibility is not confirmed']}};
   assert.equal(mergeBlocker(pr),'','unverified items are confirmed in the dialog, not blocking');
   assert.equal(mergeBlocker({...pr,readiness:{state:'ready',reasons:[]}}),'');
-  for(const state of ['findings','running','requested','unverified','unknown']) assert.match(mergeBlocker({...pr,codex:{state}}),/Codex 👍/);
+  for(const state of ['findings','running','requested','rejected','unverified','unknown']) assert.match(mergeBlocker({...pr,codex:{state}}),/Codex 👍/);
   assert.match(mergeBlocker({...pr,readiness:{state:'not_ready',reasons:['CI failed']}}),/Not ready: CI failed/);
 });
 
-test('the dashboard offers to ask Codex to review code it has not reviewed, and never to fix',()=>{
+test('the dashboard offers initial review or explicit review retry, never a fix action',()=>{
   const offered=state=>CODEX_ACTIONS.filter(a=>a.show(state)).map(a=>a.kind);
-  assert.deepEqual(offered('findings'),[],'findings are fixed in the pull request, not by asking Codex');
-  for(const state of ['unknown','unverified']) assert.deepEqual(offered(state),['review']);
-  for(const state of ['clear','running','requested','incomplete']) assert.deepEqual(offered(state),[],'nothing to ask while Codex is busy or done, or its history is cut off');
+  for(const state of ['unknown','unverified','clear','running','requested','rejected','findings']) assert.deepEqual(offered(state),['review']);
+  assert.deepEqual(offered('incomplete'),[],'incomplete history remains blocked');
+  assert.ok(CODEX_ACTIONS.every(a=>a.kind==='review'),'no action asks Codex to fix findings');
 });
 
 test('a Codex finding is fixed when its thread is resolved or a later Codex 👍 cleared the code, never just because code changed',()=>{

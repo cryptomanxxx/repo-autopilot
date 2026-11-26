@@ -1,3 +1,4 @@
+import {isCodexAuthRejection} from './codex.js';
 const bot = 'chatgpt-codex-connector[bot]';
 const shaOf = body => (body || '').match(/\*\*Reviewed commit:\*\*\s*`([a-f0-9]{7,40})`/i)?.[1];
 const stamp = value => typeof value === 'number' ? value : Date.parse(value) || 0;
@@ -28,6 +29,7 @@ export function reviewProgress(head, {reviews = [], comments = [], inline = [], 
   const add=(kind,label,at,commit,url)=>{if(stamp(at)) events.push({kind,label,at:new Date(at).toISOString(),commit,url});};
   add('opened','PR opened',openedAt);
   for(const c of comments) if(c.user?.login !== bot && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '')) add('requested','Codex review requested',c.created_at,undefined,c.html_url);
+  for(const c of comments.filter(isCodexAuthRejection)) add('rejected','Codex review request rejected: account connection required',c.created_at,undefined,c.html_url);
   // A finding can also sit in a review's own body; it carries the review's time and commit.
   const reviewFindings=reviews.filter(r=>r.user?.login === bot && /(?:badge\/|\[)P[0-3](?:-|\])/i.test(r.body || '')).map(r=>({...r,id:`review:${r.id}`,created_at:r.submitted_at,commit_id:r.commit_id}));
   const findingComments=[...comments,...inline,...reviewFindings].filter(c=>c.user?.login === bot && !c.in_reply_to_id && !(c.body || '').includes('codex-pull-request-review-summary'));
@@ -103,6 +105,7 @@ export function mergeReadiness(pr, {ci, codex, checksComplete = true, verificati
   if(ci === 'pending') reasons.push('CI is running');
   if(codex?.state === 'findings') reasons.push('Codex findings need attention');
   if(['running','requested'].includes(codex?.state)) reasons.push('Waiting for Codex');
+  if(codex?.state==='rejected') reasons.push('Codex review request rejected: account connection required');
   if(verification?.unresolvedThreads > 0) reasons.push('Unresolved review conversations');
   if(verification?.reviewDecision === 'CHANGES_REQUESTED') reasons.push('A reviewer requested changes');
   if(verification?.reviewDecision === 'REVIEW_REQUIRED') reasons.push('Required approval is missing');

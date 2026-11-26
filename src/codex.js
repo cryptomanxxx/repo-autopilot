@@ -2,6 +2,8 @@ const bot = 'chatgpt-codex-connector[bot]';
 const isBot = item => item.user?.login === bot;
 const matchesHead = (sha, head) => typeof sha === 'string' && /^[a-f0-9]{7,40}$/i.test(sha) && head.toLowerCase().startsWith(sha.toLowerCase());
 const time = value => Date.parse(value) || 0;
+// Match the observed connector response, not arbitrary comments mentioning account setup.
+export const isCodexAuthRejection = c => isBot(c) && /^To use Codex here,\s*\[create a Codex account and connect to github\]\(https:\/\/chatgpt\.com\/codex\/cloud\/settings\/connectors\)\.?\s*$/i.test((c.body || '').trim());
 
 // Reactions belong to a PR, not a commit. Require separate current-head evidence.
 export function codexStatus(head, {reviews = [], comments = [], inline = [], reactions = [], truncated = false, headAt = null} = {}) {
@@ -38,10 +40,16 @@ export function codexStatus(head, {reviews = [], comments = [], inline = [], rea
   // earlier code, so it does not count as a request for this commit.
   const since=time(headAt);
   const request=comments.filter(c=>!isBot(c) && /@codex\s+(?:security\s+)?review\b/i.test(c.body || '') && time(c.created_at)>=since).reduce((at,c)=>Math.max(at,time(c.created_at)),0);
-  if(latest && request>latest.at) return result('requested','Codex: review requested (commit unverified)');
+  const rejected=comments.filter(c=>isCodexAuthRejection(c) && request && time(c.created_at)>=request).sort((a,b)=>time(b.created_at)-time(a.created_at))[0];
+  // The rejection is PR-wide, not commit-bound. It can block but never establish clearance.
+  // A later request or current-head outcome supersedes it; on a tie fail closed.
+  const rejectionAt=rejected?time(rejected.created_at):0;
+  if(rejected && (!latest || rejectionAt>=latest.at)) return result('rejected','Codex: review request rejected — account connection required',{url:rejected.html_url,requestAt:request,retryAnchor:rejectionAt});
+  const pending=()=>result('requested','Codex: review requested (commit unverified)',{requestAt:request,retryAnchor:request});
+  if(latest && request>=latest.at && request) return pending();
   // A clearance keeps its time, so the dashboard counts it only for findings reported before it.
-  if(latest) {const {at,...event}=latest;return event.state === 'clear' && at ? {...event,clearedAt:new Date(at).toISOString()} : event;}
-  if(request) return result('requested','Codex: review requested (commit unverified)');
+  if(latest) {const {at,...event}=latest;return {...event,requestAt:request,retryAnchor:Math.max(at,request),...(event.state === 'clear' && at ? {clearedAt:new Date(at).toISOString()} : {})};}
+  if(request) return pending();
   if(reactions.some(r=>isBot(r) && ['+1','eyes'].includes(r.content)) || [...reviews,...comments,...inline].some(isBot)) return result('unverified','Codex: activity found; current commit unverified');
   return result('unknown','Codex: no review evidence found');
 }

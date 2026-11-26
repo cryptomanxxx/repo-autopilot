@@ -15,10 +15,9 @@ export function mergeBlocker(pr) {
   if(pr.readiness?.state==='not_ready') return `Not ready: ${pr.readiness.reasons.join('; ')}.`;
   return '';
 }
-// Codex can be asked, once per commit, to review code it has not reviewed yet; an incomplete history
-// does not offer it, since it may hide a review.
+// Initial request and explicit retry are separate actions; incomplete history fails closed.
 export const CODEX_ACTIONS=[
-  {kind:'review',show:state=>['unknown','unverified'].includes(state),label:'Ask Codex to review',asked:'Codex review requested',title:'Comments "@codex review" on the pull request.'},
+  {kind:'review',show:state=>['unknown','unverified','requested','running','rejected','clear','findings'].includes(state),label:'Ask Codex to review',asked:'Codex review requested',title:'Comments "@codex review" on the pull request.'},
 ];
 function mergeBar(pr,{onMerge,onCodex,onCI,askedCodex}) {
   const bar=el('div','','merge-bar'),button=el('button','Merge','merge');
@@ -29,9 +28,11 @@ function mergeBar(pr,{onMerge,onCodex,onCI,askedCodex}) {
   bar.append(button);
   for(const action of CODEX_ACTIONS) {
     if(!onCodex||!action.show(pr.codex?.state)) continue;
-    const asked=askedCodex(action.kind),ask=el('button',asked?action.asked:action.label,`secondary codex-${action.kind}`);
-    ask.type='button';ask.disabled=asked;ask.title=action.title;
-    ask.onclick=()=>onCodex(action,pr,ask);
+    const retry=['requested','running','rejected','clear','findings'].includes(pr.codex?.state);
+    const asked=!retry&&askedCodex(action.kind),label=pr.codex?.state==='rejected'?'Retry Codex review':retry?'Request review again':action.label;
+    const ask=el('button',asked?action.asked:label,`secondary codex-${action.kind}`);
+    ask.type='button';ask.disabled=asked||!pr.headSha||(retry&&!pr.codex?.retryAnchor);ask.title=retry?'Explicitly request another Codex review with your GitHub account.':action.title;
+    ask.onclick=()=>onCodex({...action,retry},pr,ask);
     bar.append(ask);
   }
   if(onCI&&!pr.draft&&pr.headSha) {
@@ -90,7 +91,7 @@ export function renderPull(pr,{open=false,onMerge,onCodex,onCI,askedCodex=()=>fa
   const summary=el('summary','','pr-summary');
   const progress=pr.progress;
   const waiting=['running','requested'].includes(pr.codex.state);
-  const codexText=pr.codex.state==='clear'?'✅ Reviewed · clear':pr.codex.state==='findings'?'⚠ Findings':waiting?'🔄 Pending':pr.codex.state==='incomplete'?'❔ History incomplete':progress.currentCompleted?'✓ Reviewed · unverified':'❔ Unverified';
+  const codexText=pr.codex.state==='clear'?'✅ Reviewed · clear':pr.codex.state==='findings'?'⚠ Findings':pr.codex.state==='rejected'?'❌ Request rejected':waiting?'🔄 Pending':pr.codex.state==='incomplete'?'❔ History incomplete':progress.currentCompleted?'✓ Reviewed · unverified':'❔ Unverified';
   const mergedCi=pr.postMergeCi || {state:'unknown',complete:false,available:false};
   const ciText=state=>state==='success'?'✅ Passed':state==='failure'?'❌ Failed':state==='pending'?'🔄 Running':'❔ Unknown';
   const mergedLabel=pr.state==='merged'?(mergedCi.available===false?'❔ Unavailable':mergedCi.complete===false?'❔ Incomplete':ciText(mergedCi.state)):'—';
@@ -112,6 +113,7 @@ export function renderPull(pr,{open=false,onMerge,onCodex,onCI,askedCodex=()=>fa
   detail.append(el('p',`${['running','findings','clear'].includes(pr.codex.state)||progress.currentCompleted?'✅':'❔'} Codex review acknowledged`));
   detail.append(el('p',`${waiting?'🔄':progress.currentCompleted?'✅':'⏳'} Latest code review ${waiting?'pending':progress.currentCompleted?'completed':'not verified'}`));
   detail.append(el('p',pr.codex.label,`codex-status codex-${pr.codex.state}`));
+  if(pr.codex.state==='rejected'&&pr.codex.url) detail.append(link('View Codex rejection on GitHub',pr.codex.url));
   detail.append(el('p',`Completed reviews: ${progress.reviewCount===null?'unknown':`at least ${progress.reviewCount}`} · Commits after review: ${progress.updatesAfterReview??'unknown'}`));
   detail.append(el('p',`Historical Codex findings: ${progress.findings?.p1??'?'} P1 · ${progress.findings?.p2??'?'} P2${progress.findings?.incomplete?' (incomplete history)':''} · Unresolved review threads: ${pr.unresolvedThreads??'unverified'}`));
   detail.append(el('p','Commits count commits after review; they do not confirm that findings were fixed.','muted'));

@@ -89,3 +89,10 @@ test('P0 and P3 findings, review-body findings and permalinked comments are all 
  assert.deepEqual(p.findings.items.map(f=>[f.priority,f.title,f.path,f.line,f.current]).sort(),[['P0','P0 headline','src/x.js',7,true],['P1','P1 headline',null,null,true],['P3','P3 headline','a.js',1,true]]);
  assert.equal(p.findings.p1,1);assert.equal(p.findings.p2,0,'only P1 and P2 feed the counts');
 });
+
+test('rejected Codex review blocks merge even with green CI',()=>{
+  const pr={state:'open',mergeable:true};
+  const result=mergeReadiness(pr,{ci:'success',codex:{state:'rejected'},verification:{complete:true,mergeStateStatus:'CLEAN',unresolvedThreads:0}});
+  assert.equal(result.state,'not_ready');
+  assert.match(result.reasons.join(' '),/request rejected/);
+});
