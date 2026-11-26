@@ -99,7 +99,7 @@ export async function handle(request,env,{fetchImpl=fetch,now=Date.now}={}) {
       // The HTML and unbundled ES modules must revalidate together after deployment.
       // An older dashboard module can otherwise hide actions for new server states.
       if(url.pathname==='/'||url.pathname.endsWith('.html')||url.pathname.endsWith('.js')||url.pathname.endsWith('.css')) {
-        return withHeaders(asset,{...secure,'Cache-Control':'no-cache, must-revalidate'});
+        return withHeaders(asset,secure,{'Cache-Control':'no-cache, must-revalidate'});
       }
       return withHeaders(asset,secure);
     }
