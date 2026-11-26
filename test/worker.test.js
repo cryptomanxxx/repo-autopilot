@@ -1484,19 +1484,22 @@ test('Run CI selects only latest eligible workflows of this exact PR head',()=>{
 test('Run CI uses authenticated PR-head approval and never retries successful jobs',async()=>{
   const calls=[],{env}=environment(),base=github({calls}),sha='b'.repeat(40),repo={full_name:'owner/repo'};
   const run={id:42,workflow_id:2,event:'pull_request',head_sha:sha,head_branch:'autopilot/chat-abc-2',repository:repo,head_repository:repo,pull_requests:[{number:7,base:{ref:'main'}}],status:'completed',conclusion:'action_required'};
-  let approvals=0;
+  const retry={...run,id:43,workflow_id:3,conclusion:'failure'};
+  let approvals=0,retries=0;
   const fetchImpl=async(url,options)=>{
-    if(url.endsWith('/actions/runs?event=pull_request&head_sha='+sha+'&per_page=100')) return Response.json({total_count:1,workflow_runs:[run]});
+    if(url.endsWith('/actions/runs?event=pull_request&head_sha='+sha+'&per_page=100')) return Response.json({total_count:2,workflow_runs:[run,retry]});
     if(url.endsWith('/actions/runs/42')) return Response.json(run);
-    if(url.endsWith('/actions/runs/42/approve')&&options.method==='POST') {approvals++;run.conclusion='success';return new Response(null,{status:204});}
+    if(url.endsWith('/actions/runs/43')) return Response.json(retry);
+    if(url.endsWith('/actions/runs/43/rerun-failed-jobs')&&options.method==='POST') {retries++;retry.conclusion='success';return new Response(null,{status:201});}
+    if(url.endsWith('/actions/runs/42/approve')&&options.method==='POST') {approvals++;run.conclusion='success';return new Response(null,{status:201});}
     return base(url,options);
   };
   const auth=await session(env,fetchImpl);
   const send=(head=sha,headers={})=>handle(post('/api/run-ci',auth,{repository:'owner/repo',number:7,sha:head},headers),env,{fetchImpl});
   assert.equal((await send('c'.repeat(40))).status,409);
   assert.equal((await send(sha,{'X-CSRF-Token':'wrong'})).status,403);
-  assert.equal(approvals,0);
-  assert.deepEqual(await (await send()).json(),{outcomes:[{id:42,action:'approve',accepted:true}]});
+  assert.equal(approvals,0);assert.equal(retries,0);
+  assert.deepEqual(await (await send()).json(),{outcomes:[{id:42,action:'approve',accepted:true},{id:43,action:'rerun-failed-jobs',accepted:true}]});
   assert.deepEqual(await (await send()).json(),{outcomes:[]});
-  assert.equal(approvals,1);
+  assert.equal(approvals,1);assert.equal(retries,1);
 });
