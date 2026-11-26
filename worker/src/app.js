@@ -552,7 +552,7 @@ async function runPullCI(body,{store,github,access}) {
       const matches=a=>a.id===entry.id&&a.action===entry.action;
       if(!ciRunActions(refreshed.workflow_runs,latest,repository).some(matches)||!ciRunActions([run],latest,repository).some(matches)) continue;
       try {
-        await client.api(`actions/runs/${entry.id}/${entry.action}`,{method:'POST'});
+        await client.api(`actions/runs/${entry.id}/${entry.action}`,{method:'POST',noBody:true});
         outcomes.push({...entry,accepted:true});
       } catch(error) {
         if(!(error instanceof GitHubError)||error.status===401) throw error;
