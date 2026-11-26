@@ -235,6 +235,7 @@ async function route(request,env,config,url,{fetchImpl,now}) {
   if(url.pathname==='/api/chat') return run(()=>chat(body,{env,store,github,config,access,fetchImpl}));
   if(url.pathname==='/api/pull-request') return run(()=>pullRequest(body,{store,github,config,access}));
   if(url.pathname==='/api/merge') return run(()=>mergePullRequest(body,{store,github,access}));
+  if(url.pathname==='/api/run-ci') return run(()=>runPullCI(body,{store,github,access}));
   if(url.pathname==='/api/codex-review') return run(()=>askCodex('review',body,{store,github,access}));
   if(url.pathname==='/api/connections/revoke') {
     if(typeof body.id!=='string'||!/^[0-9a-f]{32}$/.test(body.id)) throw new UserError(400,'Invalid request.');
@@ -507,6 +508,57 @@ async function askCodex(kind,body,{store,github,access}) {
   }
   await store.invalidate(repository,{pulls:[number]});
   return json(200,{asked:true});
+}
+
+
+ // Select only existing PR-triggered runs tied to the exact head and PR, not push/deploy/manual runs.
+export function ciRunActions(runs,pull,repository) {
+  const same=name=>typeof name==='string'&&name.toLowerCase()===repository.toLowerCase();
+  return runs.filter(run=>Number.isSafeInteger(run.id)&&run.id>0&&run.event==='pull_request'&&
+    run.head_sha===pull.head.sha&&run.head_branch===pull.head.ref&&same(run.repository?.full_name)&&
+    same(run.head_repository?.full_name)&&same(pull.head.repo?.full_name)&&
+    run.pull_requests?.some(pr=>pr.number===pull.number&&pr.base?.ref===pull.base?.ref)&&
+    ['completed','action_required'].includes(run.status)&&
+    ['action_required','failure','timed_out'].includes(run.conclusion))
+    .map(run=>({id:run.id,action:run.conclusion==='action_required'?'approve':'rerun-failed-jobs'}));
+}
+
+async function runPullCI(body,{store,github,access}) {
+  if(typeof body.repository!=='string'||!Number.isSafeInteger(body.number)||body.number<1||
+     typeof body.sha!=='string'||!/^[0-9a-f]{40}$/.test(body.sha)) throw new UserError(400,'Reload the pull request status first.');
+  const repository=await resolveRepository(body.repository,access),number=body.number,client=github(repository);
+  const lock=randomHex(16);
+  if(!await store.acquireLock('ci',lock,120000)) throw new UserError(429,'A CI request is already in progress.');
+  try {
+    const current=async()=>{
+      const pull=await client.api(`pulls/${number}`);
+      if(pull.state!=='open'||pull.merged||pull.draft||pull.head?.sha!==body.sha) throw new UserError(409,'PR closed, draft or changed. Reload its status.');
+      return pull;
+    };
+    const pull=await current();
+    const result=await client.api(`actions/runs?event=pull_request&head_sha=${body.sha}&per_page=100`);
+    if(!Array.isArray(result.workflow_runs)||result.total_count>result.workflow_runs.length||result.workflow_runs.length>=100)
+      throw new UserError(409,'Workflow history incomplete. Use the PR on GitHub.');
+    const actions=ciRunActions(result.workflow_runs,pull,repository);
+    if(actions.length>10) throw new UserError(409,'Too many eligible runs. Use GitHub to select them.');
+    const outcomes=[];
+    for(const entry of actions) {
+      // Re-read both the PR and run before each write; never rerun a successful or active run.
+      const latest=await current(),run=await client.api(`actions/runs/${entry.id}`);
+      if(!ciRunActions([run],latest,repository).some(a=>a.id===entry.id&&a.action===entry.action)) continue;
+      try {
+        await client.api(`actions/runs/${entry.id}/${entry.action}`,{method:'POST'});
+        outcomes.push({...entry,accepted:true});
+      } catch(error) {
+        if(!(error instanceof GitHubError)||error.status===401) throw error;
+        outcomes.push({...entry,accepted:false,status:error.status});
+      }
+    }
+    return json(200,{outcomes});
+  } finally {
+    await store.invalidate(repository,{overview:true,pulls:[number]});
+    await store.releaseLock('ci',lock);
+  }
 }
 
 // Merges a pull request from the dashboard, exactly at the head commit the owner saw checked, once Codex
