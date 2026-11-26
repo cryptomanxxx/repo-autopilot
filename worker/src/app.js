@@ -464,11 +464,11 @@ export function pullDescription({request,explanation,changes,sha}) {
 }
 
 // Asks Codex on the pull request to review the current code. The comment is posted with the owner's
-// GitHub account, at most once per head commit, and only while Codex's state for the head shown still
-// calls for it.
+// GitHub account. Initial requests are idempotent per head; explicit retries are idempotent
+// per observed review/request event, and use the same head and authorization checks.
 const CODEX_REQUESTS={
   // A review is asked for only when there is no review evidence at all for the current commit.
-  review:{comment:'@codex review',wanted:state=>({findings:'Codex already reviewed the current code and has findings.',clear:'Codex already cleared the current code.',running:'Codex is reviewing the current code.',requested:'A Codex review was already requested.',incomplete:'its Codex history is too long to check here; request a review on GitHub if needed.'})[state]||''},
+  review:{comment:'@codex review',wanted:state=>({findings:'Codex already reviewed the current code and has findings.',clear:'Codex already cleared the current code.',running:'Codex is reviewing the current code.',requested:'A Codex review was already requested.',rejected:'Codex rejected the previous request; use Retry Codex review.',incomplete:'its Codex history is too long to check here; request a review on GitHub if needed.'})[state]||''},
 };
 async function askCodex(kind,body,{store,github,access}) {
   const request=CODEX_REQUESTS[kind];
@@ -482,14 +482,21 @@ async function askCodex(kind,body,{store,github,access}) {
   if(pull.head?.sha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
   // A request already made for this commit is answered as such first: once posted, the comment itself
   // changes Codex's state (to requested, for a review), so a retry after a lost response is no error.
-  if(await store.hasCodexRequest(kind,repository,number,body.sha)) return json(200,{asked:true,already:true});
+  if(body.retry!==undefined&&typeof body.retry!=='boolean') throw new UserError(400,'Invalid retry flag.');
+  if(!body.retry&&await store.hasCodexRequest(kind,repository,number,body.sha)) return json(200,{asked:true,already:true});
   // Codex's state may have changed since the dashboard showed it.
   const status=createGitHub({token:access.session.token,fetchImpl:access.fetchImpl,userAgent:'repo-autopilot-chat'});
   const {item}=await status.pullDetails(repository,pull);
   if(item.detailError) throw new UserError(409,`Could not check PR #${number}'s current Codex status: ${item.detailError} Try again.`);
   if(item.state!=='open') {await store.invalidate(repository,{overview:true,pulls:[number]});throw new UserError(409,`PR #${number} is no longer open.`);}
   if(item.headSha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
-  const unwanted=request.wanted(item.codex?.state);
+  const retry=body.retry===true;
+  const retryStates=['requested','running','rejected','clear','findings'];
+  const anchor=item.codex?.retryAnchor;
+  const retryAllowed=retry&&retryStates.includes(item.codex?.state)&&Number.isSafeInteger(anchor)&&anchor>0;
+  if(retry&&!retryAllowed) throw new UserError(409,'Review status changed or no retry evidence. Refresh before requesting again.');
+  const claimSha=retryAllowed?`${body.sha}:retry:${anchor}`:body.sha;
+  const unwanted=retryAllowed?'':request.wanted(item.codex?.state);
   if(unwanted) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number}: ${unwanted}`);}
   // The comment applies to the whole pull request, so its head is read once more right before claiming
   // and posting: a push during the status check must not get a request recorded for the older commit.
@@ -497,12 +504,12 @@ async function askCodex(kind,body,{store,github,access}) {
   if(latest.state!=='open'||latest.merged) {await store.invalidate(repository,{overview:true,pulls:[number]});throw new UserError(409,`PR #${number} is no longer open.`);}
   if(latest.head?.sha!==body.sha) {await store.invalidate(repository,{pulls:[number]});throw new UserError(409,`PR #${number} has new commits since its status was shown. Check it again.`);}
   // Asking again for the same commit is not an error: the button then shows that Codex was asked.
-  if(!await store.claimCodexRequest(kind,repository,number,body.sha)) return json(200,{asked:true,already:true});
+  if(!await store.claimCodexRequest(kind,repository,number,claimSha)) return json(200,{asked:true,already:true});
   try {await client.api(`issues/${number}/comments`,{method:'POST',body:{body:request.comment}});}
   catch(error) {
     // Only a refusal from GitHub proves no comment was posted; after a timeout or a server error the
     // comment may exist, so the claim stays and nothing is posted twice.
-    if(error instanceof GitHubError&&error.status>=400&&error.status<500) await store.releaseCodexRequest(kind,repository,number,body.sha);
+    if(error instanceof GitHubError&&error.status>=400&&error.status<500) await store.releaseCodexRequest(kind,repository,number,claimSha);
     if(error instanceof GitHubError&&[403,404].includes(error.status)) throw new UserError(403,`GitHub refused the comment on PR #${number} (HTTP ${error.status}). Check that the GitHub App has Pull requests set to Read and write.`);
     throw error;
   }
