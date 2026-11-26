@@ -21,3 +21,17 @@ test('a Codex clearance carries the time it was given',()=>{
   assert.equal(codexStatus(head,{comments:[summary()],reactions:[thumb]}).clearedAt,new Date(thumb.created_at).toISOString());
   assert.equal(codexStatus(head,{reactions:[thumb]}).clearedAt,undefined);
 });
+
+test('bot account rejection is distinct from pending and never clears code',()=>{
+  const request={user:{login:'github-actions[bot]'},body:'@codex review',created_at:'2026-10-10T12:02:00Z'};
+  const rejected={user,body:'To use Codex here, [create a Codex account and connect to github](https://chatgpt.com/codex/cloud/settings/connectors).',created_at:'2026-10-10T12:02:03Z',html_url:'https://github.com/a/b/pull/1#issuecomment-1'};
+  const retry={...request,user:{login:'owner'},created_at:'2026-10-10T12:03:00Z'};
+  const state=comments=>codexStatus(head,{comments});
+  assert.equal(state([request,rejected]).state,'rejected');
+  assert.equal(state([request,rejected]).retryAnchor,Date.parse(rejected.created_at));
+  assert.equal(state([request,{...rejected,user:{login:'owner'}}]).state,'requested');
+  assert.equal(state([request,rejected,retry]).state,'requested');
+  assert.equal(state([request,rejected,retry,{user,created_at:'2026-10-10T12:04:00Z',body:"Codex Review: Didn't find any major issues.\\n**Reviewed commit:** `abcdef0123`"}]).state,'clear');
+  assert.equal(codexStatus(head,{comments:[request,rejected],headAt:'2026-10-10T12:05:00Z'}).state,'unverified');
+  assert.equal(codexStatus(head,{comments:[request,rejected],truncated:true}).state,'incomplete');
+});
