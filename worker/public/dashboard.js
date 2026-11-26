@@ -131,14 +131,16 @@ async function runCI(pr,button) {
   }
 }
 
-// Asks Codex to review the head shown; the server posts the comment once per commit.
+// Asks Codex to review the head shown; retries require explicit confirmation.
 async function askCodex(action,pr,button) {
   const target=repository();
+  if(action.retry&&!confirm(`Request another Codex review for PR #${pr.number}? This may duplicate a running review.`)) return;
   button.disabled=true;status(`Asking Codex to review PR #${pr.number}…`);
   try {
-    const {already}=await api(`/api/codex-${action.kind}`,{repository:target,number:pr.number,sha:pr.headSha});
+    const {already}=await api(`/api/codex-${action.kind}`,{repository:target,number:pr.number,sha:pr.headSha,retry:action.retry===true});
     askedCodex.add(`${action.kind}:${target}#${pr.number}@${pr.headSha}`);
     button.textContent=action.asked;
+    if(action.retry) button.disabled=false;
     if(target===repository()) status(already?`Codex was already asked to review PR #${pr.number} at this commit.`:`Asked Codex to review PR #${pr.number}. Its result appears here when done.`);
   } catch(error) {
     button.disabled=false;
