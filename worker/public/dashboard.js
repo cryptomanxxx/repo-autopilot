@@ -68,7 +68,7 @@ export async function loadDashboard({fresh=false}={}) {
     data={...overview,pulls,warnings:[...overview.warnings,...pulls.flatMap(pr=>pr.warnings||[])]};
     // The summary counts the recent pull requests only, not a linked older one shown below them.
     renderSummary($('summary'),extra?{...data,pulls:pulls.slice(0,-1)}:data);
-    renderPulls($('pulls'),data.pulls,{onMerge:mergePull,onCodex:askCodex,askedCodex:(kind,pr)=>pr.codexReviewAsked===true||askedCodex.has(`${kind}:${target}#${pr.number}@${pr.headSha}`)});
+    renderPulls($('pulls'),data.pulls,{onMerge:mergePull,onCodex:askCodex,onCI:runCI,askedCodex:(kind,pr)=>pr.codexReviewAsked===true||askedCodex.has(`${kind}:${target}#${pr.number}@${pr.headSha}`)});
     renderWorkflows($('workflows'),data.workflows);
     // More can exist only when a list came back full.
     $('more-pulls').hidden=overview.pulls.length<pullLimit||pullLimit>=PULLS.max;
@@ -111,6 +111,23 @@ async function mergePull(pr,button) {
     lastLoad=0;reloadAfter=loading;
     if(target===repository()) {status(outcome);notice=outcome;noticeFrom=loads+1;}
     loadDashboard();
+  }
+}
+
+// Explicit owner action; no new workflow dispatch or automatic approval.
+async function runCI(pr,button) {
+  const target=repository();
+  if(!confirm(`Approve waiting PR workflows or retry failed jobs for PR #${pr.number} at ${pr.headSha.slice(0,10)}? Review the changes before approving.`)) return;
+  button.disabled=true;status(`Requesting CI for PR #${pr.number}…`);
+  let outcome;
+  try {
+    const {outcomes}=await api('/api/run-ci',{repository:target,number:pr.number,sha:pr.headSha},120000);
+    const accepted=outcomes.filter(r=>r.accepted).length,refused=outcomes.filter(r=>!r.accepted);
+    outcome=outcomes.length?`GitHub accepted ${accepted} CI requests; ${refused.length} refused. ${refused.length?'Check Actions write permission or approve on GitHub.':'Check live CI status before merging.'}`:'No eligible waiting or failed runs found. Open the PR on GitHub if approval is still required.';
+  } catch(error) {outcome=error.message;}
+  finally {
+    button.disabled=false;lastLoad=0;reloadAfter=loading;
+    if(target===repository()) {status(outcome);notice=outcome;noticeFrom=loads+1;loadDashboard({fresh:true});}
   }
 }
 
