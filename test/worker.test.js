@@ -12,7 +12,7 @@ import {selectContext,parseEdits,applyEdits,findFile,buildMessages,answer,textFi
 import {createHmac,createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
-import {handle,validateImage,webhookTargets,deployedVersion} from '../worker/src/app.js';
+import {handle,validateImage,webhookTargets,deployedVersion,ciRunActions} from '../worker/src/app.js';
 
 // Adapter giving node:sqlite the Durable Object `sql.exec(query, ...bindings).toArray()` shape.
 const sqlite=()=>{const db=new DatabaseSync(':memory:');return {exec:(query,...bindings)=>{const rows=db.prepare(query).all(...bindings);return {toArray:()=>rows};}};};
@@ -1469,3 +1469,37 @@ test('a GitHub callback that throws while finishing a connection is logged as a 
   assert.deepEqual(logged.map(line=>JSON.parse(line)).filter(l=>l.connector==='oauth'),[{connector:'oauth',step:'github',status:500,error:'exception'}]);
 });
 
+
+
+test('Run CI selects only latest eligible workflows of this exact PR head',()=>{
+  const sha='b'.repeat(40),repo={full_name:'owner/repo'};
+  const pull={number:7,head:{sha,ref:'branch',repo},base:{ref:'main'}};
+  const run={id:1,workflow_id:1,event:'pull_request',head_sha:sha,head_branch:'branch',repository:repo,head_repository:repo,pull_requests:[{number:7,base:{ref:'main'}}],status:'completed',conclusion:'action_required'};
+  assert.deepEqual(ciRunActions([run,{...run,id:2,workflow_id:2,conclusion:'failure'}],pull,'owner/repo'),[{id:1,action:'approve'},{id:2,action:'rerun-failed-jobs'}]);
+  for(const change of [{event:'push'},{head_sha:'c'.repeat(40)},{head_branch:'other'},{pull_requests:[]},{pull_requests:[{number:8,base:{ref:'main'}}]},{head_repository:{full_name:'other/repo'}},{status:'in_progress'},{conclusion:'success'}])
+    assert.deepEqual(ciRunActions([{...run,...change}],pull,'owner/repo'),[]);
+  assert.deepEqual(ciRunActions([run,{...run,id:3,conclusion:'success'}],pull,'owner/repo'),[]);
+});
+
+test('Run CI uses authenticated PR-head approval and never retries successful jobs',async()=>{
+  const calls=[],{env}=environment(),base=github({calls}),sha='b'.repeat(40),repo={full_name:'owner/repo'};
+  const run={id:42,workflow_id:2,event:'pull_request',head_sha:sha,head_branch:'autopilot/chat-abc-2',repository:repo,head_repository:repo,pull_requests:[{number:7,base:{ref:'main'}}],status:'completed',conclusion:'action_required'};
+  const retry={...run,id:43,workflow_id:3,conclusion:'failure'};
+  let approvals=0,retries=0;
+  const fetchImpl=async(url,options)=>{
+    if(url.endsWith('/actions/runs?event=pull_request&head_sha='+sha+'&per_page=100')) return Response.json({total_count:2,workflow_runs:[run,retry]});
+    if(url.endsWith('/actions/runs/42')) return Response.json(run);
+    if(url.endsWith('/actions/runs/43')) return Response.json(retry);
+    if(url.endsWith('/actions/runs/43/rerun-failed-jobs')&&options.method==='POST') {retries++;retry.conclusion='success';return new Response(null,{status:201});}
+    if(url.endsWith('/actions/runs/42/approve')&&options.method==='POST') {approvals++;run.conclusion='success';return new Response(null,{status:201});}
+    return base(url,options);
+  };
+  const auth=await session(env,fetchImpl);
+  const send=(head=sha,headers={})=>handle(post('/api/run-ci',auth,{repository:'owner/repo',number:7,sha:head},headers),env,{fetchImpl});
+  assert.equal((await send('c'.repeat(40))).status,409);
+  assert.equal((await send(sha,{'X-CSRF-Token':'wrong'})).status,403);
+  assert.equal(approvals,0);assert.equal(retries,0);
+  assert.deepEqual(await (await send()).json(),{outcomes:[{id:42,action:'approve',accepted:true},{id:43,action:'rerun-failed-jobs',accepted:true}]});
+  assert.deepEqual(await (await send()).json(),{outcomes:[]});
+  assert.equal(approvals,1);assert.equal(retries,1);
+});

@@ -20,7 +20,7 @@ export function mergeBlocker(pr) {
 export const CODEX_ACTIONS=[
   {kind:'review',show:state=>['unknown','unverified'].includes(state),label:'Ask Codex to review',asked:'Codex review requested',title:'Comments "@codex review" on the pull request.'},
 ];
-function mergeBar(pr,{onMerge,onCodex,askedCodex}) {
+function mergeBar(pr,{onMerge,onCodex,onCI,askedCodex}) {
   const bar=el('div','','merge-bar'),button=el('button','Merge','merge');
   const blocker=mergeBlocker(pr);
   button.type='button';button.disabled=Boolean(blocker);
@@ -33,6 +33,13 @@ function mergeBar(pr,{onMerge,onCodex,askedCodex}) {
     ask.type='button';ask.disabled=asked;ask.title=action.title;
     ask.onclick=()=>onCodex(action,pr,ask);
     bar.append(ask);
+  }
+  if(onCI&&!pr.draft&&pr.headSha) {
+    const ci=el('button','Run CI','secondary');ci.type='button';
+    ci.disabled=pr.ci==='success';
+    ci.title='Approve waiting PR workflows or retry failed jobs for this commit.';
+    ci.onclick=()=>onCI(pr,ci);
+    bar.append(ci);
   }
   bar.append(el('span',blocker||'Codex 👍 on the current code. Squash-merges into the default branch after you confirm.','muted'));
   return bar;
@@ -77,7 +84,7 @@ export function findingsSection(findings,{clearedAt=null}={}) {
   return section;
 }
 
-export function renderPull(pr,{open=false,onMerge,onCodex,askedCodex=()=>false}={}) {
+export function renderPull(pr,{open=false,onMerge,onCodex,onCI,askedCodex=()=>false}={}) {
   const node=el('details','','pr-row');
   node.dataset.number=String(pr.number);node.dataset.state=pr.state;node.dataset.attention=String(pr.state==='open'&&pr.readiness.state!=='ready');node.open=open;
   const summary=el('summary','','pr-summary');
@@ -91,7 +98,7 @@ export function renderPull(pr,{open=false,onMerge,onCodex,askedCodex=()=>false}=
   summary.append(el('span','Details','expand-label'));
   node.append(summary);
   const detail=el('div','','pr-detail');
-  if(pr.state==='open'&&!pr.detailError&&onMerge) detail.append(mergeBar(pr,{onMerge,onCodex,askedCodex}));
+  if(pr.state==='open'&&!pr.detailError&&onMerge) detail.append(mergeBar(pr,{onMerge,onCodex,onCI,askedCodex}));
   if(pr.state==='merged') {
     detail.append(el('p',`PR-head CI: ${ciText(pr.ci)} (commit ${pr.headSha.slice(0,10)}). This is historical, pre-merge evidence.`));
     detail.append(el('p',`Post-merge main CI: ${mergedLabel} (merge commit ${mergedCi.sha?.slice(0,10)||'unavailable'}). Checked independently; unknown is not a failure or a pass.`));
@@ -118,11 +125,11 @@ export function renderPull(pr,{open=false,onMerge,onCodex,askedCodex=()=>false}=
 }
 
 // Keeps the rows the viewer has expanded open across refreshes.
-export function renderPulls(container,pulls,{onMerge,onCodex,askedCodex=()=>false}={}) {
+export function renderPulls(container,pulls,{onMerge,onCodex,onCI,askedCodex=()=>false}={}) {
   const expanded=new Set([...container.querySelectorAll('details[open]')].map(n=>n.dataset.number));
   container.replaceChildren();
   const headings=el('div','','pr-summary list-head');for(const title of ['PR','Merge','PR CI','Main CI','Codex','#Reviews','#Commits','#P1','#P2']) headings.append(el('span',title));headings.setAttribute('aria-hidden','true');container.append(headings);
-  for(const pr of pulls) container.append(renderPull(pr,{open:expanded.has(String(pr.number)),onMerge,onCodex,askedCodex:kind=>askedCodex(kind,pr)}));
+  for(const pr of pulls) container.append(renderPull(pr,{open:expanded.has(String(pr.number)),onMerge,onCodex,onCI,askedCodex:kind=>askedCodex(kind,pr)}));
   if(!pulls.length) container.append(el('p','No pull requests found.'));
 }
 
