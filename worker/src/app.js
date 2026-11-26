@@ -511,14 +511,16 @@ async function askCodex(kind,body,{store,github,access}) {
 }
 
 
- // Select only existing PR-triggered runs tied to the exact head and PR, not push/deploy/manual runs.
+// Select existing PR-triggered runs tied to the exact head and PR, never push/manual runs.
 export function ciRunActions(runs,pull,repository) {
   const same=name=>typeof name==='string'&&name.toLowerCase()===repository.toLowerCase();
-  return runs.filter(run=>Number.isSafeInteger(run.id)&&run.id>0&&run.event==='pull_request'&&
+  const matching=runs.filter(run=>Number.isSafeInteger(run.workflow_id)&&run.workflow_id>0&&Number.isSafeInteger(run.id)&&run.id>0&&run.event==='pull_request'&&
     run.head_sha===pull.head.sha&&run.head_branch===pull.head.ref&&same(run.repository?.full_name)&&
     same(run.head_repository?.full_name)&&same(pull.head.repo?.full_name)&&
-    run.pull_requests?.some(pr=>pr.number===pull.number&&pr.base?.ref===pull.base?.ref)&&
-    ['completed','action_required'].includes(run.status)&&
+    Array.isArray(run.pull_requests)&&run.pull_requests.some(pr=>pr.number===pull.number&&pr.base?.ref===pull.base?.ref));
+  const latest=new Map();
+  for(const run of matching) if(!latest.has(run.workflow_id)||latest.get(run.workflow_id).id<run.id) latest.set(run.workflow_id,run);
+  return [...latest.values()].filter(run=>['completed','action_required'].includes(run.status)&&
     ['action_required','failure','timed_out'].includes(run.conclusion))
     .map(run=>({id:run.id,action:run.conclusion==='action_required'?'approve':'rerun-failed-jobs'}));
 }
@@ -528,7 +530,7 @@ async function runPullCI(body,{store,github,access}) {
      typeof body.sha!=='string'||!/^[0-9a-f]{40}$/.test(body.sha)) throw new UserError(400,'Reload the pull request status first.');
   const repository=await resolveRepository(body.repository,access),number=body.number,client=github(repository);
   const lock=randomHex(16);
-  if(!await store.acquireLock('ci',lock,120000)) throw new UserError(429,'A CI request is already in progress.');
+  if(!await store.acquireLock('ci',lock,900000)) throw new UserError(429,'A CI request is already in progress.');
   try {
     const current=async()=>{
       const pull=await client.api(`pulls/${number}`);
@@ -544,8 +546,11 @@ async function runPullCI(body,{store,github,access}) {
     const outcomes=[];
     for(const entry of actions) {
       // Re-read both the PR and run before each write; never rerun a successful or active run.
+      const refreshed=await client.api(`actions/runs?event=pull_request&head_sha=${body.sha}&per_page=100`);
+      if(!Array.isArray(refreshed.workflow_runs)||refreshed.total_count>refreshed.workflow_runs.length||refreshed.workflow_runs.length>=100) break;
       const latest=await current(),run=await client.api(`actions/runs/${entry.id}`);
-      if(!ciRunActions([run],latest,repository).some(a=>a.id===entry.id&&a.action===entry.action)) continue;
+      const matches=a=>a.id===entry.id&&a.action===entry.action;
+      if(!ciRunActions(refreshed.workflow_runs,latest,repository).some(matches)||!ciRunActions([run],latest,repository).some(matches)) continue;
       try {
         await client.api(`actions/runs/${entry.id}/${entry.action}`,{method:'POST'});
         outcomes.push({...entry,accepted:true});
@@ -556,8 +561,8 @@ async function runPullCI(body,{store,github,access}) {
     }
     return json(200,{outcomes});
   } finally {
-    await store.invalidate(repository,{overview:true,pulls:[number]});
-    await store.releaseLock('ci',lock);
+    try {await store.invalidate(repository,{overview:true,pulls:[number]});}
+    finally {await store.releaseLock('ci',lock);}
   }
 }
 
