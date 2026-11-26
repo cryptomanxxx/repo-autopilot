@@ -36,7 +36,7 @@ function mergeBar(pr,{onMerge,onCodex,onCI,askedCodex}) {
   }
   if(onCI&&!pr.draft&&pr.headSha) {
     const ci=el('button','Run CI','secondary');ci.type='button';
-    ci.disabled=pr.ci==='success'||pr.ci==='pending';
+    ci.disabled=pr.ci==='success';
     ci.title='Approve waiting PR workflows or retry failed jobs for this commit.';
     ci.onclick=()=>onCI(pr,ci);
     bar.append(ci);
