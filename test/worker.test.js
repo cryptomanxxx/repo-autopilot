@@ -1524,3 +1524,14 @@ test('authenticated explicit retry recovers rejected bot review and deduplicates
   assert.deepEqual(await (await ask({retry:true,retryAnchor:Date.parse(comments.at(-1).created_at)})).json(),{asked:true});
   assert.equal(writes().length,2);
 });
+
+test('HTML and dashboard modules revalidate instead of retaining old review actions',async()=>{
+  const {env}=environment(),fetchImpl=github({calls:[]});
+  env.ASSETS.fetch=async()=>new Response('asset',{headers:{'Cache-Control':'public, max-age=3600'}});
+  for(const path of ['/','/chat.js?v=codex-retry-94','/dashboard.js','/dashboard-view.js','/dashboard.css']){
+    const response=await handle(request(path),env,{fetchImpl});
+    assert.equal(response.headers.get('Cache-Control'),'no-cache, must-revalidate');
+    assert.equal(response.headers.get('X-Frame-Options'),'DENY');
+  }
+  assert.equal((await handle(request('/icon.png'),env,{fetchImpl})).headers.get('Cache-Control'),'public, max-age=3600');
+});

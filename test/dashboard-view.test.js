@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mergeBlocker,CODEX_ACTIONS,findingStatus} from '../worker/public/dashboard-view.js';
+import {mergeBlocker,CODEX_ACTIONS,findingStatus,renderPull} from '../worker/public/dashboard-view.js';
 
 test('the dashboard offers merging only after a Codex 👍 and with no known blocker',()=>{
   const pr={codex:{state:'clear'},readiness:{state:'unknown',reasons:['GitHub merge eligibility is not confirmed']}};
@@ -133,4 +133,30 @@ test('a pull request behind its base is something to fix, not to wait on', async
   const {nextStep}=await import('../worker/src/tools.js');
   assert.equal(nextStep({readiness:{state:'not_ready',reasons:['GitHub merge requirements: behind']}}),'fix');
   assert.equal(nextStep({readiness:{state:'not_ready',reasons:['Waiting for Codex']}}),'wait');
+});
+
+test('rendered rejected PR exposes enabled retry and keeps merge blocked',()=>{
+  const previous=globalThis.document;
+  const make=tag=>({tag,children:[],dataset:{},classList:{add(){}},append(...nodes){this.children.push(...nodes);}});
+  globalThis.document={createElement:make};
+  try {
+    const head='a'.repeat(40),anchor=123456;
+    const pr={number:281,title:'Archive Bot',state:'open',headSha:head,ci:'unknown',
+      readiness:{state:'not_ready',label:'Not ready',reasons:['Codex rejected']},
+      codex:{state:'rejected',label:'Codex rejected',retryAnchor:anchor},
+      progress:{reviewCount:0,updatesAfterReview:null,currentCompleted:false,events:[]},
+      url:'https://github.com/owner/repo/pull/281'};
+    let clicked;
+    const root=renderPull(pr,{onMerge(){},onCodex(action,item){clicked={action,item};},onCI(){}});
+    const walk=n=>[n,...n.children.flatMap(walk)];
+    const nodes=walk(root);
+    const retry=nodes.find(n=>n.tag==='button'&&n.textContent==='Retry Codex review');
+    assert.ok(retry);
+    assert.equal(retry.disabled,false);
+    assert.equal(nodes.find(n=>n.tag==='button'&&n.textContent==='Merge').disabled,true);
+    assert.ok(nodes.some(n=>n.textContent==='❌ Request rejected'));
+    retry.onclick();
+    assert.equal(clicked.action.retry,true);
+    assert.equal(clicked.item.codex.retryAnchor,anchor);
+  } finally {if(previous===undefined) delete globalThis.document;else globalThis.document=previous;}
 });
