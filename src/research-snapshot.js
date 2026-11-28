@@ -31,13 +31,16 @@ export function normalizeDashboardSample(overview,details,{repository}={}) {
     if(listed.has(p.number)) {duplicateListed++;continue;}
     listed.add(p.number);
     const out=blank(repo,p.number);
+    // The authenticated overview still establishes the listed merge state
+    // when detail evidence is missing, stale or unbound. Retain the PR in
+    // the Main CI denominator without trusting rejected detail fields.
+    if(p.state==='merged') out.merged=true;
+    else if(['open','closed'].includes(p.state)) out.merged=false;
     const detail=byNumber.get(p.number);
     // Fallback details may have openedAt synthesized from updatedAt.
     // The overview itself carries only a listed state, not event timestamps.
     if(!detail||detail.detailError) {
       unavailable++;
-      if(p.state==='merged') out.merged=true;
-      else if(['open','closed'].includes(p.state)) out.merged=false;
       rows.push(out);continue;
     }
     if(!belongs(detail,repo)||!isSha(detail.headSha)) {
