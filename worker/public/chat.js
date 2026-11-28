@@ -1,8 +1,8 @@
-import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=safety-112';
-import {initDare,clearDare} from './dare-view.js?v=safety-112';
-import {initSymphony,clearSymphony,refreshSymphony} from './symphony-view.js?v=safety-112';
-import {initSafety,clearSafety,refreshSafety} from './safety-view.js?v=safety-112';
-import {initResearchTabs} from './research-tabs.js?v=safety-112';
+import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=scope-113';
+import {initDare,clearDare} from './dare-view.js?v=scope-113';
+import {initSymphony,clearSymphony,refreshSymphony} from './symphony-view.js?v=scope-113';
+import {initSafety,clearSafety,refreshSafety} from './safety-view.js?v=scope-113';
+import {initResearchTabs} from './research-tabs.js?v=scope-113';
 import {updateRepositoryLink} from './repository-link.js';
 const state={agent:'',agents:[],agentId:null,models:{},modelId:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
