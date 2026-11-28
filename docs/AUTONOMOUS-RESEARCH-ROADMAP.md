@@ -35,3 +35,7 @@ Versioned records carry repository, task/run identifier when known, PR number/he
 ## Cost and verification
 
 Zero Additional Cost Policy: SEK 0 incremental monetary budget beyond existing subscriptions/services. No new paid hosting, API calls, credits or paid fallback. Verify account entitlement, free quota, retention and request budgets before new live collection; unknown blocks. Reuse existing data/cache where possible. No automatic refresh expansion. Preserve original test output with actual exit status and source identity; green CI alone is not evidence that a specific test executed. Independent reproduction remains desirable. Scientific acceptance and PR throughput are separate. No runtime change in this documentation PR.
+
+## Implementation progress
+
+[RA-S01 offline analytics foundation](RA-S01.md) is submitted with 14 actual passing targeted synthetic tests and archived evidence. Dashboard mapping, third tab, browser validation and deployment remain separate steps.
