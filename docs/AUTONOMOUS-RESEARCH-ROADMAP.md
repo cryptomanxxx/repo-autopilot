@@ -85,3 +85,7 @@ Six responsive sections share the existing authenticated repository picker: Over
 ## RA-S06 host qualification and RA-S07 live pilot (proposed)
 
 [Host qualification](RA-S06-HOST-QUALIFICATION.md): investigate Oracle Cloud Always Free as the primary candidate, retaining existing Cloudflare UI. No account or VM created, no verified entitlement or cost claims. RA-S07 separately approved one-agent live pilot only after actual host, scope, cost, DARE and durable control prerequisites are satisfied.
+
+## RA-S05 repository isolation increment
+
+[RA-S05](RA-S05.md) strengthens browser lifecycle fencing and tests cross-repository/run rejection in offline reference models. No live authority or new provider requests. Production host isolation and account-wide shared-capacity enforcement remain gates. Next RA-S06 host qualification.
