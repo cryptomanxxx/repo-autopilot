@@ -1,6 +1,6 @@
-import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=subtabs-105';
-import {initDare,clearDare} from './dare-view.js?v=subtabs-105';
-import {initResearchTabs} from './research-tabs.js?v=subtabs-105';
+import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=evidence-106';
+import {initDare,clearDare} from './dare-view.js?v=evidence-106';
+import {initResearchTabs} from './research-tabs.js?v=evidence-106';
 import {updateRepositoryLink} from './repository-link.js';
 const state={agent:'',agents:[],agentId:null,models:{},modelId:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
