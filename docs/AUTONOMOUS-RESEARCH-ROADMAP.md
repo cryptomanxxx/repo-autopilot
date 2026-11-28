@@ -38,7 +38,7 @@ Zero Additional Cost Policy: SEK 0 incremental monetary budget beyond existing s
 
 ## Implementation progress
 
-[RA-S01 offline analytics foundation](RA-S01.md) is submitted with 14 actual passing targeted synthetic tests and archived evidence. Dashboard mapping, third tab, browser validation and deployment remain separate steps.
+[RA-S01 offline analytics foundation](RA-S01.md) includes 14 targeted synthetic tests. The earlier claimed local execution and archive provenance are unverified; see [evidence notice](EVIDENCE-INTEGRITY-NOTICE.md). Dashboard mapping, third tab, browser validation and deployment remain separate steps.
 
 ## RA-S01D · Codex Capacity Planner (proposed)
 
@@ -55,3 +55,5 @@ Future integration may use a documented supported usage interface only after ver
 ## RA-S01D implementation
 
 Manual capacity planner implemented as browser-only calculation, with descriptive subscription choice saved locally, period, estimated review rounds, reserve, expected rounds per PR and optional implementation ceiling. Actual quota and reset remain unknown. No plan-specific limits, automatic conversion from credits, or dispatch authority. Historical mean is a lower-bound reference from PRs with known review counts in the existing sample (including unfinished PRs), with repository, observation timestamp, missing counts and stale label. It never silently populates the scenario. Inputs are scenario assumptions, not account evidence. The review-only scenario uses floor(floor(rounds × (100 − reserve) / 100) / expected rounds); the optional implementation limit reduces this further. Eleven synthetic test cases submitted; execution and browser validation pending. No new API calls, polling, paid service or permissions. Next RA-S02 read-only DARE status design; separately verify live integration prerequisites.
+
+[RA-S02 integration plan](RA-S02.md): producer status contract and consumer boundaries documented in RA-S02A. Validation, live retrieval (subject to approval/cost checks), display and evidence inventory remain separate.
