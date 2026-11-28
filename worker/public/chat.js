@@ -1,7 +1,8 @@
-import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=symphony-108';
-import {initDare,clearDare} from './dare-view.js?v=symphony-108';
-import {initSymphony,clearSymphony,refreshSymphony} from './symphony-view.js?v=symphony-108';
-import {initResearchTabs} from './research-tabs.js?v=symphony-108';
+import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=safety-112';
+import {initDare,clearDare} from './dare-view.js?v=safety-112';
+import {initSymphony,clearSymphony,refreshSymphony} from './symphony-view.js?v=safety-112';
+import {initSafety,clearSafety,refreshSafety} from './safety-view.js?v=safety-112';
+import {initResearchTabs} from './research-tabs.js?v=safety-112';
 import {updateRepositoryLink} from './repository-link.js';
 const state={agent:'',agents:[],agentId:null,models:{},modelId:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
@@ -43,15 +44,16 @@ async function chatStream(body,onStep,onDelta=()=>{}) {
 }
 
 function showSignedOut(message) {
-  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;clearResearch();clearDare();clearSymphony();
+  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;clearResearch();clearDare();clearSymphony();clearSafety();
   for(const id of ['tabs','chat','dashboard-view','research-view','repo-bar']) $(id).hidden=true;
 }
 
 // The address keeps the open tab: #dashboard, #pr-<number>, #chat and #chat/<conversation>.
 function chatHash() {return state.conversation?`#chat/${state.conversation}`:'#chat';}
 function showTab(tab,{hash}={}) {
-  if(state.tab==='research'&&tab!=='research'){clearDare();clearSymphony();}
+  if(state.tab==='research'&&tab!=='research'){clearDare();clearSymphony();clearSafety();}
   state.tab=tab;
+  if(tab==='research')refreshSafety();
   try {localStorage.setItem('autopilot-tab',tab);} catch {}
   for(const [name,panel] of [['dashboard','dashboard-view'],['chat','chat'],['research','research-view']]) {
     $(panel).hidden=name!==tab;$(`tab-${name}`).setAttribute('aria-selected',String(name===tab));
@@ -279,9 +281,10 @@ function selectRepository(name,{keepConversation=false}={}) {
   addRepoOption(name);
   if(sameRepo(name,state.repository)) return;
   state.repository=name;
-  clearDare();clearSymphony();
+  clearDare();clearSymphony();clearSafety();
   try {localStorage.setItem('autopilot-repo',name);} catch {}
   setRepository();
+  if(state.tab==='research')refreshSafety();
   if(state.tab==='dashboard') history.replaceState(null,'','#dashboard');
   if(!keepConversation) {status('');openConversation(null);}
 }
@@ -459,8 +462,9 @@ try {
     }
     fillRepos(repositories);
     $('logout').hidden=false;$('tabs').hidden=false;$('repo-bar').hidden=false;
-    initResearchTabs({onChange:next=>{if(next==='symphony')refreshSymphony();}});
+    initResearchTabs({onChange:next=>{if(next==='symphony')refreshSymphony();if(next==='safety')refreshSafety();}});
     initSymphony({repository:()=>state.repository,isActive:()=>state.tab==='research'});
+    initSafety({repository:()=>state.repository});
     initDare({repository:()=>state.repository,isActive:()=>state.tab==='research'});
     startDashboard(api,{isVisible:()=>state.tab==='dashboard',selected:()=>state.repository});
     // Older chat links used #<conversation>; they still open the chat.
