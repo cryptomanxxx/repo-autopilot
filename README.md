@@ -81,6 +81,8 @@ npm test
 
 ## Product roadmap
 
+Proposed third tab: [Autonomous Research roadmap](docs/AUTONOMOUS-RESEARCH-ROADMAP.md), starting with historical PR statistics, followed by read-only DARE and optional Symphony observability. This is a design proposal; the existing two-tab application and manual merge policy remain unchanged.
+
 1. Dashboard foundation.
 2. GitHub App authentication and repository selection (done); full pagination and precise Codex review/reaction tracking.
 3. MCP tools and a ChatGPT-compatible dashboard component, tested against current OpenAI documentation and supported clients. This repository is not yet an installable ChatGPT plugin.
