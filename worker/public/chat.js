@@ -1,4 +1,4 @@
-import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice} from './dashboard.js?v=codex-retry-94';
+import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=research-99';
 import {updateRepositoryLink} from './repository-link.js';
 const state={agent:'',agents:[],agentId:null,models:{},modelId:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
@@ -40,8 +40,8 @@ async function chatStream(body,onStep,onDelta=()=>{}) {
 }
 
 function showSignedOut(message) {
-  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;
-  for(const id of ['tabs','chat','dashboard-view','repo-bar']) $(id).hidden=true;
+  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;clearResearch();
+  for(const id of ['tabs','chat','dashboard-view','research-view','repo-bar']) $(id).hidden=true;
 }
 
 // The address keeps the open tab: #dashboard, #pr-<number>, #chat and #chat/<conversation>.
@@ -49,11 +49,12 @@ function chatHash() {return state.conversation?`#chat/${state.conversation}`:'#c
 function showTab(tab,{hash}={}) {
   state.tab=tab;
   try {localStorage.setItem('autopilot-tab',tab);} catch {}
-  for(const [name,panel] of [['dashboard','dashboard-view'],['chat','chat']]) {
+  for(const [name,panel] of [['dashboard','dashboard-view'],['chat','chat'],['research','research-view']]) {
     $(panel).hidden=name!==tab;$(`tab-${name}`).setAttribute('aria-selected',String(name===tab));
   }
-  history.replaceState(null,'',hash??(tab==='chat'?chatHash():'#dashboard'));
+  history.replaceState(null,'',hash??(tab==='chat'?chatHash():tab==='research'?'#research':'#dashboard'));
   if(tab==='dashboard') showDashboard();
+  if(tab==='research') showResearch();
 }
 function followPull(url) {
   const prefix=`https://github.com/${state.repository}/pull/`.toLowerCase();
@@ -408,10 +409,11 @@ const signInProblem=SIGN_IN_PROBLEMS[new URLSearchParams(location.search).get('s
 // A link from the connector names the repository of the pull request it opens (?repo=owner/name#pr-12).
 // One opened while signed out is kept for this tab through the sign-in, which returns to "/".
 let linked={repo:new URLSearchParams(location.search).get('repo'),hash:location.hash};
-const LINK_KEY='autopilot-link',LINKED_HASH=/^#(?:pr-\d+|dashboard)$/;
+const LINK_KEY='autopilot-link',LINKED_HASH=/^#(?:pr-\d+|dashboard|research)$/;
 if(location.search) history.replaceState(null,'',location.pathname+location.hash);
 $('tab-dashboard').onclick=()=>showTab('dashboard');
 $('tab-chat').onclick=()=>showTab('chat');
+$('tab-research').onclick=()=>showTab('research');
 $('repo-picker').onchange=()=>{if(state.busy) $('repo-picker').value=state.repository;else selectRepository($('repo-picker').value);};
 $('repo-reload').onclick=async()=>{
   setBusy(true);status('Reloading repositories…');
@@ -456,7 +458,7 @@ try {
     // Older chat links used #<conversation>; they still open the chat.
     const hash=location.hash,conversation=/^#(?:chat\/)?([0-9a-f]{32})$/.exec(hash)?.[1]||null,pull=/^#pr-([1-9]\d{0,8})$/.exec(hash)?.[1];
     let saved=null;try {saved=localStorage.getItem('autopilot-tab');} catch {}
-    const tab=conversation||hash==='#chat'?'chat':pull||hash==='#dashboard'?'dashboard':saved==='chat'?'chat':'dashboard';
+    const tab=conversation||hash==='#chat'?'chat':pull||hash==='#dashboard'?'dashboard':hash==='#research'?'research':saved==='research'?'research':saved==='chat'?'chat':'dashboard';
     state.tab=tab;
     // The dashboard starts loading at once instead of waiting for the conversation list.
     const chat=openConversation(conversation);
