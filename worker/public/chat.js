@@ -1,4 +1,5 @@
 import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice} from './dashboard.js?v=codex-retry-94';
+import {updateRepositoryLink} from './repository-link.js';
 const state={agent:'',agents:[],agentId:null,models:{},modelId:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
 const status=text=>{$('status').textContent=text;};
@@ -255,6 +256,7 @@ function addRepoOption(name) {
   const picker=$('repo-picker');
   if(![...picker.options].some(option=>sameRepo(option.value,name))) picker.append(new Option(repoLabel(name),name));
   picker.value=[...picker.options].find(option=>sameRepo(option.value,name)).value;
+  updateRepositoryLink($('repo-link'),picker.value);
 }
 function fillRepos(repositories) {
   const picker=$('repo-picker');
