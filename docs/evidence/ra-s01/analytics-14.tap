@@ -1,0 +1,94 @@
+TAP version 13
+# Subtest: separate event dates and zero buckets
+ok 1 - separate event dates and zero buckets
+  ---
+  duration_ms: 6.054377
+  type: 'test'
+  ...
+# Subtest: separate CI populations
+ok 2 - separate CI populations
+  ---
+  duration_ms: 0.591626
+  type: 'test'
+  ...
+# Subtest: unknown and incomplete checks never success
+ok 3 - unknown and incomplete checks never success
+  ---
+  duration_ms: 0.293057
+  type: 'test'
+  ...
+# Subtest: duration includes earlier opened PR merged in range
+ok 4 - duration includes earlier opened PR merged in range
+  ---
+  duration_ms: 0.477699
+  type: 'test'
+  ...
+# Subtest: identical duplicates counted once
+ok 5 - identical duplicates counted once
+  ---
+  duration_ms: 0.432707
+  type: 'test'
+  ...
+# Subtest: conflicting duplicate excluded
+ok 6 - conflicting duplicate excluded
+  ---
+  duration_ms: 0.365781
+  type: 'test'
+  ...
+# Subtest: wrong repository excluded
+ok 7 - wrong repository excluded
+  ---
+  duration_ms: 0.224578
+  type: 'test'
+  ...
+# Subtest: missing dates distinct from outside interval
+ok 8 - missing dates distinct from outside interval
+  ---
+  duration_ms: 0.242444
+  type: 'test'
+  ...
+# Subtest: end is exclusive
+ok 9 - end is exclusive
+  ---
+  duration_ms: 0.539544
+  type: 'test'
+  ...
+# Subtest: invalid date and future event never counted
+ok 10 - invalid date and future event never counted
+  ---
+  duration_ms: 0.599271
+  type: 'test'
+  ...
+# Subtest: review counts lower bounds and absent data unknown
+ok 11 - review counts lower bounds and absent data unknown
+  ---
+  duration_ms: 0.303716
+  type: 'test'
+  ...
+# Subtest: empty sample does not imply zero duration or autonomy
+ok 12 - empty sample does not imply zero duration or autonomy
+  ---
+  duration_ms: 0.271885
+  type: 'test'
+  ...
+# Subtest: invalid interval rejected
+ok 13 - invalid interval rejected
+  ---
+  duration_ms: 0.698989
+  type: 'test'
+  ...
+# Subtest: merge before opening excluded
+ok 14 - merge before opening excluded
+  ---
+  duration_ms: 0.272743
+  type: 'test'
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 14
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 127.967523
