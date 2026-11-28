@@ -73,3 +73,7 @@ Six responsive sections share the existing authenticated repository picker: Over
 ## RA-S03A initial interface audit
 
 [RA-S03A](RA-S03A.md) records the pinned upstream interface and offline aggregate normalizer. Actual state API inspected; no dedicated start/pause/stop routes in that revision. Private authenticated projection, host/scope/cost verification, and separate durable control authority remain prerequisites. No runtime connection. Offline sanitized snapshot display is the next implementation increment.
+
+## RA-S03B offline control model
+
+[RA-S03B](RA-S03B.md) adds an unconnected reference state machine for scoped Start/Pause/Stop requests and acknowledgement, with no live authority or effects. Actual durable fencing, host integration and RA-S04 safety enforcement remain prerequisites. Next RA-S04 offline cost and safety gate.
