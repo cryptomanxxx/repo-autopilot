@@ -1,6 +1,7 @@
 import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,link} from './dashboard-view.js?v=codex-retry-94';
 
-import {renderResearch} from './research-view.js?v=research-99';
+import {renderResearch,researchModel} from './research-view.js?v=research-99';
+import {initCapacity,updateCapacityObservation} from './capacity-view.js?v=capacity-100';
 
 let researchSnapshot=null,researchEpoch=0,researchLoading=false,researchError=false;
 const $=id=>document.getElementById(id);
@@ -209,6 +210,7 @@ export function setRepository() {
 
 export function startDashboard(request,{isVisible,selected}) {
   api=request;repository=selected;
+  initCapacity();
   setInterval(()=>{if(isVisible()) checkVersion();},VERSION_MS);
   for(const id of ['pr-filter','workflow-filter']) $(id).addEventListener('change',filters);
   $('refresh').onclick=()=>loadDashboard({fresh:true});
@@ -242,6 +244,9 @@ export function showPull(number) {
 
 // The research tab consumes the same bounded sample; it never starts a timer or fetches on entry.
 export function showResearch({ageOnly=false}={}) {
+  let capacityModel=null;
+  try {capacityModel=researchModel(researchSnapshot,repository(),Number($('research-period').value),Date.now());} catch {}
+  updateCapacityObservation(capacityModel);
   if(ageOnly&&researchSnapshot) {
     // Update staleness without replacing an expanded table or moving keyboard focus.
     const age=Date.now()-Date.parse(researchSnapshot.overview.fetchedAt);
@@ -259,6 +264,7 @@ function invalidateResearch() {
 }
 export function clearResearch() {
   researchEpoch++;researchSnapshot=null;researchError=false;
+  updateCapacityObservation(null);
   $('research-results').replaceChildren();$('research-status').textContent='';
   if(!$('research-view').hidden) showResearch();
 }

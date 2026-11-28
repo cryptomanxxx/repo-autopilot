@@ -9,3 +9,10 @@
 .research-table th,.research-table td{padding:9px 5px;text-align:left;border-bottom:1px solid #2a3c55;overflow-wrap:anywhere}
 #research-view details{margin-top:12px}#research-view summary{cursor:pointer;padding:8px}
 #research-status{overflow-wrap:anywhere}
+
+.capacity-panel{margin:18px 0;padding:16px;border:1px solid #2a3c55;border-radius:12px;background:#141f31}
+#research-view .capacity-panel h3{margin-top:0}
+.capacity-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:12px}
+.capacity-fields label{display:grid;gap:6px;min-width:0;font-size:14px}
+.capacity-fields input,.capacity-fields select{width:100%;min-height:44px;background:#0b1220;color:inherit;border:1px solid #435975;border-radius:8px;padding:8px;font:inherit}
+#capacity-output{font-weight:600;overflow-wrap:anywhere}
