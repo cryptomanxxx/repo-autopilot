@@ -2,7 +2,7 @@ import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,l
 
 import {renderResearch} from './research-view.js?v=research-99';
 
-let researchSnapshot=null,researchEpoch=0,researchLoading=false;
+let researchSnapshot=null,researchEpoch=0,researchLoading=false,researchError=false;
 const $=id=>document.getElementById(id);
 const REFRESH_MS=180000,VERSION_MS=15000;
 // "Show more" raises these in steps, up to the server's maximum.
@@ -21,7 +21,7 @@ function unavailable(pr,error) {
 }
 
 function updateAge() {
-  if(!$('research-view').hidden) showResearch();
+  if(!$('research-view').hidden) showResearch({ageOnly:true});
   if(!data) return;
   const minutes=Math.max(0,Math.floor((Date.now()-Date.parse(data.fetchedAt))/60000));
   $('data-age').textContent=`Live GitHub data · loaded ${minutes} minute${minutes===1?'':'s'} ago · ${version===null?'refreshes every 3 minutes while this tab is open':'updates when GitHub reports a change'}`;
@@ -53,7 +53,7 @@ function openPending() {
 export async function loadDashboard({fresh=false,research=false}={}) {
   if(loading||!api||($('dashboard-view').hidden&&(!research||$('research-view').hidden))) return;
   const epoch=researchEpoch;
-  researchLoading=true;
+  researchLoading=true;researchError=false;
   $('research-refresh').disabled=true;
   if(!$('research-view').hidden) showResearch();
   loading=true;$('refresh').disabled=true;
@@ -90,6 +90,7 @@ export async function loadDashboard({fresh=false,research=false}={}) {
     updateAge();openPending();
   } catch(error) {
     if(target===repository()&&epoch===researchEpoch) {
+      researchError=true;
       if(researchSnapshot) researchSnapshot={...researchSnapshot,failed:true};
       status(data?`Refresh failed; showing earlier data. ${error.message}`:error.message);
       if(!$('research-view').hidden) showResearch();
@@ -101,7 +102,7 @@ export async function loadDashboard({fresh=false,research=false}={}) {
     loading=false;researchLoading=false;lastLoad=Date.now();$('refresh').disabled=false;$('research-refresh').disabled=false;
     if(!$('research-view').hidden) showResearch();
     // The repository changed while loading, or a merge finished during it: load again.
-    if(target!==repository()||reloadAfter) {reloadAfter=false;lastLoad=0;loadDashboard();}
+    if(target!==repository()||reloadAfter||epoch!==researchEpoch) {reloadAfter=false;lastLoad=0;loadDashboard();}
   }
 }
 
@@ -240,8 +241,16 @@ export function showPull(number) {
 }
 
 // The research tab consumes the same bounded sample; it never starts a timer or fetches on entry.
-export function showResearch() {
+export function showResearch({ageOnly=false}={}) {
+  if(ageOnly&&researchSnapshot) {
+    // Update staleness without replacing an expanded table or moving keyboard focus.
+    const age=Date.now()-Date.parse(researchSnapshot.overview.fetchedAt);
+    if(age>=REFRESH_MS&&!$('research-status').textContent.startsWith('Earlier snapshot')&&!loading)
+      $('research-status').textContent='Earlier snapshot — refresh recommended. '+$('research-status').textContent;
+    return;
+  }
   renderResearch({snapshot:researchSnapshot,repository:repository(),days:Number($('research-period').value),now:Date.now(),container:$('research-results'),status:$('research-status'),loading:researchLoading});
+  if(researchError&&!researchSnapshot&&!researchLoading) $('research-status').textContent='Dashboard sample could not be loaded. Try again.';
   $('research-refresh').disabled=loading;
 }
 function invalidateResearch() {
@@ -249,7 +258,7 @@ function invalidateResearch() {
   if(!$('research-view').hidden) showResearch();
 }
 export function clearResearch() {
-  researchEpoch++;researchSnapshot=null;
+  researchEpoch++;researchSnapshot=null;researchError=false;
   $('research-results').replaceChildren();$('research-status').textContent='';
   if(!$('research-view').hidden) showResearch();
 }
