@@ -1,0 +1,26 @@
+{
+  "source_commit": "3ba2d3b58629a8ae5324e03af6843a1b0eaed64f",
+  "node": "22.16.0",
+  "command": "node --test test/research-analytics.test.js",
+  "exit_code": 0,
+  "tests": 14,
+  "passed": 14,
+  "failed": 0,
+  "elapsed_ms": 127.967523,
+  "source_files": {
+    "src/research-analytics.js": {
+      "git_blob_sha1": "f74c9b2de27de9f2fd4543854e06ba8a509571cc",
+      "sha256": "f85d1f06080c41a419aa004a174061a357ea98546f0a692ff94244d13d014eb8"
+    },
+    "test/research-analytics.test.js": {
+      "git_blob_sha1": "c61d2438660716872953cb83049cf335c1cedd23",
+      "sha256": "4d610f80668d5491ca66de64bf3e005b12b0340d742c12990341088958c14e86"
+    }
+  },
+  "log": {
+    "path": "analytics-14.tap",
+    "git_blob_sha1": "3c4cc86197b48567af188d23c69634ec91790391",
+    "sha256": "a0478dcc3485e2aefb09a4e4e4845c4288ea7a86695b4e17a9b430df26bc98c0"
+  },
+  "scope": "Actual targeted local execution of the two new files, manually transcribed then checked against fetched Git blob identities; minimal local type:module package matching repository module configuration. Archived log fetched and matched local Git blob identity. Not full repo regression suite, not a live-data study."
+}
