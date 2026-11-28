@@ -1,3 +1,4 @@
+import {createResearchScope} from './research-scope.js';
 import {normalizeSymphonyState,SYMPHONY_REVISION} from './symphony-state.js';
 const $=id=>document.getElementById(id);
 const el=(tag,value,cls)=>{const n=document.createElement(tag);if(value!==undefined)n.textContent=value;if(cls)n.className=cls;return n;};
@@ -22,30 +23,31 @@ export function renderSymphony(container,model,repository,now=Date.now()){
   }
   container.append(grid,el('p','Retries include normal continuations. Session runtime is cumulative, not wall-clock elapsed time. Zero running sessions does not confirm a stop.','muted small'));
 }
-let generation=0,selected=()=>'',active=()=>false,model=null;
+const scope=createResearchScope();
+let selected=()=>'',active=()=>false,model=null,modelTicket=null;
 export function clearSymphony(){
-  generation++;model=null;
+  scope.clear();model=null;modelTicket=null;
   $('symphony-file').value='';
   $('symphony-ack').checked=false;
   $('symphony-message').textContent='No local snapshot loaded.';
   renderSymphony($('symphony-result'),null,'');
 }
-export function refreshSymphony(){renderSymphony($('symphony-result'),model,selected());}
+export function refreshSymphony(){if(model&&!scope.accepts(modelTicket,selected())){clearSymphony();return;}renderSymphony($('symphony-result'),model,selected());}
 export function initSymphony({repository,isActive}){
   selected=repository;active=isActive;
   $('symphony-clear').onclick=clearSymphony;
   $('symphony-file').onchange=async()=>{
-    const version=++generation,repo=selected(),file=$('symphony-file').files?.[0];
-    model=null;refreshSymphony();$('symphony-message').textContent='No local snapshot loaded.';
+    const repo=selected();scope.select(repo);const ticket=scope.capture(),file=$('symphony-file').files?.[0];
+    model=null;modelTicket=null;refreshSymphony();$('symphony-message').textContent='No local snapshot loaded.';
     if(!file||!active())return;
     if(!$('symphony-ack').checked){$('symphony-file').value='';$('symphony-message').textContent='Confirm local inspection first.';return;}
     if(file.size<1||file.size>262144){$('symphony-message').textContent='Invalid file size (maximum 256 KiB).';return;}
     try{
       const normalized=normalizeSymphonyState(new Uint8Array(await file.arrayBuffer()),{upstreamRevision:SYMPHONY_REVISION});
-      if(version!==generation||repo!==selected()||!active())return;
-      model=normalized;refreshSymphony();$('symphony-message').textContent='Local snapshot inspected. No network request or agent action.';
+      if(!scope.accepts(ticket,selected())||!active())return;
+      model=normalized;modelTicket=ticket;refreshSymphony();$('symphony-message').textContent='Local snapshot inspected. No network request or agent action.';
     }catch{
-      if(version===generation&&repo===selected()&&active())$('symphony-message').textContent='Invalid or unsupported Symphony snapshot.';
+      if(scope.accepts(ticket,selected())&&active())$('symphony-message').textContent='Invalid or unsupported Symphony snapshot.';
     }
   };
   $('symphony-ack').onchange=()=>{if(!$('symphony-ack').checked)clearSymphony();};
