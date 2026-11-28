@@ -1,5 +1,8 @@
 import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,link} from './dashboard-view.js?v=codex-retry-94';
 
+import {renderResearch} from './research-view.js?v=research-99';
+
+let researchSnapshot=null,researchEpoch=0,researchLoading=false;
 const $=id=>document.getElementById(id);
 const REFRESH_MS=180000,VERSION_MS=15000;
 // "Show more" raises these in steps, up to the server's maximum.
@@ -18,6 +21,7 @@ function unavailable(pr,error) {
 }
 
 function updateAge() {
+  if(!$('research-view').hidden) showResearch();
   if(!data) return;
   const minutes=Math.max(0,Math.floor((Date.now()-Date.parse(data.fetchedAt))/60000));
   $('data-age').textContent=`Live GitHub data · loaded ${minutes} minute${minutes===1?'':'s'} ago · ${version===null?'refreshes every 3 minutes while this tab is open':'updates when GitHub reports a change'}`;
@@ -46,8 +50,12 @@ function openPending() {
   }
 }
 
-export async function loadDashboard({fresh=false}={}) {
-  if(loading||!api||$('dashboard-view').hidden) return;
+export async function loadDashboard({fresh=false,research=false}={}) {
+  if(loading||!api||($('dashboard-view').hidden&&(!research||$('research-view').hidden))) return;
+  const epoch=researchEpoch;
+  researchLoading=true;
+  $('research-refresh').disabled=true;
+  if(!$('research-view').hidden) showResearch();
   loading=true;$('refresh').disabled=true;
   const load=++loads;
   // Every request of one load uses the repository selected when it started.
@@ -63,7 +71,9 @@ export async function loadDashboard({fresh=false}={}) {
     // A linked pull request older than the overview stays shown below it; one that cannot be read is dropped.
     const extra=pinned&&!overview.pulls.some(pr=>pr.number===pinned)?await api(`/api/dashboard/pulls/${pinned}?${query}${fresh?'&fresh=1':''}`).catch(()=>null):null;
     if(extra) pulls.push(extra);
-    if(target!==repository()) return;
+    if(target!==repository()||epoch!==researchEpoch) return;
+    researchSnapshot={repository:target,overview,details:extra?pulls.slice(0,-1):pulls,failed:false,invalidated:false};
+    if(!$('research-view').hidden) showResearch();
     version=seen>0?seen:version;
     data={...overview,pulls,warnings:[...overview.warnings,...pulls.flatMap(pr=>pr.warnings||[])]};
     // The summary counts the recent pull requests only, not a linked older one shown below them.
@@ -79,12 +89,17 @@ export async function loadDashboard({fresh=false}={}) {
     status(notice);if(load>=noticeFrom) notice='';
     updateAge();openPending();
   } catch(error) {
-    if(target===repository()) status(data?`Refresh failed; showing earlier data. ${error.message}`:error.message);
+    if(target===repository()&&epoch===researchEpoch) {
+      if(researchSnapshot) researchSnapshot={...researchSnapshot,failed:true};
+      status(data?`Refresh failed; showing earlier data. ${error.message}`:error.message);
+      if(!$('research-view').hidden) showResearch();
+    }
   } finally {
     // Connected apps do not depend on GitHub, so they load even when the dashboard data fails, and the
     // owner can always revoke one.
     loadConnections();
-    loading=false;lastLoad=Date.now();$('refresh').disabled=false;
+    loading=false;researchLoading=false;lastLoad=Date.now();$('refresh').disabled=false;$('research-refresh').disabled=false;
+    if(!$('research-view').hidden) showResearch();
     // The repository changed while loading, or a merge finished during it: load again.
     if(target!==repository()||reloadAfter) {reloadAfter=false;lastLoad=0;loadDashboard();}
   }
@@ -108,7 +123,7 @@ async function mergePull(pr,button) {
     merging=false;
     // The data shown is stale now: a load already running or a hidden tab reloads it later, the next
     // time the tab is shown. The outcome is shown now and again once that reload completes.
-    lastLoad=0;reloadAfter=loading;
+    invalidateResearch();lastLoad=0;reloadAfter=loading;
     if(target===repository()) {status(outcome);notice=outcome;noticeFrom=loads+1;}
     loadDashboard();
   }
@@ -126,7 +141,7 @@ async function runCI(pr,button) {
     outcome=outcomes.length?`GitHub accepted ${accepted} CI requests; ${refused.length} refused. ${refused.length?'Check Actions write permission or approve on GitHub.':'Check live CI status before merging.'}`:'No eligible waiting or failed runs found. Open the PR on GitHub if approval is still required.';
   } catch(error) {outcome=error.message;}
   finally {
-    button.disabled=false;lastLoad=0;reloadAfter=loading;
+    button.disabled=false;invalidateResearch();lastLoad=0;reloadAfter=loading;
     if(target===repository()) {status(outcome);notice=outcome;noticeFrom=loads+1;loadDashboard({fresh:true});}
   }
 }
@@ -138,6 +153,7 @@ async function askCodex(action,pr,button) {
   button.disabled=true;status(`Asking Codex to review PR #${pr.number}…`);
   try {
     const {already}=await api(`/api/codex-${action.kind}`,{repository:target,number:pr.number,sha:pr.headSha,retry:action.retry===true,retryAnchor:action.retry?pr.codex.retryAnchor:undefined});
+    invalidateResearch();
     askedCodex.add(`${action.kind}:${target}#${pr.number}@${pr.headSha}`);
     button.textContent=action.asked;
 
@@ -176,12 +192,13 @@ async function checkVersion() {
   const target=repository();
   try {
     const {version:current}=await api(`/api/dashboard/version?repo=${encodeURIComponent(target)}`);
-    if(target===repository()&&current>0&&current!==version) loadDashboard();
+    if(target===repository()&&current>0&&current!==version) {invalidateResearch();loadDashboard();}
   } catch {}
 }
 
 // Called when another repository is selected: forget the old data and load the new one if visible.
 export function setRepository() {
+  clearResearch();
   data=null;version=null;pendingPull=null;pinned=null;retried=null;notice='';pullLimit=PULLS.step;runLimit=RUNS.step;
   $('more-pulls').hidden=true;$('more-runs').hidden=true;
   for(const id of ['summary','pulls','workflows']) $(id).replaceChildren();
@@ -194,6 +211,8 @@ export function startDashboard(request,{isVisible,selected}) {
   setInterval(()=>{if(isVisible()) checkVersion();},VERSION_MS);
   for(const id of ['pr-filter','workflow-filter']) $(id).addEventListener('change',filters);
   $('refresh').onclick=()=>loadDashboard({fresh:true});
+  $('research-refresh').onclick=()=>loadDashboard({fresh:true,research:true});
+  $('research-period').onchange=()=>showResearch();
   $('copy-mcp').onclick=async()=>{try {await navigator.clipboard.writeText($('mcp-url').textContent);status('Connector address copied.');} catch {status('Select the address and copy it.');}};
   // A load already running finishes first; the larger list is loaded right after it.
   const more=(id,raise)=>{$(id).onclick=()=>{raise();$(id).hidden=true;if(loading) reloadAfter=true;else loadDashboard();};};
@@ -218,4 +237,19 @@ export function dashboardNotice(text) {notice=text;noticeFrom=0;status(text);}
 export function showPull(number) {
   pendingPull=number;
   if(data&&!loading) openPending();
+}
+
+// The research tab consumes the same bounded sample; it never starts a timer or fetches on entry.
+export function showResearch() {
+  renderResearch({snapshot:researchSnapshot,repository:repository(),days:Number($('research-period').value),now:Date.now(),container:$('research-results'),status:$('research-status'),loading:researchLoading});
+  $('research-refresh').disabled=loading;
+}
+function invalidateResearch() {
+  if(researchSnapshot) researchSnapshot={...researchSnapshot,invalidated:true};
+  if(!$('research-view').hidden) showResearch();
+}
+export function clearResearch() {
+  researchEpoch++;researchSnapshot=null;
+  $('research-results').replaceChildren();$('research-status').textContent='';
+  if(!$('research-view').hidden) showResearch();
 }
