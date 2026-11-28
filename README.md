@@ -81,7 +81,7 @@ npm test
 
 ## Product roadmap
 
-Proposed third tab: [Autonomous Research roadmap](docs/AUTONOMOUS-RESEARCH-ROADMAP.md), starting with historical PR statistics, followed by read-only DARE and optional Symphony observability. This is a design proposal; the existing two-tab application and manual merge policy remain unchanged.
+Third tab (initial read-only sample analytics): [Autonomous Research roadmap](docs/AUTONOMOUS-RESEARCH-ROADMAP.md), starting with historical PR statistics, followed by read-only DARE and optional Symphony observability. The initial tab reuses the bounded dashboard sample; the manual merge policy remains unchanged.
 
 1. Dashboard foundation.
 2. GitHub App authentication and repository selection (done); full pagination and precise Codex review/reaction tracking.
@@ -112,7 +112,7 @@ Historical P1/P2 counts use top-level Codex finding comments with explicit prior
 
 ## Repo Autopilot app on Cloudflare Workers
 
-`worker/` is a Cloudflare Worker with two tabs, **Dashboard** and **Agent chat**, behind GitHub sign-in.
+`worker/` is a Cloudflare Worker with three tabs, **Dashboard**, **Agent chat** and **Autonomous Research**, behind GitHub sign-in.
 
 ### Choosing a repository
 
@@ -127,6 +127,10 @@ To add a repository, open **Add repositories** (GitHub → Settings → Applicat
 The **Dashboard** tab reads live data from GitHub with your sign-in: the 6 most recently updated pull requests with merge readiness, CI, Codex progress and activity flow, and 15 recent GitHub Actions runs. **Show more pull requests** adds 6 at a time, up to 30, and **Show more runs** adds 15 at a time, up to 60; the larger lists stay until another repository is picked. On tablets in portrait each pull request's values fit on one row, and on phones they take two rows while the activity flow runs downwards. The overview takes three GitHub requests and each pull request is loaded by its own request with at most ten, so every Worker call stays well under the Workers subrequest limit. Results are cached in the Durable Object for a minute (an hour for merged or closed pull requests); a pull request whose `updatedAt` changed, and the **Refresh** button, bypass the cache. With the [webhook](#live-updates-with-the-webhook) set up, the tab reloads within about 15 seconds of a change on GitHub; without it, every three minutes while it is open. When a chat answer has become a pull request, **Follow in dashboard** opens that pull request's row. Addresses keep the view: `#dashboard`, `#pr-<number>`, `#chat` and `#chat/<conversation>`.
 
 The header shows which version is live: the commit the deploy workflow shipped (linking to it on GitHub) and when. After a merge, the version changes once the **Agent chat Worker** workflow has deployed; a merge that touches no Worker files deploys nothing, so the version stays. A Worker deployed some other way shows "version unknown".
+
+### Autonomous Research
+
+The read-only tab (#research) displays observed daily opened/merged events for 7, 30 or 90 completed UTC days, duration statistics, separate PR and Main CI distributions, observed review rounds and findings, and coverage. It reuses the current Dashboard sample in memory; Load dashboard data explicitly refreshes that same bounded sample. No new polling loop. The maximum sample is 30 recently updated PRs, not an exhaustive history. Today is excluded from daily event counts; CI and review distributions describe the sample, not the selected date interval. Missing and stale data are labelled. Expand the sample through Dashboard. Symphony, DARE runtime and account quotas are not connected.
 
 ### Agent chat
 
