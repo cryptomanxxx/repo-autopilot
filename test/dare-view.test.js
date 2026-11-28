@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {inspectLocalStatus} from '../worker/public/dare-view.js';
+import {gitBlobSha} from '../src/dare-status.js';
+const repository='owner/repo',now=Date.parse('2026-11-28T07:00:00Z');
+const sample=()=>({schemaVersion:1,repository,roadmap:'research/DARE-ROADMAP.md',asOf:'2026-11-28',basisRevision:'a'.repeat(40),kind:'maintainer_status_snapshot',liveExecution:'not_authorized',incrementalBudget:{currency:'SEK',maximum:0,actual:null},phases:[{id:'DARE-001',title:'Audit',dependsOn:[],development:'documented',gate:'blocked',scientificAcceptance:'not_assessed',evidence:[],blockers:['Review required']}]});
+const bytes=v=>new TextEncoder().encode(JSON.stringify(v));
+test('local inspection labels source unverified and computes blob locally',async()=>{const b=bytes(sample()),x=await inspectLocalStatus(b,repository,now);assert.equal(x.sourceVerified,false);assert.equal(x.dispatchAuthorized,false);assert.equal(x.localBlobSha,gitBlobSha(b));assert.equal(x.inspectedAt,new Date(now).toISOString());assert.equal(x.source,undefined);});
+test('local inspection rejects repository mismatch',async()=>assert.rejects(inspectLocalStatus(bytes(sample()),'other/repo',now)));
+test('local inspection rejects invalid policy or unsafe path',async()=>{for(const p of [{liveExecution:'authorized'},{roadmap:'research/../secret'}])await assert.rejects(inspectLocalStatus(bytes({...sample(),...p}),repository,now));});
+test('local inspection rejects oversized, empty and invalid UTF-8 bytes',async()=>{for(const b of [new Uint8Array(65537),new Uint8Array(),new Uint8Array([255])])await assert.rejects(inspectLocalStatus(b,repository,now));});
+test('reported positive spending remains a violation claim',async()=>{const s=sample();s.incrementalBudget.actual=1;assert.equal((await inspectLocalStatus(bytes(s),repository,now)).budgetViolationReported,true);});
+test('reported scientific acceptance never authorizes dispatch',async()=>{const s=sample();s.phases[0].gate='passed';s.phases[0].scientificAcceptance='accepted';assert.equal((await inspectLocalStatus(bytes(s),repository,now)).dispatchAuthorized,false);});

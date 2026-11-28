@@ -1,4 +1,5 @@
-import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=capacity-100';
+import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=dare-104';
+import {initDare,clearDare} from './dare-view.js?v=dare-104';
 import {updateRepositoryLink} from './repository-link.js';
 const state={agent:'',agents:[],agentId:null,models:{},modelId:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
@@ -40,13 +41,14 @@ async function chatStream(body,onStep,onDelta=()=>{}) {
 }
 
 function showSignedOut(message) {
-  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;clearResearch();
+  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;clearResearch();clearDare();
   for(const id of ['tabs','chat','dashboard-view','research-view','repo-bar']) $(id).hidden=true;
 }
 
 // The address keeps the open tab: #dashboard, #pr-<number>, #chat and #chat/<conversation>.
 function chatHash() {return state.conversation?`#chat/${state.conversation}`:'#chat';}
 function showTab(tab,{hash}={}) {
+  if(state.tab==='research'&&tab!=='research') clearDare();
   state.tab=tab;
   try {localStorage.setItem('autopilot-tab',tab);} catch {}
   for(const [name,panel] of [['dashboard','dashboard-view'],['chat','chat'],['research','research-view']]) {
@@ -275,6 +277,7 @@ function selectRepository(name,{keepConversation=false}={}) {
   addRepoOption(name);
   if(sameRepo(name,state.repository)) return;
   state.repository=name;
+  clearDare();
   try {localStorage.setItem('autopilot-repo',name);} catch {}
   setRepository();
   if(state.tab==='dashboard') history.replaceState(null,'','#dashboard');
@@ -454,6 +457,7 @@ try {
     }
     fillRepos(repositories);
     $('logout').hidden=false;$('tabs').hidden=false;$('repo-bar').hidden=false;
+    initDare({repository:()=>state.repository,isActive:()=>state.tab==='research'});
     startDashboard(api,{isVisible:()=>state.tab==='dashboard',selected:()=>state.repository});
     // Older chat links used #<conversation>; they still open the chat.
     const hash=location.hash,conversation=/^#(?:chat\/)?([0-9a-f]{32})$/.exec(hash)?.[1]||null,pull=/^#pr-([1-9]\d{0,8})$/.exec(hash)?.[1];
