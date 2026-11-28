@@ -1,7 +1,7 @@
 import {renderSummary,renderPulls,renderWorkflows,applyFilters,mergeBlocker,el,link} from './dashboard-view.js?v=codex-retry-94';
 
 import {renderResearch,researchModel} from './research-view.js?v=research-99';
-import {initCapacity,updateCapacityObservation} from './capacity-view.js?v=capacity-100';
+import {initCapacity,updateCapacityObservation,clearCapacityScenario} from './capacity-view.js?v=scope-113';
 
 let researchSnapshot=null,researchEpoch=0,researchLoading=false,researchError=false;
 const $=id=>document.getElementById(id);
@@ -73,6 +73,7 @@ export async function loadDashboard({fresh=false,research=false}={}) {
     const extra=pinned&&!overview.pulls.some(pr=>pr.number===pinned)?await api(`/api/dashboard/pulls/${pinned}?${query}${fresh?'&fresh=1':''}`).catch(()=>null):null;
     if(extra) pulls.push(extra);
     if(target!==repository()||epoch!==researchEpoch) return;
+    if(typeof overview.repository!=='string'||overview.repository.toLowerCase()!==target.toLowerCase())throw new Error('Dashboard repository mismatch.');
     researchSnapshot={repository:target,overview,details:extra?pulls.slice(0,-1):pulls,failed:false,invalidated:false};
     if(!$('research-view').hidden) showResearch();
     version=seen>0?seen:version;
@@ -191,10 +192,10 @@ async function loadConnections() {
 // Webhook events move the repository's version on; checking it costs no GitHub request.
 async function checkVersion() {
   if(loading||!data||$('dashboard-view').hidden||document.hidden) return;
-  const target=repository();
+  const target=repository(),epoch=researchEpoch;
   try {
     const {version:current}=await api(`/api/dashboard/version?repo=${encodeURIComponent(target)}`);
-    if(target===repository()&&current>0&&current!==version) {invalidateResearch();loadDashboard();}
+    if(target===repository()&&epoch===researchEpoch&&current>0&&current!==version) {invalidateResearch();loadDashboard();}
   } catch {}
 }
 
@@ -263,6 +264,7 @@ function invalidateResearch() {
   if(!$('research-view').hidden) showResearch();
 }
 export function clearResearch() {
+  clearCapacityScenario();
   researchEpoch++;researchSnapshot=null;researchError=false;
   updateCapacityObservation(null);
   $('research-results').replaceChildren();$('research-status').textContent='';
