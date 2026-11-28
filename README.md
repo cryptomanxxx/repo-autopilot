@@ -118,6 +118,8 @@ Historical P1/P2 counts use top-level Codex finding comments with explicit prior
 
 The **Repository** menu at the top lists the repositories where the Repo Autopilot GitHub App is installed, most recently pushed first; a GitHub App sign-in can only reach those. To stay within the Workers subrequest limit, the list covers up to 5 installations and 200 repositories each. It is a large native menu, so on Android tablets it opens the system's full-screen touch list. The choice is remembered on the device and applies to both tabs. Conversations belong to the repository they started in: the chat list shows the selected repository's conversations, and opening an older conversation switches the menu to its repository.
 
+The selected repository's GitHub link appears below the picker and opens in a separate browser tab.
+
 To add a repository, open **Add repositories** (GitHub → Settings → Applications → Repo Autopilot → Configure), select it, then tap **Reload list**.
 
 ### Dashboard
