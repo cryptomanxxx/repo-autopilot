@@ -26,3 +26,28 @@ test('pinned extra outside recent sample ignored',()=>{const r=run(overview(),[d
 test('duplicate detail does not select green',()=>{const r=run(overview(),[detail(),detail(1,{ci:'failure'})]);assert.equal(r.dashboardCoverage.unavailable,1);assert.equal(r.prCI.counts.success,0);});
 test('duplicates in overview do not inflate totals',()=>{const r=run(overview([listed(),listed()]));assert.equal(r.population,1);assert.equal(r.dashboardCoverage.duplicateListed,1);});
 test('sample bounds and coverage explicit',()=>{assert.throws(()=>normalizeDashboardSample(overview(Array.from({length:31},(_,i)=>listed(i+1))),[],opts),RangeError);const r=run();assert.equal(r.dashboardCoverage.completeHistory,false);assert.equal(r.humanInterventions,null);});
+
+test('stale merged detail remains in Main CI denominator as unknown',()=>{
+ const r=run(overview([listed(),listed(2)]),[detail(1,{updatedAt:'2026-11-03T11:00:00Z',postMergeCi:{sha:'b'.repeat(40),state:'success',complete:true,available:true}}),detail(2)]);
+ assert.equal(r.mainCI.denominator,2);
+ assert.equal(r.mainCI.counts.unknown,1);
+ assert.equal(r.mainCI.counts.failure,1);
+ assert.equal(r.mainCI.counts.success,0);
+ assert.equal(r.mergedUnknown,1);
+ assert.equal(r.mergedInWindow,1);
+});
+test('unbound merged detail remains in Main CI denominator as unknown',()=>{
+ for(const changes of [{headSha:''},{url:'https://github.com/other/repo/pull/1'}]){
+  const r=run(overview(),[detail(1,changes)]);
+  assert.equal(r.mainCI.denominator,1);
+  assert.equal(r.mainCI.counts.unknown,1);
+  assert.equal(r.mainCI.counts.failure,0);
+  assert.equal(r.mergedUnknown,1);
+ }
+});
+test('rejected open detail cannot introduce a merge',()=>{
+ const r=run(overview([listed(1,{state:'open'})]),[detail()]);
+ assert.equal(r.mainCI.denominator,0);
+ assert.equal(r.notMerged,1);
+ assert.equal(r.mergedInWindow,0);
+});
