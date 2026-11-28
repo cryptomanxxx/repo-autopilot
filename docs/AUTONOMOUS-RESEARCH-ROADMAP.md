@@ -69,3 +69,7 @@ RA-S02C initial local-only DARE view submitted; no live data retrieval or execut
 ## RA-UI01 · Autonomous Research subtabs
 
 Six responsive sections share the existing authenticated repository picker: Overview (existing PR analytics), Symphony (disabled control design, no connection), DARE (local document inspection), Codex (existing manual planner), Evidence (explicit unavailable inventory), Safety (policy and unknown actual spending). Navigation starts at Overview, supports touch and keyboard arrows/Home/End, uses accessible tab/panel relationships and 64 CSS px touch targets. Switching sections does not fetch data or trigger actions. DARE local files remain in memory across subtabs, and still clear on repository change, main Research tab exit, sign-out or explicit clear. Symphony placeholder controls are disabled and have no handlers. No operational control, new credentials, new request or polling loop. Four targeted tests added; local execution and Android/browser verification pending. RA-S02D remains next, followed by Symphony observability and separately authorized controls.
+
+## RA-S03A initial interface audit
+
+[RA-S03A](RA-S03A.md) records the pinned upstream interface and offline aggregate normalizer. Actual state API inspected; no dedicated start/pause/stop routes in that revision. Private authenticated projection, host/scope/cost verification, and separate durable control authority remain prerequisites. No runtime connection. Offline sanitized snapshot display is the next implementation increment.
