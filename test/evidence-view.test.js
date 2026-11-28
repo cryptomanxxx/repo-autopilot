@@ -1,0 +1,13 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {evidenceInventory} from '../worker/public/evidence-view.js';
+const entry=(path,status='reported',kind='offline_test_report')=>({path,status,kind});
+const phase=(id,evidence=[],scientificAcceptance='not_assessed')=>({id,evidence,scientificAcceptance});
+const model=phases=>({status:{repository:'owner/repo',asOf:'2026-11-28',phases},inspectedAt:'2026-11-28T07:00:00.000Z',localBlobSha:'a'.repeat(40)});
+test('missing document is distinct from empty inventory',()=>{assert.equal(evidenceInventory(null),null);const x=evidenceInventory(model([]));assert.equal(x.uniquePaths,0);assert.equal(x.experimentSuccess,null);assert.equal(x.archiveCompleteness,null);});
+test('deduplicate path across phases and repeated references',()=>{const e=entry('research/a.md');const x=evidenceInventory(model([phase('DARE-001',[e,e]),phase('DARE-002',[e])]));assert.equal(x.references,3);assert.equal(x.uniquePaths,1);assert.equal(x.counts.reported,1);assert.deepEqual(x.rows[0].phases,['DARE-001','DARE-002']);});
+test('conflicting statuses are not silently promoted to verified',()=>{const x=evidenceInventory(model([phase('DARE-001',[entry('research/a.md','reported'),entry('research/a.md','independently_verified')])]));assert.equal(x.counts.conflicting,1);assert.equal(x.counts.independently_verified,0);assert.equal(x.contentVerified,false);});
+test('different kinds on the same path count as conflict',()=>{const x=evidenceInventory(model([phase('DARE-001',[entry('research/a.md'),entry('research/a.md','reported','audit')])]));assert.equal(x.rows[0].classification,'conflicting');});
+test('missing references and acceptance claims remain separate',()=>{const x=evidenceInventory(model([phase('DARE-001',[],'accepted'),phase('DARE-002',[entry('research/a.md','superseded')],'rejected')]));assert.deepEqual(x.missing,['DARE-001']);assert.equal(x.acceptance.accepted,1);assert.equal(x.acceptance.rejected,1);assert.equal(x.counts.superseded,1);assert.equal(x.reproducibility,null);});
+test('independent verification claim does not verify actual evidence',()=>{const x=evidenceInventory(model([phase('DARE-001',[entry('research/a.md','independently_verified')])]));assert.equal(x.counts.independently_verified,1);assert.equal(x.sourceVerified,false);assert.equal(x.contentVerified,false);assert.equal(x.experimentFailure,null);});
+test('deterministic order and counts reconcile',()=>{const x=evidenceInventory(model([phase('DARE-001',[entry('research/z.md','unverified'),entry('research/a.md','documented')])]));assert.deepEqual(x.rows.map(r=>r.path),['research/a.md','research/z.md']);assert.equal(Object.values(x.counts).reduce((a,b)=>a+b,0),x.uniquePaths);});
