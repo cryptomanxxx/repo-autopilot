@@ -27,3 +27,14 @@
 .dare-phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:12px}
 .dare-phase{padding:14px;background:#0b1220;border:1px solid #435975;border-radius:10px;min-width:0}
 .dare-phase h4{margin:0 0 8px}.dare-phase p{margin:8px 0}.dare-phase ul{padding-left:22px}
+
+.research-subtabs{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:12px 0 20px}
+.research-subtabs button{min-height:64px;min-width:0;padding:8px 4px;background:#141f31;color:#cfdbec;border:1px solid #435975;overflow-wrap:anywhere;touch-action:manipulation}
+.research-subtabs button[aria-selected="true"]{background:#263e60;border-color:#81aaff;color:#fff}
+.research-subtabs button:focus-visible{outline:2px solid #81aaff;outline-offset:3px}
+@media(max-width:850px){.research-subtabs{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:320px){.research-subtabs{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.symphony-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:18px 0}
+.symphony-controls button{min-height:72px;background:#243248;border:1px solid #435975;color:#c5cfdf}
+.symphony-controls button:last-child{grid-column:1/-1}
+#research-panel-overview .toolbar h3{margin:0}
