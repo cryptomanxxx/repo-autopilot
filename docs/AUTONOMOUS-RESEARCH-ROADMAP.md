@@ -39,3 +39,11 @@ Zero Additional Cost Policy: SEK 0 incremental monetary budget beyond existing s
 ## Implementation progress
 
 [RA-S01 offline analytics foundation](RA-S01.md) is submitted with 14 actual passing targeted synthetic tests and archived evidence. Dashboard mapping, third tab, browser validation and deployment remain separate steps.
+
+## RA-S01D · Codex Capacity Planner (proposed)
+
+Add a subscription selector in Autonomous Research. Use user-selected plan labels (Free, Go, Plus, Pro, Business, Enterprise, Edu, Other/unknown); selection is descriptive, not proof of entitlement. Verify current official plan names, review availability, quota units, shared usage pools and reset periods before showing plan-specific facts. No fixed PR quota inferred from subscription. No confirmed account-usage API is assumed.
+
+Initially support manual scenario input: estimated review-round capacity for a named period, observed review rounds per PR (lower bound, coverage and date visible), expected additional rounds, reserve for other work and a separate implementation-capacity constraint. Show estimated PR capacity as floor(available review rounds / expected rounds per PR), clearly a scenario rather than actual entitlement or a dispatch allowance. Unknown values stay unknown. If provider limits are expressed in tokens, credits or shared usage, do not convert into PR rounds without a separately evidenced estimate. Keep actual verified quota separate from hypothetical planning; record verification timestamp and expiry. Never collect login credentials or session tokens. Never trigger purchases, upgrades, reviews or orchestration actions. Quota exhaustion or unknown cost/access blocks future autonomous dispatch under DARE policy. A selected plan or manual estimate cannot authorize execution.
+
+Future integration may use a documented supported usage interface only after verification, approval and zero-additional-cost checks. Review throughput is a potential bottleneck, not a demonstrated sole constraint; implementation, CI, scientific review and hosting may also constrain work. The initial planner has no live integration.
