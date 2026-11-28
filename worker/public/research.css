@@ -38,3 +38,5 @@
 .symphony-controls button{min-height:72px;background:#243248;border:1px solid #435975;color:#c5cfdf}
 .symphony-controls button:last-child{grid-column:1/-1}
 #research-panel-overview .toolbar h3{margin:0}
+
+#evidence-result{overflow-wrap:anywhere}#evidence-result label{display:grid;gap:6px;margin:12px 0}#evidence-result select{min-height:56px;width:100%;font:inherit}#evidence-result h4{margin:18px 0 8px}
