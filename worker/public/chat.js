@@ -1,6 +1,7 @@
-import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=evidence-106';
-import {initDare,clearDare} from './dare-view.js?v=evidence-106';
-import {initResearchTabs} from './research-tabs.js?v=evidence-106';
+import {startDashboard,showDashboard,showPull,setRepository,dashboardNotice,showResearch,clearResearch} from './dashboard.js?v=symphony-108';
+import {initDare,clearDare} from './dare-view.js?v=symphony-108';
+import {initSymphony,clearSymphony,refreshSymphony} from './symphony-view.js?v=symphony-108';
+import {initResearchTabs} from './research-tabs.js?v=symphony-108';
 import {updateRepositoryLink} from './repository-link.js';
 const state={agent:'',agents:[],agentId:null,models:{},modelId:'',csrf:'',conversation:null,image:null,busy:false,previewUrl:null,imageSelection:0,preparing:false,tab:null,repository:'',home:'',login:'',model:'',deployed:null,conversationRequest:0};
 const $=id=>document.getElementById(id);
@@ -42,14 +43,14 @@ async function chatStream(body,onStep,onDelta=()=>{}) {
 }
 
 function showSignedOut(message) {
-  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;clearResearch();clearDare();
+  $('account').textContent=message;$('login').hidden=false;$('logout').hidden=true;state.tab=null;clearResearch();clearDare();clearSymphony();
   for(const id of ['tabs','chat','dashboard-view','research-view','repo-bar']) $(id).hidden=true;
 }
 
 // The address keeps the open tab: #dashboard, #pr-<number>, #chat and #chat/<conversation>.
 function chatHash() {return state.conversation?`#chat/${state.conversation}`:'#chat';}
 function showTab(tab,{hash}={}) {
-  if(state.tab==='research'&&tab!=='research') clearDare();
+  if(state.tab==='research'&&tab!=='research'){clearDare();clearSymphony();}
   state.tab=tab;
   try {localStorage.setItem('autopilot-tab',tab);} catch {}
   for(const [name,panel] of [['dashboard','dashboard-view'],['chat','chat'],['research','research-view']]) {
@@ -278,7 +279,7 @@ function selectRepository(name,{keepConversation=false}={}) {
   addRepoOption(name);
   if(sameRepo(name,state.repository)) return;
   state.repository=name;
-  clearDare();
+  clearDare();clearSymphony();
   try {localStorage.setItem('autopilot-repo',name);} catch {}
   setRepository();
   if(state.tab==='dashboard') history.replaceState(null,'','#dashboard');
@@ -458,7 +459,8 @@ try {
     }
     fillRepos(repositories);
     $('logout').hidden=false;$('tabs').hidden=false;$('repo-bar').hidden=false;
-    initResearchTabs();
+    initResearchTabs({onChange:next=>{if(next==='symphony')refreshSymphony();}});
+    initSymphony({repository:()=>state.repository,isActive:()=>state.tab==='research'});
     initDare({repository:()=>state.repository,isActive:()=>state.tab==='research'});
     startDashboard(api,{isVisible:()=>state.tab==='dashboard',selected:()=>state.repository});
     // Older chat links used #<conversation>; they still open the chat.
