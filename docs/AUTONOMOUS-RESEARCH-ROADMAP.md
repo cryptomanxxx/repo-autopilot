@@ -49,3 +49,5 @@ Initially support manual scenario input: estimated review-round capacity for a n
 Future integration may use a documented supported usage interface only after verification, approval and zero-additional-cost checks. Review throughput is a potential bottleneck, not a demonstrated sole constraint; implementation, CI, scientific review and hosting may also constrain work. The initial planner has no live integration.
 
 [RA-S01B dashboard sample adapter](RA-S01B.md) submitted with 14 new synthetic fixtures; local execution pending. Browser wiring and third tab remain RA-S01C.
+
+[RA-S01C] Initial Autonomous Research tab implemented on the existing dashboard sample, with 7/30/90 completed UTC day charts, separate CI and review distributions, coverage, manual reload and stale-state labels. Six new targeted view tests submitted; local execution blocked by DNS on GitHub checkout. No browser validation or deployment claimed. RA-S01D capacity planning remains next.
