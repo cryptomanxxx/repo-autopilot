@@ -12,3 +12,7 @@ Oracle Cloud Infrastructure Always Free is the primary candidate to investigate,
 - Require explicit operator approval before any provisioning, live connection or execution. First live pilot is one agent and human-gated merge, only after DARE and RA-S04 gates are independently qualified. Record evidence and blockers rather than assume success.
 
 Official sources to verify during qualification: https://www.oracle.com/cloud/free/ and https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm . These links are research starting points, not a current terms verification. No current numerical resource or pricing claims made. RA-S07 live integration remains contingent.
+
+## RA-S06A result
+
+[Public source audit](RA-S06A-SOURCE-AUDIT.md) records current documented allowances and pinned upstream ARM target. Candidate remains unqualified at account/runtime level. Next RA-S06B redacted account-specific qualification; no provisioning or agent execution authorized.
