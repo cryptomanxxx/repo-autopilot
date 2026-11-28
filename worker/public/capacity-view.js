@@ -30,3 +30,9 @@ export function initCapacity() {
   for(const id of ['capacity-days','capacity-rounds','capacity-reserve','capacity-expected','capacity-implementation']) $(id).addEventListener('input',renderCapacity);
   renderCapacity();
 }
+
+// Manual repository scenario is ephemeral. Only the descriptive plan persists.
+export function clearCapacityScenario(){
+ for(const [id,value] of [['capacity-days','7'],['capacity-rounds',''],['capacity-reserve','20'],['capacity-expected',''],['capacity-implementation','']]){const field=$(id);if(field)field.value=value;}
+ if($('capacity-output'))renderCapacity();
+}

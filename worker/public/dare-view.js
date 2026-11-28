@@ -1,3 +1,4 @@
+import {createResearchScope} from './research-scope.js';
 import {renderEvidence} from './evidence-view.js?v=evidence-106';
 import {validateStatusShape,STATUS_PATH} from './dare-status-shape.js';
 
@@ -33,10 +34,11 @@ export function renderDare(container,model){
   }
   container.append(list);
 }
-let generation=0,selected=()=>'',active=()=>false;
+const scope=createResearchScope();
+let selected=()=>'',active=()=>false;
 const $=id=>document.getElementById(id);
 export function clearDare(){
-  generation++;
+  scope.clear();
   $('dare-file').value='';
   $('dare-result').replaceChildren();
   renderEvidence($('evidence-result'),null);
@@ -46,7 +48,7 @@ export function initDare({repository,isActive}){
   selected=repository;active=isActive;
   $('dare-clear').onclick=clearDare;
   $('dare-file').onchange=async()=>{
-    const version=++generation,repo=selected(),file=$('dare-file').files?.[0];
+    const repo=selected();scope.select(repo);const ticket=scope.capture(),file=$('dare-file').files?.[0];
     $('dare-result').replaceChildren();
   renderEvidence($('evidence-result'),null);
     $('dare-message').textContent='No local status file loaded.';
@@ -54,12 +56,12 @@ export function initDare({repository,isActive}){
     if(file.size<1||file.size>65536){$('dare-message').textContent='Invalid file size (maximum 64 KiB).';return;}
     try{
       const model=await inspectLocalStatus(new Uint8Array(await file.arrayBuffer()),repo);
-      if(version!==generation||repo!==selected()||!active())return;
+      if(!scope.accepts(ticket,selected())||!active())return;
       renderDare($('dare-result'),model);
       renderEvidence($('evidence-result'),model);
       $('dare-message').textContent='Local document inspected. No network request or execution authorization.';
     }catch{
-      if(version===generation&&repo===selected()&&active())$('dare-message').textContent='Invalid status file or repository mismatch.';
+      if(scope.accepts(ticket,selected())&&active())$('dare-message').textContent='Invalid status file or repository mismatch.';
     }
   };
   clearDare();
