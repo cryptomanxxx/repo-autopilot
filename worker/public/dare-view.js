@@ -1,3 +1,4 @@
+import {renderEvidence} from './evidence-view.js?v=evidence-106';
 import {validateStatusShape,STATUS_PATH} from './dare-status-shape.js';
 
 // Offline inspection only. Local file bytes and user-entered revision are not
@@ -38,6 +39,7 @@ export function clearDare(){
   generation++;
   $('dare-file').value='';
   $('dare-result').replaceChildren();
+  renderEvidence($('evidence-result'),null);
   $('dare-message').textContent='No local status file loaded. Live connection is disabled.';
 }
 export function initDare({repository,isActive}){
@@ -46,6 +48,7 @@ export function initDare({repository,isActive}){
   $('dare-file').onchange=async()=>{
     const version=++generation,repo=selected(),file=$('dare-file').files?.[0];
     $('dare-result').replaceChildren();
+  renderEvidence($('evidence-result'),null);
     $('dare-message').textContent='No local status file loaded.';
     if(!file||!active())return;
     if(file.size<1||file.size>65536){$('dare-message').textContent='Invalid file size (maximum 64 KiB).';return;}
@@ -53,6 +56,7 @@ export function initDare({repository,isActive}){
       const model=await inspectLocalStatus(new Uint8Array(await file.arrayBuffer()),repo);
       if(version!==generation||repo!==selected()||!active())return;
       renderDare($('dare-result'),model);
+      renderEvidence($('evidence-result'),model);
       $('dare-message').textContent='Local document inspected. No network request or execution authorization.';
     }catch{
       if(version===generation&&repo===selected()&&active())$('dare-message').textContent='Invalid status file or repository mismatch.';
