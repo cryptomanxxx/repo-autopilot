@@ -77,3 +77,11 @@ Six responsive sections share the existing authenticated repository picker: Over
 ## RA-S03B offline control model
 
 [RA-S03B](RA-S03B.md) adds an unconnected reference state machine for scoped Start/Pause/Stop requests and acknowledgement, with no live authority or effects. Actual durable fencing, host integration and RA-S04 safety enforcement remain prerequisites. Next RA-S04 offline cost and safety gate.
+
+## RA-S04 offline safety gate
+
+[RA-S04](RA-S04.md) adds a pure fail-closed cost/capacity reference model, simulation only, with no production authority. RA-S04B will explain policy and blockers in the Safety view; actual enforcement remains unimplemented. RA-S05 remains repository isolation.
+
+## RA-S06 host qualification and RA-S07 live pilot (proposed)
+
+[Host qualification](RA-S06-HOST-QUALIFICATION.md): investigate Oracle Cloud Always Free as the primary candidate, retaining existing Cloudflare UI. No account or VM created, no verified entitlement or cost claims. RA-S07 separately approved one-agent live pilot only after actual host, scope, cost, DARE and durable control prerequisites are satisfied.
