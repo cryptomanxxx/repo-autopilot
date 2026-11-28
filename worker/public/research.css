@@ -42,3 +42,5 @@
 #evidence-result{overflow-wrap:anywhere}#evidence-result label{display:grid;gap:6px;margin:12px 0}#evidence-result select{min-height:56px;width:100%;font:inherit}#evidence-result h4{margin:18px 0 8px}
 
 #symphony-result{overflow-wrap:anywhere}#symphony-result .research-tile strong{font-size:21px}.symphony-ack{display:flex;align-items:center;gap:10px;flex-basis:100%!important}.symphony-ack input[type=checkbox]{width:24px;min-height:44px;flex:none}
+
+#safety-result{overflow-wrap:anywhere}#safety-result .research-tile strong{font-size:20px}#safety-result h4{margin:20px 0 10px}.safety-blockers{padding-left:24px}.safety-blockers li{padding:9px 0;border-bottom:1px solid #2a3c55}
